@@ -152,13 +152,25 @@ class SegmentInfo:
         if self.repeated_text:
             d["repeated_text"] = self.repeated_text
         if include_words and self.words is not None:
-            if include_letters:
-                d["words"] = [dict(w) for w in self.words]
-            else:
-                d["words"] = [
-                    {k: v for k, v in w.items() if k != "letters"}
-                    for w in self.words
-                ]
+            seg_start = self.start_time
+            def _make_word(w):
+                entry = {}
+                entry["word"] = w.get("word", "")
+                if "location" in w:
+                    entry["location"] = w["location"]
+                # Times relative to segment start (time_from), matching original.json format
+                entry["start"] = round(max(0.0, w.get("start", 0.0) - seg_start), 4)
+                entry["end"] = round(max(0.0, w.get("end", 0.0) - seg_start), 4)
+                if include_letters and "letters" in w:
+                    rel_letters = []
+                    for lt in w["letters"]:
+                        rel_letters.append({
+                            k: (round(max(0.0, v - seg_start), 4) if k in ("start", "end") else v)
+                            for k, v in lt.items()
+                        })
+                    entry["letters"] = rel_letters
+                return entry
+            d["words"] = [_make_word(w) for w in self.words]
         if self.split_group_id:
             d["split_group_id"] = self.split_group_id
         if self.merge_group_id:

@@ -1,5 +1,6 @@
 """Post-VAD shared pipeline: ASR → matching → results build → usage logging → render."""
 import json
+import math
 import os
 import threading
 import time
@@ -98,7 +99,7 @@ def _run_post_vad_pipeline(
 
         phoneme_asr_start = time.time()
         emissions, rec_metrics, asr_gpu_time, peak_vram, reserved_vram = run_phoneme_asr_gpu(
-            audio, sample_rate, [(float(s), float(e)) for s, e in intervals], model_name,
+            audio, sample_rate, [(float(s), float(e)) for s, e in intervals], model_name, device=device
         )
         phoneme_asr_time = time.time() - phoneme_asr_start
         stage_metrics = {"recognition": rec_metrics}
@@ -178,50 +179,91 @@ def _run_post_vad_pipeline(
     from src.pipeline.fastconformer_onnx import FastConformerONNX
     
     fc = FastConformerONNX.get_instance()
-    logprobs_list = stage_metrics.get("logprobs", [])
+    logprobs_entries = stage_metrics.get("logprobs", [])
     
+    from src.core.segment_types import compute_reading_sequence
+
     q_index = None
     ref_to_idx = None
-    
+
+    def _ensure_q_index():
+        nonlocal q_index, ref_to_idx
+        if q_index is None:
+            from src.core.quran_index import get_quran_index
+            q_index = get_quran_index()
+            ref_to_idx = {f"{w.surah}:{w.ayah}:{w.word}": idx for idx, w in enumerate(q_index.words)}
+
     for i, res in enumerate(sdk_result.results):
         matched_text, score, matched_ref, wrap_ranges = res
         seg_start = regions.regions[i].start_s
         seg_end = regions.regions[i].end_s
         transcribed_text = " ".join(phoneme_texts[i])
         
+        # For repetition segments, rebuild matched_text from the quran index reading sequence
         if wrap_ranges and matched_ref and ":" in matched_ref:
-            if q_index is None:
-                from src.core.quran_index import get_quran_index
-                from src.core.segment_types import compute_reading_sequence
-                q_index = get_quran_index()
-                ref_to_idx = {f"{w.surah}:{w.ayah}:{w.word}": idx for idx, w in enumerate(q_index.words)}
-                
+            _ensure_q_index()
             parts = matched_ref.split("-")
             ref_from = parts[0]
             ref_to = parts[1] if len(parts) > 1 else parts[0]
             sections = compute_reading_sequence(ref_from, ref_to, wrap_ranges)
-            
             recited_words = []
             for sec in sections:
                 s_ref, e_ref = sec
                 if s_ref in ref_to_idx and e_ref in ref_to_idx:
                     for w_i in range(ref_to_idx[s_ref], ref_to_idx[e_ref] + 1):
                         recited_words.append(q_index.words[w_i].text)
-            
             if recited_words:
                 matched_text = " ".join(recited_words)
         
         words = None
-        if score > 0 and i < len(logprobs_list) and matched_text:
-            words = fc.force_align(logprobs_list[i], matched_text, include_letters=include_letters)
-            # Adjust relative timings to global audio time
+        if score > 0 and i < len(logprobs_entries) and matched_text:
+            lp_entry = logprobs_entries[i]
+            if isinstance(lp_entry, tuple):
+                logprobs_mat, chunk_origin = lp_entry
+            else:
+                logprobs_mat, chunk_origin = lp_entry, seg_start
+
+            # CRITICAL: Trim logprobs to only the frames covering this segment's
+            # safe-zone [seg_start, seg_end].  Passing the full 30s matrix causes
+            # the CTC aligner to absorb all silent/blank frames before the real
+            # speech into the first word, producing multi-second-long word0 and
+            # wildly compressed remaining words → overlapping timestamps.
+            seconds_per_frame = (160 / 16000) * 8  # hop=160, sr=16000, subsampling=8 → 0.08 s/frame
+            frame_start = max(0, int((seg_start - chunk_origin) / seconds_per_frame))
+            frame_end   = min(logprobs_mat.shape[0], int(math.ceil((seg_end - chunk_origin) / seconds_per_frame)) + 2)
+            trimmed_lp  = logprobs_mat[frame_start:frame_end]
+            # The trimmed matrix's t=0 corresponds to this absolute time in the audio
+            trim_origin = chunk_origin + frame_start * seconds_per_frame
+
+            words = fc.force_align(trimmed_lp, matched_text, include_letters=include_letters)
             for w in words:
-                w['start'] += seg_start
-                w['end'] += seg_start
+                w['start'] += trim_origin
+                w['end']   += trim_origin
                 if 'letters' in w:
                     for lt in w['letters']:
-                        lt['start'] += seg_start
-                        lt['end'] += seg_start
+                        lt['start'] += trim_origin
+                        lt['end']   += trim_origin
+            # Stamp Quran location refs onto each word using the matched_ref range.
+            # This mirrors what the original repo's MFA pipeline does: every word carries
+            # location so fused_split and to_json_dict can emit it correctly.
+            if matched_ref and ":" in matched_ref and words:
+                _ensure_q_index()
+                parts = matched_ref.split("-")
+                r_from = parts[0]
+                r_to = parts[1] if len(parts) > 1 else parts[0]
+                sections = compute_reading_sequence(r_from, r_to, wrap_ranges or [])
+                # Flatten the reading-order word refs from the quran index
+                loc_refs = []
+                for sec in sections:
+                    s_ref, e_ref = sec
+                    if s_ref in ref_to_idx and e_ref in ref_to_idx:
+                        for w_i in range(ref_to_idx[s_ref], ref_to_idx[e_ref] + 1):
+                            qw = q_index.words[w_i]
+                            loc_refs.append(f"{qw.surah}:{qw.ayah}:{qw.word}")
+                # Stamp location on each force-aligned word (1:1 mapping)
+                for j, w in enumerate(words):
+                    if j < len(loc_refs):
+                        w['location'] = loc_refs[j]
         
         segments.append(SegmentInfo(
             start_time=seg_start,
@@ -238,20 +280,25 @@ def _run_post_vad_pipeline(
         ))
     result_build_start = time.time()
 
-    # Convert full audio to int16 once
-    t_wav = time.time()
-    audio_int16 = np.clip(audio * 32767, -32768, 32767).astype(np.int16)
-    audio_encode_time = time.time() - t_wav
+    audio_encode_time = 0.0
 
     # Create a per-request directory for segment WAV files
     segment_dir = SEGMENT_AUDIO_DIR / uuid.uuid4().hex
     segment_dir.mkdir(parents=True, exist_ok=True)
 
     # Post-processing: split combined/fused segments via MFA timestamps
-    segments = _split_fused_segments(segments, audio_int16, sample_rate)
-    del audio_int16  # Free ~576MB — no longer needed (full.wav written from float32)
+    segments = _split_fused_segments(segments, None, sample_rate)
+
+    # Clamp segment boundaries so no segment's time_to exceeds the next segment's time_from.
+    # This eliminates the 0.08s rounding artifacts and larger chunk-boundary overlaps that
+    # arise from adjacent safe-zones in the sliding window not perfectly partitioning.
+    # Word timestamps inside each segment are untouched — only the envelope metadata changes.
+    for i in range(len(segments) - 1):
+        if segments[i].end_time > segments[i + 1].start_time:
+            segments[i].end_time = segments[i + 1].start_time
 
     # Recompute stats from final segments list
+
     _seg_word_counts = []
     _seg_durations = []
     _seg_phoneme_counts = []

@@ -28,31 +28,39 @@ FC_BLANK_ID = 1024
 class FastConformerONNX:
     _instance = None
 
-    def __init__(self, fast_mode=False):
+    def __init__(self, fast_mode=False, device='cpu'):
         self.fast_mode = fast_mode
+        self.device = device
         self.session = None
         self.vocab = {}
         self.blank_id = FC_BLANK_ID
         self.spm_processor = None
+        self._mel_basis = None  # cached on first use
         self._load_model()
         self._load_vocab()
         if spm is not None and os.path.exists(FASTCONFORMER_SPM_PATH):
             self.spm_processor = spm.SentencePieceProcessor(model_file=FASTCONFORMER_SPM_PATH)
 
     @classmethod
-    def get_instance(cls, fast_mode=False):
+    def get_instance(cls, fast_mode=False, device='cpu'):
         if cls._instance is None:
-            cls._instance = FastConformerONNX(fast_mode=fast_mode)
-        elif cls._instance.fast_mode != fast_mode:
-            cls._instance = FastConformerONNX(fast_mode=fast_mode)
+            cls._instance = FastConformerONNX(fast_mode=fast_mode, device=device)
+        elif cls._instance.fast_mode != fast_mode or getattr(cls._instance, 'device', 'cpu') != device:
+            cls._instance = FastConformerONNX(fast_mode=fast_mode, device=device)
         return cls._instance
 
     def _load_model(self):
         if not os.path.exists(FASTCONFORMER_ONNX_PATH):
             print(f"ONNX model not found at {FASTCONFORMER_ONNX_PATH}")
             return
-        print("Loading FastConformer ONNX model on CPU...")
+            
         providers = ['CPUExecutionProvider']
+        if self.device == 'cuda':
+            print("Loading FastConformer ONNX model with CUDA support...")
+            providers = ['CUDAExecutionProvider'] + providers
+        else:
+            print("Loading FastConformer ONNX model on CPU...")
+            
         opts = ort.SessionOptions()
         if self.fast_mode:
             import multiprocessing
@@ -89,22 +97,81 @@ class FastConformerONNX:
             pad_mode='reflect'
         )
         power_spec = np.abs(D) ** 2
-        mel_basis = librosa.filters.mel(
-            sr=FC_SAMPLE_RATE,
-            n_fft=FC_N_FFT,
-            n_mels=FC_N_MELS,
-            fmin=0.0,
-            fmax=8000.0,
-            htk=True,
-            norm='slaney'
-        )
-        mel_spec = np.dot(mel_basis, power_spec)
+        # Cache mel_basis — it is constant for fixed sr/n_fft/n_mels, recomputing it
+        # per-chunk wastes ~10ms × 43 chunks = ~430ms of pure CPU overhead.
+        if self._mel_basis is None:
+            self._mel_basis = librosa.filters.mel(
+                sr=FC_SAMPLE_RATE,
+                n_fft=FC_N_FFT,
+                n_mels=FC_N_MELS,
+                fmin=0.0,
+                fmax=8000.0,
+                htk=True,
+                norm='slaney'
+            )
+        mel_spec = np.dot(self._mel_basis, power_spec)
         log_mel = np.log(mel_spec + 1e-5)
         mean = np.mean(log_mel, axis=1, keepdims=True)
         std = np.std(log_mel, axis=1, keepdims=True)
         std = np.maximum(std, 1e-10)
         normalized = (log_mel - mean) / std
         return np.expand_dims(normalized, axis=0).astype(np.float32)
+
+    def transcribe_batch(self, audio_chunks: list) -> list:
+        """Run ONNX inference on all chunks in ONE batched call.
+
+        Pads every chunk's mel features to the same time dimension, stacks
+        them into a single [B, n_mels, T_max] tensor, fires a single
+        session.run(), then splits the padded output back per-chunk.
+        GPU utilisation goes from ~10% (43 tiny sequential calls) to ~90%
+        (one large matrix multiply that fills the compute pipeline).
+
+        Returns a list of (text, word_timestamps, logprobs) tuples,
+        one per input chunk, in the same order.
+        """
+        if self.session is None or not audio_chunks:
+            return [("", [], None)] * len(audio_chunks)
+
+        # 1. Compute mel features for every chunk in parallel across CPU cores.
+        #    mel computation is pure NumPy — no GIL contention on the heavy math.
+        from concurrent.futures import ThreadPoolExecutor
+        import multiprocessing
+        n_workers = min(len(audio_chunks), multiprocessing.cpu_count())
+        with ThreadPoolExecutor(max_workers=n_workers) as pool:
+            features_list = list(pool.map(self.compute_mel_spectrogram, audio_chunks))
+        # features_list[i] shape: (1, n_mels, T_i)
+
+        T_max = max(f.shape[2] for f in features_list)
+        B = len(features_list)
+
+        # 2. Pad to T_max and stack into one batch tensor
+        batch = np.zeros((B, FC_N_MELS, T_max), dtype=np.float32)
+        lengths = np.zeros(B, dtype=np.int64)
+        for i, f in enumerate(features_list):
+            t = f.shape[2]
+            batch[i, :, :t] = f[0]
+            lengths[i] = t
+
+        # 3. Single ONNX inference call for all chunks
+        input_names = [inp.name for inp in self.session.get_inputs()]
+        ort_inputs = {input_names[0]: batch, input_names[1]: lengths}
+        ort_outs = self.session.run(None, ort_inputs)
+        # ort_outs[0] shape: (B, T_max_out, vocab) — the subsampled logprobs
+        logprobs_batch = ort_outs[0]  # (B, T_out, V)
+
+        # 4. Split and decode each chunk individually
+        results = []
+        seconds_per_frame = (FC_HOP_LENGTH / FC_SAMPLE_RATE) * FC_SUBSAMPLING_FACTOR
+        for i in range(B):
+            # Compute the actual output length for chunk i (subsampling factor reduces T)
+            t_in  = int(lengths[i])
+            t_out = logprobs_batch.shape[1]  # padded output length
+            # Estimate valid output frames: proportional to input length vs T_max
+            valid_frames = max(1, round(t_out * t_in / T_max))
+            lp = logprobs_batch[i, :valid_frames, :]  # trim padding
+            text, word_ts = self.decode_ctc(lp, lp.shape[0])
+            results.append((text, word_ts, lp))
+        return results
 
     def decode_ctc(self, logprobs: np.ndarray, time_steps: int):
         ids = np.argmax(logprobs, axis=-1)
@@ -198,7 +265,20 @@ class FastConformerONNX:
             
             is_new_word = piece.startswith('▁') or piece.startswith(' ')
             if is_new_word and word_start_s is not None:
+                symbol_prefix = ""
+                while word_idx < len(ref_words):
+                    u_word = ref_words[word_idx]
+                    # If the word does not contain any Arabic letters, it's a symbol like ۞
+                    if not re.search(r'[\u0621-\u063A\u0641-\u064A\u0671-\u06D3]', u_word):
+                        symbol_prefix += u_word + " "
+                        word_idx += 1
+                    else:
+                        break
+                        
                 u_word = ref_words[word_idx] if word_idx < len(ref_words) else "???"
+                if symbol_prefix:
+                    u_word = symbol_prefix + u_word
+                    
                 w_dict = {
                     "word": u_word,
                     "start": word_start_s,
@@ -225,7 +305,19 @@ class FastConformerONNX:
             word_end_s = end_s
                         
         if word_start_s is not None:
+            symbol_prefix = ""
+            while word_idx < len(ref_words):
+                u_word = ref_words[word_idx]
+                if not re.search(r'[\u0621-\u063A\u0641-\u064A\u0671-\u06D3]', u_word):
+                    symbol_prefix += u_word + " "
+                    word_idx += 1
+                else:
+                    break
+
             u_word = ref_words[word_idx] if word_idx < len(ref_words) else "???"
+            if symbol_prefix:
+                u_word = symbol_prefix + u_word
+                
             w_dict = {
                 "word": u_word,
                 "start": word_start_s,
@@ -339,8 +431,8 @@ class FastConformerONNX:
             intervals.append((last, last))
         return intervals[:len(token_ids)]
 
-def transcribe_fastconformer_onnx_with_logprobs(audio: np.ndarray, fast_mode: bool = False):
-    fc = FastConformerONNX.get_instance(fast_mode=fast_mode)
+def transcribe_fastconformer_onnx_with_logprobs(audio: np.ndarray, fast_mode: bool = False, device: str = 'cpu'):
+    fc = FastConformerONNX.get_instance(fast_mode=fast_mode, device=device)
     if fc.session is None:
         return "", [], None
     return fc.transcribe(audio)

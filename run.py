@@ -39,6 +39,9 @@ def main():
     # Define the --fast argument: boolean flag to enable fast mode (reduces sliding window overlap to 5s instead of 10s).
     parser.add_argument("--fast", action="store_true", help="Enable fast mode (reduced overlap, max CPU threads)")
     
+    # Define the --device argument: switch between CPU and CUDA for inference.
+    parser.add_argument("--device", type=str, default="cuda", choices=["cpu", "cuda"], help="Device to run inference on")
+    
     # Parse the provided command-line arguments.
     args = parser.parse_args()
 
@@ -50,7 +53,7 @@ def main():
 
     # Import the main pipeline entry function process_audio from the pipeline module.
     from src.pipeline.entries import process_audio
-    print(f"\nProcessing audio: {args.audio}...")
+    print(f"\nProcessing audio: {args.audio} on {args.device}...")
     
     # Wrap the pipeline execution in a try-except block to catch and report errors gracefully.
     try:
@@ -58,7 +61,7 @@ def main():
         outcome = process_audio(
             audio_data=args.audio,           # Pass the parsed audio file path.
             model_name="Base",               # Use the default "Base" model.
-            device="cpu",                    # Force CPU execution as requested.
+            device=args.device,              # Dynamic device execution as requested.
             is_preset=False,                 # Indicate this is not a preset UI run.
             log_enabled=False,               # Disable detailed internal logging to stdout.
             return_html=False,               # Set to False so outcome.segments returns raw JSON dicts instead of an HTML string.
@@ -79,7 +82,7 @@ def main():
     
     # Save the JSON payload
     with open(args.out, "w", encoding="utf-8") as f:
-        json.dump(json_output, f, ensure_ascii=False, indent=2)
+        json.dump(json_output, f, ensure_ascii=False, separators=(',', ':'))
         
     print(f"\nProcessing complete!")
     print(f"JSON Output saved to: {args.out}")

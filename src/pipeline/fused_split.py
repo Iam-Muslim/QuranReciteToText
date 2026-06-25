@@ -98,19 +98,28 @@ def _create_sub_segment(parent_seg, group, number, SegmentInfoCls):
     # Calculate the exact mathematical reference boundaries for this specific chunk.
     ref_from = f"{q_words[0].surah}:{q_words[0].ayah}:{q_words[0].word}"
     ref_to = f"{q_words[-1].surah}:{q_words[-1].ayah}:{q_words[-1].word}"
+    seg_start = s_words[0]["start"]
+    seg_end = s_words[-1]["end"]
     
     # Rebuild the plain string text for JSON viewing.
     matched_text = " ".join([s["word"] for s in s_words])
     
+    # Stamp the Quran location ref and convert to relative timestamps.
+    out_words = []
+    for q_w, s_w in zip(q_words, s_words):
+        w = dict(s_w)
+        w["location"] = f"{q_w.surah}:{q_w.ayah}:{q_w.word}"
+        out_words.append(w)
+    
     # Construct and return the new data class.
     return SegmentInfoCls(
-        start_time=s_words[0]["start"],
-        end_time=s_words[-1]["end"],
+        start_time=seg_start,
+        end_time=seg_end,
         transcribed_text="",
         matched_text=matched_text,
         matched_ref=f"{ref_from}-{ref_to}",
         match_score=parent_seg.match_score,
         error=parent_seg.error,
-        words=s_words,
+        words=out_words,
         segment_number=number
     )

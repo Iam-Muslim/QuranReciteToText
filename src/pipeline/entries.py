@@ -53,7 +53,7 @@ def process_audio(
         return PipelineOutcome(html="<div>Please upload an audio file</div>")
 
     # Normalize device label to lowercase for downstream checks
-    device = "cpu"
+    device = device.lower()
 
     print(f"\n{'='*60}")
     print(f"Processing audio with acoustic sliding window")
@@ -101,7 +101,7 @@ def process_audio(
     # The VAD parameters have been stripped out; the engine relies purely on fixed sliding chunks.
     (regions, emissions, stage_metrics,
      vad_gpu_time, asr_gpu_time, peak_vram, reserved_vram) = run_vad_and_asr_gpu(
-        audio, sample_rate, model_name, fast_mode=fast_mode
+        audio, sample_rate, model_name, fast_mode=fast_mode, device=device
     )
     
     # Calculate total wall clock time taken by the GPU runtime.

@@ -10,8 +10,8 @@ import re
 
 def normalize_arabic(text: str) -> str:
     """Strips all diacritics and normalizes Arabic characters for robust text matching."""
-    # Remove tashkeel (fatha, damma, kasra, etc.) and specific Quranic punctuation marks.
-    text = re.sub(r'[\u064B-\u065F\u0670\u06D6-\u06DC\u06DF-\u06E8\u06EA-\u06ED]', '', text)
+    # Remove tashkeel, Quranic punctuation, Ayah markers (۝), Hizb (۞), Sajdah (۩), and numbers.
+    text = re.sub(r'[\u064B-\u065F\u0670\u06D6-\u06E9\u06EA-\u06ED٠-٩0-9]', '', text)
     # Normalize all Alef variants (with hamza, madda, etc.) to a plain bare Alef.
     text = re.sub(r'[إأآٱ]', 'ا', text)
     # Normalize all Yaa variants (alef maksura, yaa) to a standard Yaa.
