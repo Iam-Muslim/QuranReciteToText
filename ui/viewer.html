@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="en" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quran Word Timing Viewer (Advanced)</title>
+    <link href="https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&family=Tajawal:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --card-bg: rgba(30, 41, 59, 0.7);
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --accent: #38bdf8;
+            --accent-glow: rgba(56, 189, 248, 0.4);
+            --highlight-bg: rgba(56, 189, 248, 0.2);
+            --border: rgba(255, 255, 255, 0.1);
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            font-family: 'Tajawal', sans-serif;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background-image: 
+                radial-gradient(at 0% 0%, rgba(15, 23, 42, 1) 0, transparent 50%), 
+                radial-gradient(at 50% 0%, rgba(56, 189, 248, 0.1) 0, transparent 50%), 
+                radial-gradient(at 100% 0%, rgba(15, 23, 42, 1) 0, transparent 50%);
+        }
+
+        .container {
+            width: 90%;
+            max-width: 900px;
+            margin-top: 40px;
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+        }
+
+        .glass-card {
+            background: var(--card-bg);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        h1 {
+            margin: 0 0 8px 0;
+            font-weight: 700;
+            font-size: 1.8rem;
+            color: var(--accent);
+        }
+
+        p.subtitle {
+            margin: 0;
+            color: var(--text-muted);
+            font-size: 0.95rem;
+        }
+
+        .upload-section {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+
+        @media (max-width: 600px) {
+            .upload-section {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .file-input-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            background: rgba(0, 0, 0, 0.2);
+            padding: 16px;
+            border-radius: 12px;
+            border: 1px dashed var(--border);
+            transition: border-color 0.3s ease;
+        }
+
+        .file-input-group:hover {
+            border-color: var(--accent);
+        }
+
+        .file-label {
+            font-weight: 500;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+
+        input[type="file"] {
+            color: var(--text-main);
+            font-family: inherit;
+            font-size: 0.9rem;
+        }
+
+        input[type="file"]::file-selector-button {
+            background: var(--accent);
+            color: #0f172a;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-family: inherit;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-left: 12px;
+        }
+
+        input[type="file"]::file-selector-button:hover {
+            background: #7dd3fc;
+            box-shadow: 0 0 15px var(--accent-glow);
+        }
+
+        audio {
+            width: 100%;
+            height: 48px;
+            outline: none;
+            border-radius: 12px;
+            opacity: 0.9;
+        }
+
+        .player-section {
+            display: none; /* Hidden until files are loaded */
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .segment-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 12px;
+        }
+        
+        .debug-info {
+            font-size: 0.8rem;
+            color: #fbbf24;
+            background: rgba(251, 191, 36, 0.1);
+            padding: 4px 8px;
+            border-radius: 6px;
+        }
+
+        .text-display {
+            font-family: 'Amiri', serif;
+            font-size: 2.8rem;
+            line-height: 2.4;
+            text-align: center;
+            min-height: 250px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 8px 16px;
+            direction: rtl;
+        }
+
+        .word {
+            display: inline-block;
+            color: var(--text-muted);
+            transition: all 0.1s linear;
+            padding: 0 6px;
+            border-radius: 8px;
+            cursor: pointer;
+            position: relative;
+        }
+
+        .word:hover {
+            color: var(--text-main);
+        }
+
+        .word.highlight {
+            color: var(--text-main);
+            background: var(--highlight-bg);
+            transform: scale(1.05);
+            text-shadow: 0 0 16px var(--accent-glow);
+            border-bottom: 3px solid var(--accent);
+        }
+
+        /* Tooltip for timestamps on hover */
+        .word::after {
+            content: attr(data-tooltip);
+            position: absolute;
+            bottom: -25px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 0.8rem;
+            font-family: 'Tajawal', sans-serif;
+            background: #0f172a;
+            color: #38bdf8;
+            padding: 2px 6px;
+            border-radius: 4px;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s;
+            white-space: nowrap;
+        }
+
+        .word:hover::after {
+            opacity: 1;
+        }
+
+        .navigation {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 16px;
+        }
+
+        .nav-btn {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--border);
+            color: var(--text-main);
+            padding: 8px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-family: inherit;
+            transition: all 0.2s ease;
+        }
+
+        .nav-btn:hover:not(:disabled) {
+            background: rgba(255, 255, 255, 0.1);
+            border-color: var(--accent);
+        }
+
+        .nav-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .segments-timeline {
+            display: flex;
+            overflow-x: auto;
+            gap: 8px;
+            padding: 10px 0;
+            scrollbar-width: thin;
+        }
+        
+        .timeline-dot {
+            min-width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.8rem;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+        
+        .timeline-dot:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+        
+        .timeline-dot.active {
+            background: var(--accent);
+            color: #0f172a;
+            font-weight: bold;
+            box-shadow: 0 0 10px var(--accent-glow);
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <div class="glass-card">
+            <header>
+                <h1>Quran Word Timing Viewer</h1>
+                <p class="subtitle">Advanced visualizer with absolute timestamp resolution and strict highlighting.</p>
+            </header>
+
+            <div class="upload-section" id="uploadSection">
+                <div class="file-input-group" id="btnGroupProcess" style="display:none;">
+                    <span class="file-label">Run Pipeline (Desktop App)</span>
+                    <button class="nav-btn" onclick="runPipeline()" style="border-color: var(--accent); color: var(--accent); font-weight: bold; padding: 10px; width: 100%;">Select Audio & Process</button>
+                </div>
+                <div class="file-input-group" id="btnGroupNativeLoad" style="display:none;">
+                    <span class="file-label">Load Existing JSON (Desktop App)</span>
+                    <button class="nav-btn" onclick="loadJsonNative()" style="padding: 10px; width: 100%;">Load output.json</button>
+                </div>
+                <div class="file-input-group" id="fallbackJson">
+                    <span class="file-label">1. Select JSON File (.json)</span>
+                    <input type="file" id="jsonInput" accept=".json">
+                </div>
+                <div class="file-input-group" id="fallbackAudio">
+                    <span class="file-label">2. Select Audio File (.mp3/.wav)</span>
+                    <input type="file" id="audioInput" accept="audio/*">
+                </div>
+            </div>
+
+            <div id="pipelineStatus" style="display:none; text-align: center; color: var(--accent); margin-top: 16px; padding: 12px; background: rgba(56, 189, 248, 0.1); border-radius: 8px;">
+                Running Transcription Pipeline... Please wait (this may take a minute).
+            </div>
+        </div>
+
+        <div class="glass-card player-section" id="playerSection">
+            <audio id="audioPlayer" controls></audio>
+            
+            <div class="segments-timeline" id="timelineContainer">
+                <!-- Timeline dots injected here -->
+            </div>
+            
+            <div class="segment-info">
+                <span id="segmentId">Segment: --</span>
+                <span id="segmentRef">Ref: --</span>
+                <span id="debugInfo" class="debug-info">Relative Timestamps Fixed</span>
+            </div>
+
+            <div class="text-display" id="textDisplay">
+                <!-- Words will be injected here -->
+            </div>
+
+            <div class="navigation">
+                <button class="nav-btn" id="prevBtn" disabled>Previous Segment</button>
+                <button class="nav-btn" id="nextBtn" disabled>Next Segment</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // DOM Elements
+        const jsonInput = document.getElementById('jsonInput');
+        const audioInput = document.getElementById('audioInput');
+        const playerSection = document.getElementById('playerSection');
+        const audioPlayer = document.getElementById('audioPlayer');
+        const textDisplay = document.getElementById('textDisplay');
+        const segmentIdDisplay = document.getElementById('segmentId');
+        const segmentRefDisplay = document.getElementById('segmentRef');
+        const prevBtn = document.getElementById('prevBtn');
+        const nextBtn = document.getElementById('nextBtn');
+        const timelineContainer = document.getElementById('timelineContainer');
+        const debugInfo = document.getElementById('debugInfo');
+        
+        // Setup Desktop App Mode UI
+        window.addEventListener('pywebviewready', function() {
+            // Hide standard file inputs, show native app buttons
+            document.getElementById('fallbackJson').style.display = 'none';
+            document.getElementById('fallbackAudio').style.display = 'none';
+            document.getElementById('btnGroupProcess').style.display = 'flex';
+            document.getElementById('btnGroupNativeLoad').style.display = 'flex';
+        });
+
+        async function runPipeline() {
+            if (!window.pywebview) {
+                alert("This feature is only available in the Desktop App mode (run python gui.py)");
+                return;
+            }
+            
+            const statusDiv = document.getElementById('pipelineStatus');
+            statusDiv.style.display = 'block';
+            statusDiv.innerText = 'Running Transcription Pipeline... Please wait.';
+            
+            try {
+                const result = await window.pywebview.api.select_and_process_audio();
+                if (result.error) {
+                    if (result.error !== "User cancelled") {
+                        alert("Pipeline Error: " + result.error + "\n" + (result.details || ""));
+                    }
+                    statusDiv.style.display = 'none';
+                    return;
+                }
+                
+                statusDiv.innerText = 'Success! Loading audio...';
+                
+                originalData = result.data.segments;
+                document.getElementById('uploadSection').style.display = 'none';
+                statusDiv.style.display = 'none';
+                
+                audioPlayer.src = result.audio_path;
+                audioPlayer.load();
+                
+                document.getElementById('playerSection').style.display = 'flex';
+                renderTimeline();
+                loadSegment(0);
+                
+            } catch (err) {
+                alert("Error: " + err);
+                statusDiv.style.display = 'none';
+            }
+        }
+
+        async function loadJsonNative() {
+            if (!window.pywebview) return;
+            const result = await window.pywebview.api.load_json_directly();
+            if (result.error) {
+                if (result.error !== "User cancelled") alert(result.error);
+                return;
+            }
+            originalData = result.data.segments;
+            
+            // To load audio natively, we can just ask the user to use the runPipeline button instead,
+            // or we could add another api method for selecting just audio. 
+            // For now, prompt them.
+            alert("JSON loaded successfully! You still need to load the audio file. Please use the fallback audio input if available, or just use 'Select Audio & Process' to do everything automatically.");
+        }
+
+        // State
+        let segmentsData = [];
+        let validSegments = []; // Segments that actually contain words
+        let currentSegmentIndex = -1;
+        let isRelative = false;
+
+        // --- File Handling ---
+        jsonInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                try {
+                    const data = JSON.parse(event.target.result);
+                    let rawSegments = data.segments || data;
+                    
+                    // Filter out empty segments (like in original.json where some segments have 0% confidence and no words)
+                    segmentsData = rawSegments;
+                    validSegments = segmentsData.filter(s => s.words && s.words.length > 0);
+                    
+                    if (validSegments.length === 0) {
+                        alert("No words found in JSON!");
+                        return;
+                    }
+
+                    // Smart detection: Are timestamps relative to segment start?
+                    // Check the first valid segment. If the segment starts at 30s, but its first word starts at 0.0s, it's relative.
+                    const firstSeg = validSegments.find(s => s.time_from > 5.0); // Find a segment far into the audio
+                    if (firstSeg && firstSeg.words[0].start < 5.0) {
+                        isRelative = true;
+                        debugInfo.textContent = "Relative Timestamps Detected (Auto-fixed)";
+                    } else {
+                        isRelative = false;
+                        debugInfo.textContent = "Absolute Timestamps Detected";
+                    }
+
+                    buildTimeline();
+                    checkReady();
+                } catch (err) {
+                    alert("Error parsing JSON file: " + err.message);
+                }
+            };
+            reader.readAsText(file);
+        });
+
+        audioInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            const url = URL.createObjectURL(file);
+            audioPlayer.src = url;
+            checkReady();
+        });
+
+        function checkReady() {
+            if (validSegments.length > 0 && audioPlayer.src) {
+                playerSection.style.display = 'flex';
+                // Load first valid segment
+                loadSegment(validSegments[0].segment);
+            }
+        }
+
+        function buildTimeline() {
+            timelineContainer.innerHTML = '';
+            validSegments.forEach(s => {
+                const dot = document.createElement('div');
+                dot.className = 'timeline-dot';
+                dot.textContent = s.segment;
+                dot.dataset.segmentId = s.segment;
+                dot.addEventListener('click', () => {
+                    audioPlayer.currentTime = s.time_from;
+                    loadSegment(s.segment);
+                    audioPlayer.play();
+                });
+                timelineContainer.appendChild(dot);
+            });
+        }
+
+        function updateTimelineHighlight(segId) {
+            document.querySelectorAll('.timeline-dot').forEach(dot => {
+                if (dot.dataset.segmentId == segId) {
+                    dot.classList.add('active');
+                    // Ensure dot is visible
+                    dot.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+                } else {
+                    dot.classList.remove('active');
+                }
+            });
+        }
+
+        // --- Core Logic ---
+        function loadSegment(segId) {
+            // Find the index of this segment ID in the valid segments array
+            const validIndex = validSegments.findIndex(s => s.segment === segId);
+            if (validIndex === -1) return;
+            
+            currentSegmentIndex = validIndex;
+            const segment = validSegments[validIndex];
+            
+            updateTimelineHighlight(segId);
+
+            // Update Info
+            segmentIdDisplay.textContent = `Segment: ${segment.segment}`;
+            segmentRefDisplay.textContent = `Ref: ${segment.ref_from} to ${segment.ref_to}`;
+            
+            // Update Buttons
+            prevBtn.disabled = validIndex === 0;
+            nextBtn.disabled = validIndex === validSegments.length - 1;
+
+            // Render Words
+            textDisplay.innerHTML = '';
+            
+            const segTimeFrom = segment.time_from || 0.0;
+
+            segment.words.forEach((w, i) => {
+                const span = document.createElement('span');
+                span.className = 'word';
+                span.textContent = w.word;
+                
+                // CRITICAL FIX: If timestamps are relative, add the segment's starting time!
+                let absoluteStart = isRelative ? (w.start + segTimeFrom) : w.start;
+                let absoluteEnd = isRelative ? (w.end + segTimeFrom) : w.end;
+                
+                // Safeguard rounding to avoid float errors
+                absoluteStart = Math.round(absoluteStart * 1000) / 1000;
+                absoluteEnd = Math.round(absoluteEnd * 1000) / 1000;
+                
+                span.dataset.start = absoluteStart;
+                span.dataset.end = absoluteEnd;
+                span.dataset.tooltip = `${absoluteStart.toFixed(2)}s - ${absoluteEnd.toFixed(2)}s`;
+                
+                // Allow clicking a word to jump to that precise absolute timestamp
+                span.addEventListener('click', () => {
+                    audioPlayer.currentTime = absoluteStart;
+                    audioPlayer.play();
+                });
+
+                textDisplay.appendChild(span);
+            });
+        }
+
+        // Handle Audio Time Updates (Using requestAnimationFrame for 60fps instant precision)
+        let isPlaying = false;
+
+        audioPlayer.addEventListener('play', () => {
+            isPlaying = true;
+            requestAnimationFrame(updateHighlights);
+        });
+
+        audioPlayer.addEventListener('pause', () => {
+            isPlaying = false;
+            updateHighlights(); // One last update to freeze state
+        });
+
+        audioPlayer.addEventListener('seeked', () => {
+            updateHighlights();
+        });
+
+        function updateHighlights() {
+            if (validSegments.length === 0 || currentSegmentIndex === -1) return;
+
+            const t = audioPlayer.currentTime;
+            
+            // 1. Check if we need to auto-switch segments
+            const currentSeg = validSegments[currentSegmentIndex];
+            
+            // We use a small buffer (+1.0s) to allow natural pauses before snapping to the next screen.
+            if (t > currentSeg.time_to + 1.0 || t < currentSeg.time_from - 1.0) {
+                const correctIndex = validSegments.findIndex(s => t >= (s.time_from - 1.0) && t <= (s.time_to + 1.0));
+                if (correctIndex !== -1 && correctIndex !== currentSegmentIndex) {
+                    loadSegment(validSegments[correctIndex].segment);
+                }
+            }
+
+            // 2. Highlight words strictly based on absolute timestamp boundaries
+            const wordSpans = textDisplay.querySelectorAll('.word');
+            wordSpans.forEach(span => {
+                const start = parseFloat(span.dataset.start);
+                const end = parseFloat(span.dataset.end);
+                
+                // Strict highlighting: No artificial padding at all. Powered by 60fps polling.
+                if (t >= start && t <= end) {
+                    span.classList.add('highlight');
+                } else {
+                    span.classList.remove('highlight');
+                }
+            });
+
+            if (isPlaying) {
+                requestAnimationFrame(updateHighlights);
+            }
+        }
+
+        // Navigation Buttons
+        prevBtn.addEventListener('click', () => {
+            if (currentSegmentIndex > 0) {
+                const prev = validSegments[currentSegmentIndex - 1];
+                audioPlayer.currentTime = prev.time_from;
+                loadSegment(prev.segment);
+            }
+        });
+
+        nextBtn.addEventListener('click', () => {
+            if (currentSegmentIndex < validSegments.length - 1) {
+                const next = validSegments[currentSegmentIndex + 1];
+                audioPlayer.currentTime = next.time_from;
+                loadSegment(next.segment);
+            }
+        });
+
+    </script>
+</body>
+</html>
