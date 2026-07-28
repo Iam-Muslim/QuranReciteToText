@@ -58,6 +58,40 @@ _DIAC_RE = re.compile(
 )
 
 
+def _find_unmatched_affixes(transcribed_text: str, matched_text: str) -> tuple[list[str], list[str]]:
+    """
+    Finds the prefix and suffix words from transcribed_text that were NOT aligned
+    to matched_text. This helps CTC forced alignment absorb introductory/trailing speech.
+    """
+    if not transcribed_text or not matched_text:
+        return [], []
+        
+    t_words = transcribed_text.split()
+    m_words = matched_text.split()
+    
+    from src.phase2_matching.normalize import normalize_arabic
+    t_norm = [normalize_arabic(w) for w in t_words]
+    m_norm = [normalize_arabic(w) for w in m_words]
+    
+    import difflib
+    sm = difflib.SequenceMatcher(None, t_norm, m_norm)
+    opcodes = sm.get_opcodes()
+    
+    prefix = []
+    suffix = []
+    
+    if opcodes:
+        tag, i1, i2, j1, j2 = opcodes[0]
+        if tag == 'delete' and j1 == 0 and j2 == 0:
+            prefix = t_words[i1:i2]
+            
+        tag, i1, i2, j1, j2 = opcodes[-1]
+        if tag == 'delete' and j1 == len(m_norm) and j2 == len(m_norm):
+            suffix = t_words[i1:i2]
+            
+    return prefix, suffix
+
+
 def _strip_diacritics(text: str) -> str:
     """Remove Arabic harakat / Quranic annotation marks."""
     return _DIAC_RE.sub('', text)
@@ -386,6 +420,7 @@ def run_ctc_alignment(
         seg = segments[i]
 
         matched_text = seg.matched_text or ""
+        transcribed_text = seg.transcribed_text or ""
         if not matched_text.strip():
             continue   # failed match → skip
 
@@ -399,12 +434,17 @@ def run_ctc_alignment(
         if logprobs_np is None:
             continue
 
-        # Tokenize each word in the matched (reference) text
+        # Extract unaligned prefix/suffix from ASR to absorb intro/outro audio
+        prefix_words, suffix_words = _find_unmatched_affixes(transcribed_text, matched_text)
+
+        # Build the full reference sequence for CTC alignment
         ref_words = matched_text.split()
+        full_words = prefix_words + ref_words + suffix_words
+
         token_ids: list[int]  = []
         word_token_counts: list[int] = []
 
-        for word in ref_words:
+        for word in full_words:
             ids = _tokenize_word(word, vocab, char_to_id)
             if not ids:
                 # Unknown word — use a single dummy id that won't match anything
@@ -423,16 +463,22 @@ def run_ctc_alignment(
             print(f"[Phase3] Segment {i} forced_align failed: {e}")
             continue
 
-        # Convert frames to word-level times
-        word_times = _frames_to_word_times(
+        # Convert frames to word-level times for the FULL sequence
+        full_word_times = _frames_to_word_times(
             alignments, scores, token_ids, word_token_counts, chunk_start_sec
         )
 
-        if len(word_times) != len(ref_words):
+        # Slice out only the timings that correspond to the actual matched_text
+        start_idx = len(prefix_words)
+        end_idx = len(prefix_words) + len(ref_words)
+        
+        if len(full_word_times) != len(full_words):
             # Mismatch — tokenization issue; attach without location
-            word_times = word_times[:len(ref_words)]
+            word_times = full_word_times[start_idx:end_idx]
             while len(word_times) < len(ref_words):
                 word_times.append({"_start": None, "_end": None})
+        else:
+            word_times = full_word_times[start_idx:end_idx]
 
         # Build final words list, attaching locations from seg.words if available
         # (Phase 2 sometimes stores location refs in seg.words when repetitions are detected)
