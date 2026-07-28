@@ -38,7 +38,6 @@ import re
 from typing import Optional
 
 import numpy as np
-import torch
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants matching FastConformer architecture
@@ -142,14 +141,28 @@ def _forced_align_chunk(
     token_ids: list[int],
 ) -> tuple[np.ndarray, np.ndarray]:
     """
-    Run torchaudio.functional.forced_align (Viterbi CTC alignment).
+    Run pure NumPy Viterbi CTC alignment (replaces torchaudio.functional.forced_align).
 
     Returns:
         alignments: np.ndarray shape (T_enc,) — state index per frame
         scores:     np.ndarray shape (T_enc,) — log-prob per frame
     """
-    import torchaudio
-
+    # === OLD TORCH REFERENCE CODE ===
+    # import torch
+    # import torchaudio
+    # lp_t = torch.from_numpy(lp).unsqueeze(0)
+    # targets = torch.tensor(token_ids, dtype=torch.int32).unsqueeze(0)
+    # input_lengths = torch.tensor([T], dtype=torch.int32)
+    # target_lengths = torch.tensor([N], dtype=torch.int32)
+    # alignments, scores = torchaudio.functional.forced_align(
+    #     log_probs=lp_t,
+    #     targets=targets,
+    #     input_lengths=input_lengths,
+    #     target_lengths=target_lengths,
+    #     blank=BLANK_ID,
+    # )
+    # return alignments[0].numpy(), scores[0].numpy()
+    # ================================
     # Normalize shape → (T_enc, V)
     lp = np.array(log_probs_np, dtype=np.float32)
     if lp.ndim == 3:
@@ -157,23 +170,66 @@ def _forced_align_chunk(
     T, V = lp.shape
 
     N = len(token_ids)
-    if N == 0:
+    if N == 0 or T < N:
         return np.zeros(T, dtype=np.int64), np.zeros(T, dtype=np.float32)
 
-    # torchaudio expects (1, T, V) on CPU, float32
-    lp_t = torch.from_numpy(lp).unsqueeze(0)   # (1, T, V)
-    targets = torch.tensor(token_ids, dtype=torch.int32).unsqueeze(0)  # (1, N)
-    input_lengths  = torch.tensor([T], dtype=torch.int32)
-    target_lengths = torch.tensor([N], dtype=torch.int32)
-
-    alignments, scores = torchaudio.functional.forced_align(
-        log_probs=lp_t,
-        targets=targets,
-        input_lengths=input_lengths,
-        target_lengths=target_lengths,
-        blank=BLANK_ID,
-    )
-    return alignments[0].numpy(), scores[0].numpy()   # (T,), (T,)
+    L = 2 * N + 1
+    S = np.full(L, BLANK_ID, dtype=np.int64)
+    S[1::2] = token_ids
+    
+    # Precompute mask for skip-blank transitions
+    # condition: s > 1 AND S[s] != BLANK AND S[s] != S[s-2]
+    skip_mask = np.zeros(L, dtype=bool)
+    for s in range(2, L):
+        if S[s] != BLANK_ID and S[s] != S[s-2]:
+            skip_mask[s] = True
+            
+    # Initialize trellis
+    V_trellis = np.full((T, L), -np.inf, dtype=np.float32)
+    B = np.zeros((T, L), dtype=np.int32)
+    
+    V_trellis[0, 0] = lp[0, BLANK_ID]
+    if L > 1:
+        V_trellis[0, 1] = lp[0, S[1]]
+        
+    for t in range(1, T):
+        prev = V_trellis[t-1]
+        
+        v0 = prev
+        v1 = np.empty_like(prev)
+        v1[0] = -np.inf
+        v1[1:] = prev[:-1]
+        
+        v2 = np.empty_like(prev)
+        v2[:2] = -np.inf
+        v2[2:] = prev[:-2]
+        v2 = np.where(skip_mask, v2, -np.inf)
+        
+        # Stack and find max / argmax
+        stacked = np.stack([v0, v1, v2], axis=0)
+        max_v = np.max(stacked, axis=0)
+        idx_max = np.argmax(stacked, axis=0)
+        
+        B[t] = idx_max
+        V_trellis[t] = max_v + lp[t, S]
+        
+    # Backtrack
+    if V_trellis[T-1, L-1] > V_trellis[T-1, L-2]:
+        curr_s = L - 1
+    else:
+        curr_s = L - 2
+        
+    path = np.zeros(T, dtype=np.int64)
+    scores = np.zeros(T, dtype=np.float32)
+    
+    for t in range(T-1, -1, -1):
+        path[t] = S[curr_s]
+        scores[t] = lp[t, S[curr_s]]
+        
+        step = B[t, curr_s]
+        curr_s = curr_s - step
+    
+    return path, scores
 
 
 def _frames_to_word_times(
@@ -282,9 +338,9 @@ def _frames_to_word_times(
         ws_f = actual_starts_f[tok_offset]
         we_f = actual_ends_f[tok_offset + count - 1]
 
-        # Convert frames to absolute seconds
-        ws = chunk_start_sec + ws_f * FRAME_STEP
-        we = chunk_start_sec + (we_f + 1) * FRAME_STEP
+        # Convert frames to relative seconds
+        ws = ws_f * FRAME_STEP
+        we = (we_f + 1) * FRAME_STEP
 
         if we < ws:
             ws, we = we, ws

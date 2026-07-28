@@ -5,345 +5,360 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Quran Word Timing Viewer (Advanced)</title>
     <link href="https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&family=Tajawal:wght@400;500;700&display=swap" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
         :root {
             --bg-color: #0f172a;
             --card-bg: rgba(30, 41, 59, 0.7);
             --text-main: #f8fafc;
-            --text-muted: #94a3b8;
+            --text-muted: #64748b;
             --accent: #38bdf8;
-            --accent-glow: rgba(56, 189, 248, 0.4);
-            --highlight-bg: rgba(56, 189, 248, 0.2);
+            --accent-glow: rgba(56, 189, 248, 0.8);
             --border: rgba(255, 255, 255, 0.1);
         }
 
-        body {
+        * {
+            box-sizing: border-box;
             margin: 0;
             padding: 0;
+        }
+
+        body {
             background-color: var(--bg-color);
             color: var(--text-main);
             font-family: 'Tajawal', sans-serif;
             min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
+            overflow-x: hidden;
             background-image: 
-                radial-gradient(at 0% 0%, rgba(15, 23, 42, 1) 0, transparent 50%), 
-                radial-gradient(at 50% 0%, rgba(56, 189, 248, 0.1) 0, transparent 50%), 
-                radial-gradient(at 100% 0%, rgba(15, 23, 42, 1) 0, transparent 50%);
+                radial-gradient(circle at 15% 50%, rgba(56, 189, 248, 0.05), transparent 25%),
+                radial-gradient(circle at 85% 30%, rgba(125, 211, 252, 0.05), transparent 25%);
         }
 
-        .container {
+        .glass-panel {
+            background: var(--card-bg);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid var(--border);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+
+        /* Setup / Upload Screen */
+        #setupScreen {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+            transition: opacity 0.5s ease, visibility 0.5s ease;
+        }
+
+        .setup-card {
+            padding: 40px;
+            border-radius: 24px;
             width: 90%;
-            max-width: 900px;
-            margin-top: 40px;
+            max-width: 600px;
+            text-align: center;
+        }
+
+        .setup-card h1 {
+            font-size: 2.2rem;
+            color: var(--accent);
+            margin-bottom: 8px;
+        }
+
+        .setup-card p {
+            color: var(--text-muted);
+            margin-bottom: 32px;
+        }
+
+        .file-inputs {
             display: flex;
             flex-direction: column;
-            gap: 24px;
-        }
-
-        .glass-card {
-            background: var(--card-bg);
-            backdrop-filter: blur(12px);
-            -webkit-backdrop-filter: blur(12px);
-            border: 1px solid var(--border);
-            border-radius: 16px;
-            padding: 24px;
-            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
-        }
-
-        header {
-            text-align: center;
-            margin-bottom: 20px;
-        }
-
-        h1 {
-            margin: 0 0 8px 0;
-            font-weight: 700;
-            font-size: 1.8rem;
-            color: var(--accent);
-        }
-
-        p.subtitle {
-            margin: 0;
-            color: var(--text-muted);
-            font-size: 0.95rem;
-        }
-
-        .upload-section {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
             gap: 16px;
         }
 
-        @media (max-width: 600px) {
-            .upload-section {
-                grid-template-columns: 1fr;
-            }
-        }
-
         .file-input-group {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            background: rgba(0, 0, 0, 0.2);
-            padding: 16px;
-            border-radius: 12px;
+            background: rgba(0, 0, 0, 0.3);
             border: 1px dashed var(--border);
-            transition: border-color 0.3s ease;
+            border-radius: 12px;
+            padding: 16px;
+            text-align: right;
+            transition: all 0.3s ease;
+            position: relative;
         }
 
         .file-input-group:hover {
             border-color: var(--accent);
+            background: rgba(56, 189, 248, 0.05);
         }
 
-        .file-label {
-            font-weight: 500;
-            color: var(--text-muted);
+        .file-input-group label {
+            display: block;
             font-size: 0.9rem;
+            color: var(--text-muted);
+            margin-bottom: 8px;
         }
 
-        input[type="file"] {
+        .file-input-group input[type="file"] {
+            width: 100%;
             color: var(--text-main);
             font-family: inherit;
-            font-size: 0.9rem;
         }
 
-        input[type="file"]::file-selector-button {
-            background: var(--accent);
-            color: #0f172a;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 8px;
-            font-family: inherit;
-            font-weight: 700;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            margin-left: 12px;
-        }
-
-        input[type="file"]::file-selector-button:hover {
-            background: #7dd3fc;
-            box-shadow: 0 0 15px var(--accent-glow);
-        }
-
-        audio {
-            width: 100%;
-            height: 48px;
-            outline: none;
-            border-radius: 12px;
-            opacity: 0.9;
-        }
-
-        .player-section {
-            display: none; /* Hidden until files are loaded */
+        /* Main Player Screen */
+        #mainScreen {
+            display: none;
             flex-direction: column;
-            gap: 16px;
+            height: 100vh;
         }
 
-        .segment-info {
+        /* Top Bar */
+        .top-bar {
+            padding: 16px 32px;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            color: var(--text-muted);
-            font-size: 0.9rem;
             border-bottom: 1px solid var(--border);
-            padding-bottom: 12px;
+            position: sticky;
+            top: 0;
+            z-index: 10;
         }
-        
-        .debug-info {
-            font-size: 0.8rem;
-            color: #fbbf24;
-            background: rgba(251, 191, 36, 0.1);
-            padding: 4px 8px;
-            border-radius: 6px;
+
+        .segment-badge {
+            background: rgba(56, 189, 248, 0.1);
+            color: var(--accent);
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-weight: 700;
+            font-size: 0.9rem;
+            border: 1px solid rgba(56, 189, 248, 0.2);
+        }
+
+        /* Text Display Area */
+        .lyrics-container {
+            flex-grow: 1;
+            overflow-y: auto;
+            padding: 60px 20px 180px 20px; /* Extra bottom padding for floating player */
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            scroll-behavior: smooth;
         }
 
         .text-display {
             font-family: 'Amiri', serif;
-            font-size: 2.8rem;
-            line-height: 2.4;
+            font-size: 4rem; /* Massive text for focus */
+            line-height: 2.2;
             text-align: center;
-            min-height: 250px;
+            max-width: 1100px;
             display: flex;
-            align-items: center;
-            justify-content: center;
             flex-wrap: wrap;
-            gap: 8px 16px;
+            justify-content: center;
+            gap: 16px 24px;
             direction: rtl;
         }
 
         .word {
             display: inline-block;
-            color: var(--text-muted);
-            transition: all 0.1s linear;
-            padding: 0 6px;
-            border-radius: 8px;
             cursor: pointer;
             position: relative;
+            /* Advanced Karaoke Fill Setup */
+            color: rgba(255, 255, 255, 0.15); /* Dimmed base color */
+            background-image: linear-gradient(to left, var(--accent) var(--fill, 0%), rgba(255, 255, 255, 0.15) var(--fill, 0%));
+            background-clip: text;
+            -webkit-background-clip: text;
+            /* Transition specifically for smooth wiping if frame drops */
+            transition: transform 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275), text-shadow 0.2s ease;
+            text-shadow: 0 0 0px transparent;
         }
 
-        .word:hover {
-            color: var(--text-main);
-        }
-
-        .word.highlight {
-            color: var(--text-main);
-            background: var(--highlight-bg);
-            transform: scale(1.05);
-            text-shadow: 0 0 16px var(--accent-glow);
-            border-bottom: 3px solid var(--accent);
+        /* When the word is fully active, give it a beautiful glow and pop */
+        .word.active-glow {
+            transform: scale(1.1);
+            text-shadow: 0 0 25px var(--accent-glow);
+            z-index: 10;
         }
 
         .word.missing-word {
-            border-bottom: 2px dashed #f87171;
-            color: #f87171;
+            color: #ef4444;
+            border-bottom: 3px dashed rgba(239, 68, 68, 0.5);
+            background-image: none;
+            -webkit-text-fill-color: #ef4444;
+            cursor: not-allowed;
+            text-shadow: 0 0 10px rgba(239, 68, 68, 0.3);
+        }
+        
+        .word:not(.missing-word):hover {
+            color: var(--text-main);
+            background-image: none;
+            -webkit-text-fill-color: var(--text-main);
         }
 
-        .word.missing-word.highlight {
-            border-bottom: 3px dashed #f87171;
-            color: #fee2e2;
-            background: rgba(248, 113, 113, 0.2);
-            text-shadow: 0 0 16px rgba(248, 113, 113, 0.4);
-        }
-
-        /* Tooltip for timestamps on hover */
-        .word::after {
-            content: attr(data-tooltip);
-            position: absolute;
-            bottom: -25px;
+        /* Custom Floating Audio Player */
+        .floating-player {
+            position: fixed;
+            bottom: 30px;
             left: 50%;
             transform: translateX(-50%);
-            font-size: 0.8rem;
-            font-family: 'Tajawal', sans-serif;
-            background: #0f172a;
-            color: #38bdf8;
-            padding: 2px 6px;
-            border-radius: 4px;
-            opacity: 0;
-            pointer-events: none;
-            transition: opacity 0.2s;
-            white-space: nowrap;
-        }
-
-        .word:hover::after {
-            opacity: 1;
-        }
-
-        .navigation {
+            width: 90%;
+            max-width: 800px;
+            border-radius: 20px;
+            padding: 20px 30px;
             display: flex;
-            justify-content: space-between;
+            flex-direction: column;
+            gap: 16px;
+            z-index: 20;
+        }
+
+        .timeline-wrapper {
+            display: flex;
             align-items: center;
-            margin-top: 16px;
+            gap: 16px;
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            font-variant-numeric: tabular-nums;
         }
 
-        .nav-btn {
-            background: rgba(255, 255, 255, 0.05);
-            border: 1px solid var(--border);
-            color: var(--text-main);
-            padding: 8px 16px;
-            border-radius: 8px;
+        .progress-bar-container {
+            flex-grow: 1;
+            height: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 4px;
             cursor: pointer;
-            font-family: inherit;
-            transition: all 0.2s ease;
+            position: relative;
+            overflow: hidden;
         }
 
-        .nav-btn:hover:not(:disabled) {
-            background: rgba(255, 255, 255, 0.1);
-            border-color: var(--accent);
-        }
-
-        .nav-btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
+        .progress-bar-fill {
+            height: 100%;
+            background: var(--accent);
+            width: 0%;
+            border-radius: 4px;
+            box-shadow: 0 0 10px var(--accent-glow);
+            pointer-events: none;
         }
         
-        .segments-timeline {
+        .controls-wrapper {
             display: flex;
-            overflow-x: auto;
-            gap: 8px;
-            padding: 10px 0;
-            scrollbar-width: thin;
+            justify-content: center;
+            align-items: center;
         }
-        
-        .timeline-dot {
-            min-width: 30px;
-            height: 30px;
-            border-radius: 50%;
-            background: rgba(255, 255, 255, 0.1);
+
+        .main-controls {
+            display: flex;
+            align-items: center;
+            gap: 30px;
+        }
+
+        .ctrl-btn {
+            background: none;
+            border: none;
+            color: var(--text-main);
+            font-size: 1.5rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 0.8rem;
-            cursor: pointer;
-            flex-shrink: 0;
         }
-        
-        .timeline-dot:hover {
-            background: rgba(255, 255, 255, 0.2);
+
+        .ctrl-btn:hover {
+            color: var(--accent);
+            transform: scale(1.15);
         }
-        
-        .timeline-dot.active {
+
+        .play-btn {
+            width: 60px;
+            height: 60px;
             background: var(--accent);
-            color: #0f172a;
-            font-weight: bold;
-            box-shadow: 0 0 10px var(--accent-glow);
+            color: var(--bg-color);
+            border-radius: 50%;
+            font-size: 1.5rem;
+            box-shadow: 0 0 20px var(--accent-glow);
+        }
+
+        .play-btn:hover {
+            color: var(--bg-color);
+            transform: scale(1.1);
+            box-shadow: 0 0 30px var(--accent-glow);
+        }
+
+        /* Custom scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.02);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.2);
         }
     </style>
 </head>
 <body>
 
-    <div class="container">
-        <div class="glass-card">
-            <header>
-                <h1>Quran Word Timing Viewer</h1>
-                <p class="subtitle">Advanced visualizer with absolute timestamp resolution and strict highlighting.</p>
-            </header>
-
-            <div class="upload-section" id="uploadSection">
-                <div class="file-input-group" id="btnGroupProcess" style="display:none;">
-                    <span class="file-label">Run Pipeline (Desktop App)</span>
-                    <button class="nav-btn" onclick="runPipeline()" style="border-color: var(--accent); color: var(--accent); font-weight: bold; padding: 10px; width: 100%;">Select Audio & Process</button>
-                </div>
-                <div class="file-input-group" id="btnGroupNativeLoad" style="display:none;">
-                    <span class="file-label">Load Existing JSON (Desktop App)</span>
-                    <button class="nav-btn" onclick="loadJsonNative()" style="padding: 10px; width: 100%;">Load output.json</button>
-                </div>
-                <div class="file-input-group" id="fallbackJson">
-                    <span class="file-label">1. Select JSON File (.json)</span>
+    <!-- Setup Screen -->
+    <div id="setupScreen">
+        <div class="glass-panel setup-card">
+            <h1>Quran Viewer</h1>
+            <p>Advanced Synchronized Word-by-Word Playback</p>
+            
+            <div class="file-inputs">
+                <div class="file-input-group">
+                    <label>1. Select JSON File (output.json)</label>
                     <input type="file" id="jsonInput" accept=".json">
                 </div>
-                <div class="file-input-group" id="fallbackAudio">
-                    <span class="file-label">2. Select Audio File (.mp3/.wav)</span>
+                <div class="file-input-group">
+                    <label>2. Select Audio File</label>
                     <input type="file" id="audioInput" accept="audio/*">
                 </div>
             </div>
+        </div>
+    </div>
 
-            <div id="pipelineStatus" style="display:none; text-align: center; color: var(--accent); margin-top: 16px; padding: 12px; background: rgba(56, 189, 248, 0.1); border-radius: 8px;">
-                Running Transcription Pipeline... Please wait (this may take a minute).
+    <!-- Main Screen -->
+    <div id="mainScreen">
+        <!-- Hidden Audio Element -->
+        <audio id="audioPlayer"></audio>
+
+        <div class="glass-panel top-bar">
+            <div>
+                <span class="segment-badge" id="segmentBadge">Segment --</span>
+            </div>
+            <div style="color: var(--text-muted); font-size: 1rem; font-weight: 500;" id="refDisplay">
+                Surah: -- | Ayah: --
+            </div>
+            <div>
+                <button class="ctrl-btn" onclick="location.reload()" title="Load New Files" style="font-size: 1.2rem;"><i class="fas fa-sign-out-alt"></i></button>
             </div>
         </div>
 
-        <div class="glass-card player-section" id="playerSection">
-            <audio id="audioPlayer" controls></audio>
-            
-            <div class="segments-timeline" id="timelineContainer">
-                <!-- Timeline dots injected here -->
-            </div>
-            
-            <div class="segment-info">
-                <span id="segmentId">Segment: --</span>
-                <span id="segmentRef">Ref: --</span>
-                <span id="debugInfo" class="debug-info">Relative Timestamps Fixed</span>
-            </div>
-
+        <div class="lyrics-container" id="lyricsContainer">
             <div class="text-display" id="textDisplay">
-                <!-- Words will be injected here -->
+                <!-- Words injected here -->
             </div>
+        </div>
 
-            <div class="navigation">
-                <button class="nav-btn" id="prevBtn" disabled>Previous Segment</button>
-                <button class="nav-btn" id="nextBtn" disabled>Next Segment</button>
+        <div class="glass-panel floating-player">
+            <div class="timeline-wrapper">
+                <span id="currentTime">0:00</span>
+                <div class="progress-bar-container" id="progressBarContainer">
+                    <div class="progress-bar-fill" id="progressBarFill"></div>
+                </div>
+                <span id="totalTime">0:00</span>
+            </div>
+            
+            <div class="controls-wrapper">
+                <div class="main-controls">
+                    <button class="ctrl-btn" id="prevSegBtn" title="Previous Segment"><i class="fas fa-step-backward"></i></button>
+                    <button class="ctrl-btn play-btn" id="playPauseBtn"><i class="fas fa-play"></i></button>
+                    <button class="ctrl-btn" id="nextSegBtn" title="Next Segment"><i class="fas fa-step-forward"></i></button>
+                </div>
             </div>
         </div>
     </div>
@@ -352,84 +367,31 @@
         // DOM Elements
         const jsonInput = document.getElementById('jsonInput');
         const audioInput = document.getElementById('audioInput');
-        const playerSection = document.getElementById('playerSection');
+        const setupScreen = document.getElementById('setupScreen');
+        const mainScreen = document.getElementById('mainScreen');
+        
         const audioPlayer = document.getElementById('audioPlayer');
         const textDisplay = document.getElementById('textDisplay');
-        const segmentIdDisplay = document.getElementById('segmentId');
-        const segmentRefDisplay = document.getElementById('segmentRef');
-        const prevBtn = document.getElementById('prevBtn');
-        const nextBtn = document.getElementById('nextBtn');
-        const timelineContainer = document.getElementById('timelineContainer');
-        const debugInfo = document.getElementById('debugInfo');
+        const lyricsContainer = document.getElementById('lyricsContainer');
         
-        // Setup Desktop App Mode UI
-        window.addEventListener('pywebviewready', function() {
-            // Hide standard file inputs, show native app buttons
-            document.getElementById('fallbackJson').style.display = 'none';
-            document.getElementById('fallbackAudio').style.display = 'none';
-            document.getElementById('btnGroupProcess').style.display = 'flex';
-            document.getElementById('btnGroupNativeLoad').style.display = 'flex';
-        });
-
-        async function runPipeline() {
-            if (!window.pywebview) {
-                alert("This feature is only available in the Desktop App mode (run python gui.py)");
-                return;
-            }
-            
-            const statusDiv = document.getElementById('pipelineStatus');
-            statusDiv.style.display = 'block';
-            statusDiv.innerText = 'Running Transcription Pipeline... Please wait.';
-            
-            try {
-                const result = await window.pywebview.api.select_and_process_audio();
-                if (result.error) {
-                    if (result.error !== "User cancelled") {
-                        alert("Pipeline Error: " + result.error + "\n" + (result.details || ""));
-                    }
-                    statusDiv.style.display = 'none';
-                    return;
-                }
-                
-                statusDiv.innerText = 'Success! Loading audio...';
-                
-                originalData = result.data.segments;
-                document.getElementById('uploadSection').style.display = 'none';
-                statusDiv.style.display = 'none';
-                
-                audioPlayer.src = result.audio_path;
-                audioPlayer.load();
-                
-                document.getElementById('playerSection').style.display = 'flex';
-                renderTimeline();
-                loadSegment(0);
-                
-            } catch (err) {
-                alert("Error: " + err);
-                statusDiv.style.display = 'none';
-            }
-        }
-
-        async function loadJsonNative() {
-            if (!window.pywebview) return;
-            const result = await window.pywebview.api.load_json_directly();
-            if (result.error) {
-                if (result.error !== "User cancelled") alert(result.error);
-                return;
-            }
-            originalData = result.data.segments;
-            
-            // To load audio natively, we can just ask the user to use the runPipeline button instead,
-            // or we could add another api method for selecting just audio. 
-            // For now, prompt them.
-            alert("JSON loaded successfully! You still need to load the audio file. Please use the fallback audio input if available, or just use 'Select Audio & Process' to do everything automatically.");
-        }
+        const segmentBadge = document.getElementById('segmentBadge');
+        const refDisplay = document.getElementById('refDisplay');
+        
+        const playPauseBtn = document.getElementById('playPauseBtn');
+        const prevSegBtn = document.getElementById('prevSegBtn');
+        const nextSegBtn = document.getElementById('nextSegBtn');
+        const currentTimeEl = document.getElementById('currentTime');
+        const totalTimeEl = document.getElementById('totalTime');
+        const progressBarContainer = document.getElementById('progressBarContainer');
+        const progressBarFill = document.getElementById('progressBarFill');
 
         // State
         let segmentsData = [];
-        let validSegments = []; // Segments that actually contain words
-        let currentSegmentIndex = -1;
+        let validSegments = [];
+        let allWords = []; // Flattened array of all words with absolute times
         let isRelative = false;
+        let isPlaying = false;
+        let animationFrameId = null;
 
         // --- File Handling ---
         jsonInput.addEventListener('change', (e) => {
@@ -442,27 +404,22 @@
                     const data = JSON.parse(event.target.result);
                     let rawSegments = data.segments || data;
                     
-                    // Filter out empty segments (like in original.json where some segments have 0% confidence and no words)
-                    segmentsData = rawSegments;
-                    validSegments = segmentsData.filter(s => s.words && s.words.length > 0);
+                    validSegments = rawSegments.filter(s => s.words && s.words.length > 0);
                     
                     if (validSegments.length === 0) {
                         alert("No words found in JSON!");
                         return;
                     }
 
-                    // Smart detection: Are timestamps relative to segment start?
-                    // Check the first valid segment. If the segment starts at 30s, but its first word starts at 0.0s, it's relative.
-                    const firstSeg = validSegments.find(s => s.time_from > 5.0); // Find a segment far into the audio
+                    // Smart detection: Are timestamps relative?
+                    const firstSeg = validSegments.find(s => s.time_from > 5.0);
                     if (firstSeg && firstSeg.words[0].start < 5.0) {
                         isRelative = true;
-                        debugInfo.textContent = "Relative Timestamps Detected (Auto-fixed)";
                     } else {
                         isRelative = false;
-                        debugInfo.textContent = "Absolute Timestamps Detected";
                     }
 
-                    buildTimeline();
+                    processSegments();
                     checkReady();
                 } catch (err) {
                     alert("Error parsing JSON file: " + err.message);
@@ -474,174 +431,238 @@
         audioInput.addEventListener('change', (e) => {
             const file = e.target.files[0];
             if (!file) return;
-            
             const url = URL.createObjectURL(file);
             audioPlayer.src = url;
+            
+            audioPlayer.onloadedmetadata = () => {
+                totalTimeEl.textContent = formatTime(audioPlayer.duration);
+            };
+            
             checkReady();
         });
 
         function checkReady() {
             if (validSegments.length > 0 && audioPlayer.src) {
-                playerSection.style.display = 'flex';
-                // Load first valid segment
-                loadSegment(validSegments[0].segment);
+                setupScreen.style.opacity = '0';
+                setTimeout(() => {
+                    setupScreen.style.display = 'none';
+                    mainScreen.style.display = 'flex';
+                    renderAllWords();
+                }, 500);
             }
         }
 
-        function buildTimeline() {
-            timelineContainer.innerHTML = '';
-            validSegments.forEach(s => {
-                const dot = document.createElement('div');
-                dot.className = 'timeline-dot';
-                dot.textContent = s.segment;
-                dot.dataset.segmentId = s.segment;
-                dot.addEventListener('click', () => {
-                    audioPlayer.currentTime = s.time_from;
-                    loadSegment(s.segment);
-                    audioPlayer.play();
+        // --- Data Processing ---
+        function processSegments() {
+            allWords = [];
+            validSegments.forEach(seg => {
+                const segTimeFrom = seg.time_from || 0.0;
+                
+                seg.words.forEach((w, wIdx) => {
+                    if (w.is_missing || w.start === null || w.end === null) {
+                        // Register missing words so they render, but assign dummy times
+                        allWords.push({
+                            text: w.word,
+                            is_missing: true,
+                            start: -1,
+                            end: -1,
+                            duration: 0,
+                            segment: seg.segment,
+                            ref: `${seg.ref_from} to ${seg.ref_to}`,
+                            id: `word_${allWords.length}`
+                        });
+                        return;
+                    }
+                    
+                    let absoluteStart = isRelative ? (w.start + segTimeFrom) : w.start;
+                    let absoluteEnd = isRelative ? (w.end + segTimeFrom) : w.end;
+                    
+                    absoluteStart = Math.round(absoluteStart * 1000) / 1000;
+                    absoluteEnd = Math.round(absoluteEnd * 1000) / 1000;
+                    
+                    allWords.push({
+                        text: w.word,
+                        is_missing: false,
+                        start: absoluteStart,
+                        end: absoluteEnd,
+                        duration: absoluteEnd - absoluteStart,
+                        segment: seg.segment,
+                        ref: `${seg.ref_from} to ${seg.ref_to}`,
+                        id: `word_${allWords.length}`
+                    });
                 });
-                timelineContainer.appendChild(dot);
             });
         }
 
-        function updateTimelineHighlight(segId) {
-            document.querySelectorAll('.timeline-dot').forEach(dot => {
-                if (dot.dataset.segmentId == segId) {
-                    dot.classList.add('active');
-                    // Ensure dot is visible
-                    dot.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
-                } else {
-                    dot.classList.remove('active');
-                }
-            });
-        }
-
-        // --- Core Logic ---
-        function loadSegment(segId) {
-            // Find the index of this segment ID in the valid segments array
-            const validIndex = validSegments.findIndex(s => s.segment === segId);
-            if (validIndex === -1) return;
-            
-            currentSegmentIndex = validIndex;
-            const segment = validSegments[validIndex];
-            
-            updateTimelineHighlight(segId);
-
-            // Update Info
-            segmentIdDisplay.textContent = `Segment: ${segment.segment}`;
-            segmentRefDisplay.textContent = `Ref: ${segment.ref_from} to ${segment.ref_to}`;
-            
-            // Update Buttons
-            prevBtn.disabled = validIndex === 0;
-            nextBtn.disabled = validIndex === validSegments.length - 1;
-
-            // Render Words
+        // --- Rendering ---
+        function renderAllWords() {
             textDisplay.innerHTML = '';
             
-            const segTimeFrom = segment.time_from || 0.0;
-
-            segment.words.forEach((w, i) => {
+            // Render all words flat. We rely on CSS variable --fill for rendering.
+            allWords.forEach(word => {
                 const span = document.createElement('span');
                 span.className = 'word';
-                span.textContent = w.word;
+                span.id = word.id;
+                span.textContent = word.text;
                 
-                // CRITICAL FIX: If timestamps are relative, add the segment's starting time!
-                let absoluteStart = isRelative ? (w.start + segTimeFrom) : w.start;
-                let absoluteEnd = isRelative ? (w.end + segTimeFrom) : w.end;
-                
-                // Safeguard rounding to avoid float errors
-                absoluteStart = Math.round(absoluteStart * 1000) / 1000;
-                absoluteEnd = Math.round(absoluteEnd * 1000) / 1000;
-                
-                span.dataset.start = absoluteStart;
-                span.dataset.end = absoluteEnd;
-                
-                if (w.is_missing) {
+                if (word.is_missing) {
                     span.classList.add('missing-word');
-                    span.dataset.tooltip = `(Missing Word) ${absoluteStart.toFixed(2)}s - ${absoluteEnd.toFixed(2)}s`;
                 } else {
-                    span.dataset.tooltip = `${absoluteStart.toFixed(2)}s - ${absoluteEnd.toFixed(2)}s`;
+                    // Allow clicking a word to jump to its exact time
+                    span.addEventListener('click', () => {
+                        audioPlayer.currentTime = word.start;
+                        if (!isPlaying) togglePlay();
+                    });
                 }
-                
-                // Allow clicking a word to jump to that precise absolute timestamp
-                span.addEventListener('click', () => {
-                    audioPlayer.currentTime = absoluteStart;
-                    audioPlayer.play();
-                });
 
                 textDisplay.appendChild(span);
             });
         }
 
-        // Handle Audio Time Updates (Using requestAnimationFrame for 60fps instant precision)
-        let isPlaying = false;
+        // --- Playback Engine (60fps Karaoke Sync) ---
+        function updateKaraokeSync() {
+            if (!audioPlayer.src) return;
+            
+            const t = audioPlayer.currentTime;
+            
+            // Update UI Timeline
+            currentTimeEl.textContent = formatTime(t);
+            if (audioPlayer.duration) {
+                progressBarFill.style.width = `${(t / audioPlayer.duration) * 100}%`;
+            }
+
+            let activeSegmentId = null;
+            let activeRef = null;
+            let activeElementToScroll = null;
+
+            // Iterate over all words
+            for (let i = 0; i < allWords.length; i++) {
+                const w = allWords[i];
+                const span = document.getElementById(w.id);
+                if (!span) continue;
+
+                if (t >= w.start && t <= w.end) {
+                    // Word is CURRENTLY active
+                    // Calculate precise fill percentage based on duration
+                    let progress = (t - w.start) / w.duration;
+                    progress = Math.max(0, Math.min(1, progress)); // Clamp 0-1
+                    
+                    span.style.setProperty('--fill', `${progress * 100}%`);
+                    span.style.webkitTextFillColor = 'transparent'; // Ensure gradient applies
+                    
+                    if (!span.classList.contains('active-glow')) {
+                        span.classList.add('active-glow');
+                        activeElementToScroll = span;
+                    }
+                    
+                    activeSegmentId = w.segment;
+                    activeRef = w.ref;
+                } else if (t > w.end) {
+                    // Word has passed
+                    span.style.setProperty('--fill', '100%');
+                    span.classList.remove('active-glow');
+                    span.style.webkitTextFillColor = 'var(--accent)'; // Solid color when done
+                } else {
+                    // Word is in the future
+                    span.style.setProperty('--fill', '0%');
+                    span.classList.remove('active-glow');
+                    span.style.webkitTextFillColor = 'rgba(255, 255, 255, 0.15)'; // Dimmed
+                }
+            }
+
+            // Update Top Bar
+            if (activeSegmentId) {
+                segmentBadge.textContent = `Segment ${activeSegmentId}`;
+                refDisplay.textContent = activeRef;
+            }
+
+            // Smooth Auto-scroll to keep active word centered vertically
+            if (activeElementToScroll && isPlaying) {
+                const containerRect = lyricsContainer.getBoundingClientRect();
+                const wordRect = activeElementToScroll.getBoundingClientRect();
+                
+                // If word is away from the vertical center, scroll towards it
+                const relativeY = wordRect.top - containerRect.top;
+                const targetY = containerRect.height / 2;
+                
+                if (Math.abs(relativeY - targetY) > 80) { // Deadzone
+                    lyricsContainer.scrollBy({
+                        top: relativeY - targetY,
+                        behavior: 'smooth'
+                    });
+                }
+            }
+
+            if (isPlaying) {
+                animationFrameId = requestAnimationFrame(updateKaraokeSync);
+            }
+        }
+
+        // --- Custom Player Controls ---
+        function togglePlay() {
+            if (audioPlayer.paused) {
+                audioPlayer.play();
+            } else {
+                audioPlayer.pause();
+            }
+        }
 
         audioPlayer.addEventListener('play', () => {
             isPlaying = true;
-            requestAnimationFrame(updateHighlights);
+            playPauseBtn.innerHTML = '<i class="fas fa-pause"></i>';
+            animationFrameId = requestAnimationFrame(updateKaraokeSync);
         });
 
         audioPlayer.addEventListener('pause', () => {
             isPlaying = false;
-            updateHighlights(); // One last update to freeze state
+            playPauseBtn.innerHTML = '<i class="fas fa-play"></i>';
+            if (animationFrameId) cancelAnimationFrame(animationFrameId);
+            updateKaraokeSync(); // One final update
         });
 
-        audioPlayer.addEventListener('seeked', () => {
-            updateHighlights();
+        playPauseBtn.addEventListener('click', togglePlay);
+
+        // Click on Progress Bar to seek
+        progressBarContainer.addEventListener('click', (e) => {
+            const rect = progressBarContainer.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const percentage = clickX / rect.width;
+            audioPlayer.currentTime = percentage * audioPlayer.duration;
+            if (!isPlaying) updateKaraokeSync();
         });
 
-        function updateHighlights() {
-            if (validSegments.length === 0 || currentSegmentIndex === -1) return;
-
+        // Next / Prev Segment Navigation
+        function jumpToSegment(direction) {
             const t = audioPlayer.currentTime;
             
-            // 1. Check if we need to auto-switch segments
-            const currentSeg = validSegments[currentSegmentIndex];
+            // Find current segment index
+            let currentIdx = validSegments.findIndex(s => s.time_from <= t && s.time_to >= t);
+            if (currentIdx === -1) {
+                // Not in a segment, find closest
+                currentIdx = validSegments.findIndex(s => s.time_from > t);
+                if (currentIdx === -1) currentIdx = validSegments.length - 1; // At end
+                if (direction === -1) currentIdx -= 1; // If jumping back, go to previous
+            } else {
+                currentIdx += direction;
+            }
+
+            // Clamp
+            currentIdx = Math.max(0, Math.min(validSegments.length - 1, currentIdx));
             
-            // We use a small buffer (+1.0s) to allow natural pauses before snapping to the next screen.
-            if (t > currentSeg.time_to + 1.0 || t < currentSeg.time_from - 1.0) {
-                const correctIndex = validSegments.findIndex(s => t >= (s.time_from - 1.0) && t <= (s.time_to + 1.0));
-                if (correctIndex !== -1 && correctIndex !== currentSegmentIndex) {
-                    loadSegment(validSegments[correctIndex].segment);
-                }
-            }
-
-            // 2. Highlight words strictly based on absolute timestamp boundaries
-            const wordSpans = textDisplay.querySelectorAll('.word');
-            wordSpans.forEach(span => {
-                const start = parseFloat(span.dataset.start);
-                const end = parseFloat(span.dataset.end);
-                
-                // Strict highlighting: No artificial padding at all. Powered by 60fps polling.
-                if (t >= start && t <= end) {
-                    span.classList.add('highlight');
-                } else {
-                    span.classList.remove('highlight');
-                }
-            });
-
-            if (isPlaying) {
-                requestAnimationFrame(updateHighlights);
-            }
+            audioPlayer.currentTime = validSegments[currentIdx].time_from;
+            if (!isPlaying) updateKaraokeSync();
         }
 
-        // Navigation Buttons
-        prevBtn.addEventListener('click', () => {
-            if (currentSegmentIndex > 0) {
-                const prev = validSegments[currentSegmentIndex - 1];
-                audioPlayer.currentTime = prev.time_from;
-                loadSegment(prev.segment);
-            }
-        });
+        prevSegBtn.addEventListener('click', () => jumpToSegment(-1));
+        nextSegBtn.addEventListener('click', () => jumpToSegment(1));
 
-        nextBtn.addEventListener('click', () => {
-            if (currentSegmentIndex < validSegments.length - 1) {
-                const next = validSegments[currentSegmentIndex + 1];
-                audioPlayer.currentTime = next.time_from;
-                loadSegment(next.segment);
-            }
-        });
-
+        // Format time utility
+        function formatTime(seconds) {
+            if (isNaN(seconds)) return "0:00";
+            const m = Math.floor(seconds / 60);
+            const s = Math.floor(seconds % 60);
+            return `${m}:${s < 10 ? '0' : ''}${s}`;
+        }
     </script>
 </body>
 </html>

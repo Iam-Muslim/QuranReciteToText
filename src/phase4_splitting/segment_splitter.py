@@ -1126,8 +1126,8 @@ def _slice_segment_words(source: SegmentInfo, g_lo: int, g_hi: int,
     if sliced_words:
         starts = [w["start"] for w in sliced_words if isinstance(w.get("start"), (int, float))]
         ends = [w["end"] for w in sliced_words if isinstance(w.get("end"), (int, float))]
-        abs_start = min(starts) if starts else source.start_time
-        abs_end = max(ends) if ends else source.end_time
+        abs_start = (source.start_time + min(starts)) if starts else source.start_time
+        abs_end = (source.start_time + max(ends)) if ends else source.end_time
     else:
         # Proportional fallback based on local word offsets within the source.
         local_lo = g_lo - s0

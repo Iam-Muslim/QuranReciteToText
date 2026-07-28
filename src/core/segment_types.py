@@ -193,27 +193,12 @@ class SegmentInfo:
                     
                 start_val = w.get("start")
                 end_val = w.get("end")
-                entry["start"] = round(start_val, 4) if start_val is not None else None
-                entry["end"] = round(end_val, 4) if end_val is not None else None
+                
+                # Timestamps are natively relative to the segment's start time from Phase 3
+                entry["start"] = round(start_val, 3) if start_val is not None else None
+                entry["end"] = round(end_val, 3) if end_val is not None else None
                 return entry
             d["words"] = [_make_word(w) for w in self.words]
-
-        if self.split_group_id:
-            d["split_group_id"] = self.split_group_id
-        if self.merge_group_id:
-            d["merge_group_id"] = self.merge_group_id
-        if self.merge_members:
-            d["merge_members"] = self.merge_members
-        if self.partial_merge_leftover:
-            d["partial_merge_leftover"] = self.partial_merge_leftover
-        if self.duplicated:
-            d["duplicated"] = True
-        if self.duplicate_kind is not None:
-            d["duplicate_kind"] = self.duplicate_kind
-        if self.duplicate_context is not None:
-            d["duplicate_context"] = self.duplicate_context
-        if self.duplicated_by_segment is not None:
-            d["duplicated_by_segment"] = self.duplicated_by_segment
             
         return d
 
