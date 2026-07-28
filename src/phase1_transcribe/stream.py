@@ -135,6 +135,8 @@ def run_asr_cpu(audio_input, sample_rate, model_name="Base"):
     raw_transcriptions = []
     # Initialize an empty list for word timing dictionaries.
     asr_words_list = []
+    # Initialize an empty list for the raw logprobs from the acoustic model.
+    logprobs_list = []
     
     # Record the timestamp when the actual transcription loop starts.
     t_asr_start = time.time()
@@ -207,6 +209,9 @@ def run_asr_cpu(audio_input, sample_rate, model_name="Base"):
             
             # Append the word timestamps and start offset to the ASR words list.
             asr_words_list.append((word_timestamps, start_sec))
+            
+            # Append the logprobs matrix and its start offset.
+            logprobs_list.append((logprobs, start_sec))
             
         # Increment the global chunk counter.
         chunk_idx += 1
@@ -467,6 +472,11 @@ def run_asr_cpu(audio_input, sample_rate, model_name="Base"):
         json.dump({"absolute_raw_transcriptions": raw_transcriptions}, f, ensure_ascii=False, indent=2)
 
     # Compile the stage metrics dictionary required by the pipeline.
-    stage_metrics = {"segmentation": {}, "recognition": {}, "asr_words": asr_words_list}
+    stage_metrics = {
+        "segmentation": {}, 
+        "recognition": {}, 
+        "asr_words": asr_words_list,
+        "logprobs": logprobs_list
+    }
     # Return the 4-tuple of regions, emissions, metrics, and wall time.
     return (regions, emissions, stage_metrics, asr_time)

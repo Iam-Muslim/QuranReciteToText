@@ -195,6 +195,18 @@
             border-bottom: 3px solid var(--accent);
         }
 
+        .word.missing-word {
+            border-bottom: 2px dashed #f87171;
+            color: #f87171;
+        }
+
+        .word.missing-word.highlight {
+            border-bottom: 3px dashed #f87171;
+            color: #fee2e2;
+            background: rgba(248, 113, 113, 0.2);
+            text-shadow: 0 0 16px rgba(248, 113, 113, 0.4);
+        }
+
         /* Tooltip for timestamps on hover */
         .word::after {
             content: attr(data-tooltip);
@@ -543,7 +555,13 @@
                 
                 span.dataset.start = absoluteStart;
                 span.dataset.end = absoluteEnd;
-                span.dataset.tooltip = `${absoluteStart.toFixed(2)}s - ${absoluteEnd.toFixed(2)}s`;
+                
+                if (w.is_missing) {
+                    span.classList.add('missing-word');
+                    span.dataset.tooltip = `(Missing Word) ${absoluteStart.toFixed(2)}s - ${absoluteEnd.toFixed(2)}s`;
+                } else {
+                    span.dataset.tooltip = `${absoluteStart.toFixed(2)}s - ${absoluteEnd.toFixed(2)}s`;
+                }
                 
                 // Allow clicking a word to jump to that precise absolute timestamp
                 span.addEventListener('click', () => {

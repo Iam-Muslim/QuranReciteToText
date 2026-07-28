@@ -31,6 +31,9 @@ from src.phase1_transcribe.stream import (
 # Import the Phase 2 DP matching logic from our custom pipeline.
 # Import the post-ASR pipeline execution function.
 from src.phase2_matching.matcher import _run_post_asr_pipeline
+# Import the Phase 3 CTC forced alignment.
+from src.phase3_alignment.ctc_align import run_ctc_alignment
+from src.phase1_transcribe.fastconformer import FASTCONFORMER_TOKENS_PATH
 
 
 # Define a function to load audio using FFmpeg directly.
@@ -249,18 +252,54 @@ def process_audio(
     # Print the ASR completion time.
     print(f"[ASR] Transcription completed in {asr_time:.2f}s")
 
-    # Step 3: Phase 2 (Text Matching and Dynamic Programming)
-    # The raw ASR text (emissions) and timestamps (regions) are handed off to the sequence matcher.
-    # The matcher forces the raw text to perfectly align with the authentic Uthmani Quranic script.
-    # Call the post-ASR pipeline and store the result in json_output.
-    json_output = _run_post_asr_pipeline(
-        # Pass all relevant context, including audio, intervals, metrics, and raw data.
+    # Step 3: Phase 2 (SDK Text Matching — produces segments with words=None)
+    # The raw ASR text (emissions) is aligned to the authentic Uthmani Quranic script via qua_sdk.
+    # Phase 2 now returns BOTH the JSON dict and the segment objects.
+    # Phase 3 (CTC Forced Alignment) will fill in word-level timestamps on the segments.
+    json_output, segments = _run_post_asr_pipeline(
         audio, sample_rate, intervals,
         model_name, profiling, pipeline_start,
         regions=regions,
         emissions=emissions, stage_metrics=stage_metrics
     )
 
-    # Step 4: Return the finalized, fully aligned payload.
-    # Return the final JSON structure to the caller.
+    # Step 4: Phase 3 — CTC Forced Alignment (fills seg.words with exact timestamps)
+    # Uses the raw logprobs matrix from FastConformer ONNX (shape 1×T×1025)
+    # and the reference text from Phase 2 to run Viterbi forced alignment.
+    print(f"[STAGE] CTC Forced Alignment (word timestamps)...")
+    try:
+        run_ctc_alignment(
+            segments=segments,
+            stage_metrics=stage_metrics,
+            vocab_path=FASTCONFORMER_TOKENS_PATH,
+        )
+    except Exception as e:
+        import traceback
+        print(f"[Phase3] CTC alignment failed (timestamps will be absent): {e}")
+        traceback.print_exc()
+
+    print(f"[STAGE] Post-alignment splitting...")
+    try:
+        from src.phase4_splitting.fused_split import _split_fused_segments
+        from src.phase4_splitting.segment_splitter import split_segments
+        
+        # 1. Split special fused segments
+        segments = _split_fused_segments(segments)
+        
+        # 2. Subdivide long segments using original repo logic
+        segments, _report = split_segments(segments, max_verses=1, max_words=None)
+
+        # 3. Inject missing words
+        from src.phase4_splitting.inject_missing import inject_missing_words
+        segments = inject_missing_words(segments)
+    except Exception as e:
+        import traceback
+        print(f"[Split] Splitting failed: {e}")
+        traceback.print_exc()
+
+    # Step 5: Re-serialize segments now that seg.words is filled by Phase 3.
+    from src.phase4_splitting.export import segments_to_json
+    json_output = segments_to_json(segments, include_words=True)
+
+    # Step 6: Return the finalized, fully aligned payload.
     return json_output

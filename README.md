@@ -32,18 +32,20 @@ graph TD
     A[Raw Audio .wav/.mp3] -->|FFmpeg Pipe| B(Resample to 16kHz Mono)
     B --> C{Silero VAD}
     C -->|Silence| D[Skip]
-    C -->|Speech Segment| E[FastConformer Acoustic Model]
-    E --> F[Raw Recognized Text & Timestamps]
-    F --> G[N-Gram Anchoring & Text Matching]
-    G --> H[Needleman-Wunsch DP Alignment]
-    H --> I[Exact Word Timestamps JSON]
+    C -->|Speech Segment| E[Kaldi Mel Extraction]
+    E --> F[ONNXRuntime FastConformer Inference]
+    F --> G[Raw Logprobs matrix]
+    G --> H[N-Gram Anchoring & Text Matching]
+    H --> I[C++ DP Sequence Matcher]
+    I --> J[CTC Forced Alignment via torchaudio]
+    J --> K[Exact Word Timestamps JSON]
 ```
 
 1. **Audio Ingestion**: Audio files (`.wav`, `.mp3`, etc.) are rapidly loaded and resampled to a consistent 16kHz mono format via an `ffmpeg` pipe for efficiency without memory bloat.
 2. **Dynamic VAD Segmentation**: The audio is processed sequentially using **Silero VAD** to detect genuine speech segments and accurately skip over non-speech silences.
-3. **CPU Acoustic Transcription**: The detected speech segments are passed to an ONNX-optimized **FastConformer** model. It returns recognized Arabic text and relative timestamps.
-4. **Quranic Text Matching**: The recognized text is passed through an n-gram anchoring algorithm against the QPC Hafs script to identify the exact Surah and Ayah being recited.
-5. **Precise Alignment**: A Dynamic Programming (DP) sequence alignment force-aligns the raw spoken words to match the canonical Uthmani text exactly, yielding millisecond-level precision.
+3. **CPU Acoustic Transcription**: Speech segments undergo exact Kaldi Mel feature extraction and are passed to a native **ONNXRuntime** FastConformer session, yielding a raw sequence of token probabilities (`logprobs`).
+4. **Quranic Text Matching**: The ASR text output is anchored and mathematically aligned to the true QPC Hafs script using a blazing-fast C++ Dynamic Programming engine (`qua_sdk`).
+5. **CTC Forced Alignment**: The exact, authenticated Uthmani words are mapped back onto the acoustic probability matrix via `torchaudio`'s Viterbi forced alignment, yielding mathematically optimal, frame-perfect start and end times for every single word without drifting or overlaps.
 
 ---
 

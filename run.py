@@ -14,8 +14,13 @@ import sys
 from pathlib import Path
 # Import the argparse module to parse command-line options and arguments.
 import argparse
-# Import the json module to read and write JSON data.
 import json
+import sys
+
+# Ensure UTF-8 output for stdout so Windows doesn't crash on Arabic paths
+if sys.stdout is not None:
+    sys.stdout.reconfigure(encoding='utf-8')
+
 
 # ==============================================================================
 # 1. Environment Setup

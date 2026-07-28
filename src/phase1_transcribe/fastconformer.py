@@ -1,8 +1,9 @@
 """
-Acoustic Model Wrapper (Sherpa-ONNX).
+Acoustic Model Wrapper (ONNXRuntime).
 
-This module runs the quantized FastConformer ONNX inference natively via the 
-highly optimized sherpa-onnx C++ runtime. 
+This module runs the quantized FastConformer ONNX inference natively via onnxruntime. 
+It uses kaldi_native_fbank for feature extraction to match Sherpa-ONNX's Mel accuracy,
+and exposes the raw logprobs for downstream processing.
 
 It handles the auto-downloading of the neural network model, and applies strict 
 audio preprocessing (Resampling, Noise Reduction, LUFS Normalization) to ensure 
@@ -38,12 +39,17 @@ SILERO_VAD_ONNX_PATH = str(MODEL_DIR / "silero_vad.onnx")
 # FastConformer absolutely requires 16kHz audio. Anything else will produce garbage output.
 # Define the expected sample rate constant as 16000.
 FC_SAMPLE_RATE = 16000
-
+# The index of the blank token used by the CTC model
+# Define the integer ID representing the blank token.
+BLANK_ID = 1024
+# FastConformer effectively processes audio in 80ms chunks (due to 8x subsampling on 10ms Kaldi frames)
+# Define the temporal step of the model architecture.
+FRAME_TIME_STEP = 0.08
 
 # Define the FastConformerONNX class.
 class FastConformerONNX:
     """
-    Singleton wrapper for the Sherpa-ONNX runtime. 
+    Singleton wrapper for the ONNXRuntime. 
     Loading a neural network into memory takes a few seconds and uses RAM.
     The Singleton pattern ensures we only ever load the model once per session.
     """
@@ -54,8 +60,10 @@ class FastConformerONNX:
     def __init__(self, device='cpu'):
         # Store the requested compute device (e.g., 'cpu' or 'cuda').
         self.device = device
-        # Initialize the recognizer attribute to None.
-        self.recognizer = None
+        # Initialize the session attribute to None.
+        self.session = None
+        # Initialize the vocabulary array to an empty list.
+        self.vocab = []
         # Call the internal method to actually load the model into memory.
         self._load_model()
 
@@ -76,10 +84,10 @@ class FastConformerONNX:
     def _load_model(self):
         # A docstring explaining the loading process.
         """
-        Downloads the FastConformer model if missing, and initializes the C++ runtime.
+        Downloads the FastConformer model if missing, and initializes ONNXRuntime.
         """
-        # Import the sherpa_onnx runtime library.
-        import sherpa_onnx
+        # Import the onnxruntime runtime library.
+        import onnxruntime as ort
         # Import the urllib.request module to download files over HTTP.
         import urllib.request
         
@@ -97,22 +105,29 @@ class FastConformerONNX:
             # Print a success message.
             print("Download complete.")
             
-        # Print a status message indicating Sherpa initialization.
-        print("Loading FastConformer via Sherpa-ONNX...")
-        # Initialize the Sherpa Offline Recognizer (designed for processing full files, not live streams).
-        # Create an instance of the OfflineRecognizer specifically configured for NeMo CTC models.
-        self.recognizer = sherpa_onnx.OfflineRecognizer.from_nemo_ctc(
-            # Pass the path to the ONNX acoustic model.
-            model=FASTCONFORMER_ONNX_PATH,
-            # Pass the path to the BPE tokens file.
-            tokens=FASTCONFORMER_TOKENS_PATH,
-            num_threads=2,              # Restrict to 2 threads to prevent CPU lockup
-            sample_rate=FC_SAMPLE_RATE, # Ensure runtime expects 16kHz
-            feature_dim=80              # FastConformer uses 80-bin Mel Spectrograms
-        )
+        # Print a status message indicating ONNXRuntime initialization.
+        print("Loading FastConformer via ONNXRuntime...")
+        
+        # Initialize ONNXRuntime session
+        # Create an instance of the ONNX SessionOptions.
+        sess_opts = ort.SessionOptions()
+        # Restrict intra-op threads to 2 to prevent CPU lockup during matrix multiplications.
+        sess_opts.intra_op_num_threads = 2
+        # Restrict inter-op threads to 2 to prevent CPU lockup.
+        sess_opts.inter_op_num_threads = 2
+        # Instantiate the InferenceSession with the model path and options.
+        self.session = ort.InferenceSession(FASTCONFORMER_ONNX_PATH, sess_opts)
+
+        # Load vocabulary so we can manually decode the integer predictions back to Arabic text
+        # Open the tokens text file in read mode with UTF-8 encoding.
+        with open(FASTCONFORMER_TOKENS_PATH, "r", encoding="utf-8") as f:
+            # Each line is format: 'token index' (e.g. 'ة 1'). We rsplit to grab just the token.
+            # Parse the lines, split from the right, extract the token, and store in self.vocab.
+            self.vocab = [line.strip("\r\n").rsplit(" ", 1)[0] for line in f.readlines() if line.strip("\r\n")]
 
     # Define the primary inference method.
     def transcribe(self, audio: np.ndarray, orig_sr: int = 16000):
+        # A docstring explaining the method.
         """
         The core inference function. Transcribes a single chunk of audio.
         
@@ -123,15 +138,15 @@ class FastConformerONNX:
         Returns:
             full_text: The raw transcribed string.
             words_timestamps: A list of dicts detailing the start/end time of each word.
-            None: Placeholder for legacy logprobs.
+            logprobs: The raw log-probabilities matrix from the model.
         """
-        # A safety check to ensure the recognizer is loaded and audio is not empty.
-        if self.recognizer is None or len(audio) == 0:
+        # A safety check to ensure the session is loaded and audio is not empty.
+        if self.session is None or len(audio) == 0:
             # Return empty defaults if the check fails.
             return "", [], None
             
-        # Import sherpa_onnx locally just to be safe.
-        import sherpa_onnx
+        # Import the kaldi_native_fbank library for feature extraction.
+        import kaldi_native_fbank as knf
         
         # =====================================================================
         # STRICT AUDIO PREPROCESSING — Required for maximum word/letter accuracy.
@@ -165,7 +180,8 @@ class FastConformerONNX:
                 clean_audio = pyln.normalize.loudness(clean_audio, loudness, -23.0)
         # Catch any exception that occurs during normalization.
         except Exception:
-            pass  # If normalization fails (e.g. pure silence), proceed with the raw audio safely.
+            # If normalization fails (e.g. pure silence), proceed safely.
+            pass
         
         # Step 3: Peak limiting to prevent clipping artifacts
         # Ensures no sample exceeds the 1.0/-1.0 float boundary.
@@ -177,25 +193,94 @@ class FastConformerONNX:
             clean_audio = clean_audio / peak
         
         # =====================================================================
+        # FEATURE EXTRACTION (Kaldi Fbank)
+        # =====================================================================
+        # Configure Kaldi Mel Filterbanks exactly how Sherpa-ONNX does it
+        opts = knf.FbankOptions()
+        opts.frame_opts.samp_freq = FC_SAMPLE_RATE
+        opts.mel_opts.num_bins = 80
+        
+        # Sherpa-ONNX exact NeMo defaults
+        opts.frame_opts.dither = 0.0
+        opts.frame_opts.snip_edges = False
+        opts.frame_opts.remove_dc_offset = False
+        opts.frame_opts.window_type = "hann"
+        opts.mel_opts.low_freq = 0.0
+        opts.mel_opts.high_freq = 0.0
+        opts.frame_opts.preemph_coeff = 0.97
+        opts.frame_opts.frame_shift_ms = 10.0
+        opts.frame_opts.frame_length_ms = 25.0
+        opts.mel_opts.is_librosa = True
+        
+        fbank = knf.OnlineFbank(opts)
+        fbank.accept_waveform(FC_SAMPLE_RATE, clean_audio.tolist())
+        fbank.input_finished()
+        
+        feats = []
+        for i in range(fbank.num_frames_ready):
+            feats.append(fbank.get_frame(i))
+        feats = np.array(feats)
+        
+        if feats.shape[0] == 0:
+            return "", [], None
+            
+        # NeMo Per-Feature Normalization exactly as implemented in sherpa-onnx/csrc/math.cc
+        mean = np.mean(feats, axis=0, keepdims=True)
+        mean_sq = np.mean(np.square(feats), axis=0, keepdims=True)
+        var = np.maximum(mean_sq - np.square(mean), 0.0)
+        inv_std = 1.0 / (np.sqrt(var) + 1e-5)
+        feats_norm = (feats - mean) * inv_std
+        
+        # Transpose for ONNX expected shape: [batch, feature_dim, frames]
+        # Transpose the matrix and expand dimensions to add a batch size of 1.
+        feats_in = np.expand_dims(feats_norm.T, axis=0)
+        # Create a tensor representing the sequence length for the ONNX inputs.
+        seq_len = np.array([feats_in.shape[2]], dtype=np.int64)
+        
+        # =====================================================================
         # INFERENCE
         # =====================================================================
-        # Feed the pristine audio into the C++ runtime.
-        # Create an empty input stream object attached to the recognizer.
-        stream = self.recognizer.create_stream()
-        # Push the normalized float32 waveform into the stream buffer.
-        stream.accept_waveform(FC_SAMPLE_RATE, clean_audio)
-        # Trigger the neural network inference block to process the stream.
-        self.recognizer.decode_stream(stream)
+        # Prepare the input dictionary for the ONNX inference session.
+        inputs = {
+            # Cast the features to float32 and assign to the 'audio_signal' input.
+            "audio_signal": feats_in.astype(np.float32),
+            # Assign the sequence length to the 'length' input.
+            "length": seq_len
+        }
+        # Execute the model inference and retrieve the 'logprobs' output.
+        outputs = self.session.run(["logprobs"], inputs)
+        # Extract the log probabilities tensor from the model outputs.
+        logprobs = outputs[0]
         
-        # Retrieve the final result object from the stream.
-        result = stream.result
+        # =====================================================================
+        # CTC DECODING & TIMESTAMPING
+        # =====================================================================
+        # Grab the highest probability token index for every frame
+        # Perform argmax along the vocabulary dimension to get the predicted token indices.
+        pred_idx = np.argmax(logprobs[0], axis=-1)
         
-        # Extract word timestamps
-        # Pull the list of recognized text tokens.
-        subword_tokens = result.tokens
-        # Pull the list of absolute timestamps for each token.
-        subword_times = result.timestamps
+        # Initialize an empty list for the predicted subword tokens.
+        subword_tokens = []
+        # Initialize an empty list for the temporal timestamps of each subword.
+        subword_times = []
         
+        # Standard CTC reduction: remove blank tokens and collapse consecutive duplicates
+        # Initialize a variable to keep track of the previously predicted token.
+        prev_idx = -1
+        # Iterate over the predicted token indices along with their frame index.
+        for frame_idx, idx in enumerate(pred_idx):
+            # Check if the token is not a blank and is not a duplicate of the previous token.
+            if idx != BLANK_ID and idx != prev_idx:
+                # Map the integer index to the actual string token from the vocabulary.
+                token = self.vocab[idx]
+                # Append the string token to the list.
+                subword_tokens.append(token)
+                # Calculate and append the absolute timestamp of the token based on the frame index.
+                subword_times.append(frame_idx * FRAME_TIME_STEP)
+            # Update the previous token index tracker.
+            prev_idx = idx
+
+        # Reconstruct full words from subword (BPE) tokens
         # Initialize an empty array for the final reconstructed words.
         words_timestamps = []
         # Initialize an empty array to buffer tokens belonging to the current word.
@@ -205,11 +290,6 @@ class FastConformerONNX:
         # Initialize the word end time variable.
         word_end_time = None
 
-        # FastConformer effectively processes audio in 80ms chunks.
-        # Define the hardcoded temporal step of the model architecture.
-        frame_time_step = 0.08  
-        
-        # The model outputs sub-words (BPE tokens). We must merge them back into full words.
         # Iterate over the tokens and timestamps simultaneously using zip.
         for tok, t in zip(subword_tokens, subword_times):
             # '▁' or a space denotes the start of a new actual word.
@@ -245,7 +325,7 @@ class FastConformerONNX:
             current_word_subwords.append(tok)
             # Estimate the end time by adding the frame step to the token trigger time.
             # Increment the end time using the model's physical frame rate.
-            word_end_time = t + frame_time_step
+            word_end_time = t + FRAME_TIME_STEP
 
         # Flush the final word in the buffer
         # Check if any tokens are left over after the loop completes.
@@ -265,5 +345,5 @@ class FastConformerONNX:
         # Join all the extracted words with spaces to form a single string.
         full_text = " ".join([w['word'] for w in words_timestamps])
         
-        # Return the transcribed string, the array of word dicts, and None for logprobs.
-        return full_text, words_timestamps, None
+        # Return the transcribed string, the array of word dicts, and the raw logprobs.
+        return full_text, words_timestamps, logprobs
