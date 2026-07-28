@@ -54,7 +54,23 @@ class PrintInterceptor:
             for line in lines[:-1]:
                 clean_line = line.strip()
                 if clean_line:
-                    emit_status_to_stderr(self.original_stderr, "Processing", clean_line)
+                    # Parse specific progress logs formatted as "[PROGRESS] Stage 45.5%"
+                    if "[PROGRESS]" in clean_line:
+                        import re
+                        msg = clean_line.replace("[PROGRESS]", "").strip()
+                        pct_match = re.search(r"(\d+(\.\d+)?)%", msg)
+                        if pct_match:
+                            pct = float(pct_match.group(1))
+                            try:
+                                status_json = json.dumps({"step": "Processing", "message": msg, "progress": pct}, ensure_ascii=False)
+                                self.original_stderr.write(f"STATUS:{status_json}\n")
+                                self.original_stderr.flush()
+                            except Exception:
+                                pass
+                        else:
+                            emit_status_to_stderr(self.original_stderr, "Processing", clean_line)
+                    else:
+                        emit_status_to_stderr(self.original_stderr, "Processing", clean_line)
             self.buffer = lines[-1]
 
     def flush(self):

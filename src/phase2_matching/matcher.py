@@ -112,6 +112,11 @@ def _run_post_asr_pipeline(
                 start_pointer = i
                 break
 
+        def _on_match_event(evt):
+            if isinstance(evt, dict) and "progress" in evt:
+                pct = float(evt["progress"]) * 100.0
+                print(f"[PROGRESS] Matching {pct:.1f}%")
+
         # PHASE 2.2: SEQUENTIAL DYNAMIC PROGRAMMING (DP) ALIGNMENT
         sdk_result = run_matching_sequence(
             phoneme_texts=transcribed_tokens,
@@ -121,7 +126,7 @@ def _run_post_asr_pipeline(
             start_pointer=start_pointer,
             params=params,
             resources=resources,
-            on_event=None,
+            on_event=_on_match_event,
         )
 
     except Exception as e:

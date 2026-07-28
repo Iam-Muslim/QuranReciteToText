@@ -81,6 +81,7 @@ def run_asr_cpu(audio_input, sample_rate, model_name="Base"):
        to FastConformer for transcription.
     4. Aggregates the text and timestamps.
     """
+    audio_dur = 0.0
     # Import schemas locally to avoid circular dependencies if any exist.
     from qua_sdk.schemas import Emissions, Region, Regions
     # Import the FastConformer singleton and model paths.
@@ -149,11 +150,14 @@ def run_asr_cpu(audio_input, sample_rate, model_name="Base"):
         Inner callback: Executed every time VAD spits out a valid speech segment.
         Extracts the audio, passes it to FastConformer, and records the text/timings.
         """
-        # Declare chunk_idx as nonlocal so we can increment it from within this inner function.
         nonlocal chunk_idx
-        # Convert the VAD segment start sample index into absolute seconds.
         start_sec = segment.start / sample_rate
         
+        # Calculate and emit progress (0-100)
+        if audio_dur > 0:
+            pct = min(100.0, ((start_sec + len(segment.samples)/sample_rate) / audio_dur) * 100.0)
+            print(f"[PROGRESS] Transcribing {pct:.1f}%")
+
         # We fetch the *actual* audio for this segment, plus a tiny bit of pre-roll 
         # (context) so the model doesn't clip the first syllable.
         # Call the injected function to pull the audio array from memory/disk buffers.
