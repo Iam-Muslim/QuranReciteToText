@@ -272,15 +272,10 @@ def _frames_to_word_times(
     token_ids:  list[int],
     word_token_counts: list[int],   # how many token ids belong to each word
     chunk_start_sec: float,
+    seg_start_time: float,
 ) -> list[dict]:
     """
     Convert frame-level CTC label sequence → word-level start/end times.
-    
-    torchaudio.functional.forced_align returns a sequence of the actual target labels,
-    padded with BLANK_ID where appropriate.
-    We scan the sequence to map frames to their respective token indices, then
-    intelligently distribute the blank frames between adjacent tokens to ensure
-    smooth boundaries.
     """
     T = len(alignments)
     N = len(token_ids)
@@ -323,7 +318,6 @@ def _frames_to_word_times(
             token_ends_f.append(token_frames[i][-1])
 
     # 3. Distribute blank frames between adjacent tokens
-    # A word shouldn't expand infinitely into a long pause. Max expansion per token.
     MAX_EXPAND = 4  # max 320ms expansion into silence
 
     actual_starts_f = []
@@ -352,7 +346,6 @@ def _frames_to_word_times(
             next_start = token_starts_f[i + 1]
             gap = next_start - core_end - 1
             if gap > 0:
-                # The first half goes to this token (ceil division logic)
                 expand = min(gap - (gap // 2), MAX_EXPAND)
                 end_f = core_end + expand
             else:
@@ -372,14 +365,18 @@ def _frames_to_word_times(
         ws_f = actual_starts_f[tok_offset]
         we_f = actual_ends_f[tok_offset + count - 1]
 
-        # Convert frames to relative seconds
-        ws = ws_f * FRAME_STEP
-        we = (we_f + 1) * FRAME_STEP
+        # Convert frames to absolute seconds based on chunk start
+        abs_ws = (ws_f * FRAME_STEP) + chunk_start_sec
+        abs_we = ((we_f + 1) * FRAME_STEP) + chunk_start_sec
 
-        if we < ws:
-            ws, we = we, ws
+        if abs_we < abs_ws:
+            abs_ws, abs_we = abs_we, abs_ws
 
-        word_times.append({"_start": ws, "_end": we})
+        # Compute relative seconds from the VAD segment start
+        rel_ws = max(0.0, abs_ws - seg_start_time)
+        rel_we = max(0.0, abs_we - seg_start_time)
+
+        word_times.append({"_start": rel_ws, "_end": rel_we})
         tok_offset += count
 
     return word_times
@@ -465,7 +462,7 @@ def run_ctc_alignment(
 
         # Convert frames to word-level times for the FULL sequence
         full_word_times = _frames_to_word_times(
-            alignments, scores, token_ids, word_token_counts, chunk_start_sec
+            alignments, scores, token_ids, word_token_counts, chunk_start_sec, seg.start_time
         )
 
         # Slice out only the timings that correspond to the actual matched_text

@@ -297,6 +297,50 @@ def process_audio(
         print(f"[Split] Splitting failed: {e}")
         traceback.print_exc()
 
+    def _resolve_overlaps(segs: list) -> list:
+        from dataclasses import replace
+        for i in range(len(segs) - 1):
+            seg1 = segs[i]
+            seg2 = segs[i + 1]
+            if seg1.end_time is not None and seg2.start_time is not None and seg1.end_time > seg2.start_time:
+                midpoint = (seg1.end_time + seg2.start_time) / 2.0
+                
+                # Adjust seg1
+                new_words1 = []
+                if seg1.words:
+                    for w in seg1.words:
+                        cw = w.copy()
+                        abs_end = seg1.start_time + cw["end"]
+                        if abs_end > midpoint:
+                            cw["end"] = max(cw["start"], midpoint - seg1.start_time)
+                        new_words1.append(cw)
+                seg1 = replace(seg1, end_time=midpoint, words=new_words1 if seg1.words else None)
+                
+                # Adjust seg2
+                new_words2 = []
+                if seg2.words:
+                    old_start2 = seg2.start_time
+                    for w in seg2.words:
+                        cw = w.copy()
+                        abs_start = old_start2 + cw["start"]
+                        abs_end = old_start2 + cw["end"]
+                        
+                        if abs_start < midpoint:
+                            abs_start = midpoint
+                        if abs_end < abs_start:
+                            abs_end = abs_start
+                            
+                        cw["start"] = max(0.0, abs_start - midpoint)
+                        cw["end"] = max(0.0, abs_end - midpoint)
+                        new_words2.append(cw)
+                seg2 = replace(seg2, start_time=midpoint, words=new_words2 if seg2.words else None)
+                
+                segs[i] = seg1
+                segs[i + 1] = seg2
+        return segs
+
+    segments = _resolve_overlaps(segments)
+
     # Step 5: Re-serialize segments now that seg.words is filled by Phase 3.
     from src.phase4_splitting.export import segments_to_json
     json_output = segments_to_json(segments, include_words=True)

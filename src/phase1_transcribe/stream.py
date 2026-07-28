@@ -190,6 +190,15 @@ def run_asr_cpu(audio_input, sample_rate, model_name="Base"):
                 # Calculate the absolute end time, clamping at 0.0.
                 w['end']   = max(0.0, w['end'] - actual_preroll_sec + start_sec)
                 
+            # Filter out overlapping words caught in the preroll audio
+            if regions_list:
+                prev_end = regions_list[-1].end_s
+                filtered_words = [w for w in word_timestamps if w['start'] >= prev_end - 0.05]
+                if not filtered_words:
+                    chunk_idx += 1
+                    return
+                word_timestamps = filtered_words
+
             # Reconstruct the sentence by joining the word strings.
             chunk_text = " ".join([w['word'] for w in word_timestamps])
             # Determine the absolute start time of the first word.
