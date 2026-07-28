@@ -11,6 +11,12 @@ This project provides an automated, lightweight pipeline for transcribing and al
 <img width="593" height="523" alt="image" src="https://github.com/user-attachments/assets/86cd301d-5de3-4f45-ad50-edccbdc957fb" />
 
 
+## BUGS :
+  1-Sometimes there is overlap between words
+  2-sometimes repeated words are dropped
+  3-Sometimes last word in segment ends early
+  4-Can be fixed easily ..if you want to use it it's ok but better to fix those by testing
+
 ## Fast Use
 - **fast usage to test** : go to folder where run.py is and add a recitation "audio.mp3" then open cmd in folder ```
 python run.py --audio audio.mp3``` then go to ui folder and open "viewer.html" then load the "output.json" and "audio.mp3"

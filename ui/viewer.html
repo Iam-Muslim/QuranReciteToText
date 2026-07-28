@@ -325,17 +325,13 @@
             cursor: pointer;
             position: relative;
             color: var(--text-dimmed);
-            background-image: linear-gradient(to left, var(--text-main) var(--fill, 0%), var(--text-dimmed) var(--fill, 0%));
-            background-clip: text;
-            -webkit-background-clip: text;
             padding: 0 0.15em;
             margin-bottom: 0.5em;
-            transition: text-shadow 0.2s ease, transform 0.2s ease;
+            transition: color 0.1s ease;
         }
 
         .word.active-glow {
-            text-shadow: 0 0 15px rgba(255,255,255, 0.2);
-            transform: translateY(-2px); 
+            color: var(--accent); /* Simple highlight color */
         }
 
         .word.missing-word {
@@ -443,9 +439,8 @@
                 
                 if (this.validSegments.length === 0) throw new Error("No words found in JSON!");
 
-                // Smart detection: Are timestamps relative?
-                const firstSeg = this.validSegments.find(s => s.time_from > 5.0);
-                this.isRelative = (firstSeg && firstSeg.words[0].start < 5.0);
+                // The backend strictly outputs relative timestamps natively for each segment
+                this.isRelative = true;
 
                 this.processSegments();
             }
@@ -782,28 +777,15 @@
 
                     if (t >= w.start && t <= w.end) {
                         // Word is Active
-                        let progress = (t - w.start) / w.duration;
-                        progress = Math.max(0, Math.min(1, progress));
-                        
-                        span.style.setProperty('--fill', `${progress * 100}%`);
-                        span.style.webkitTextFillColor = 'transparent'; // Show gradient
-                        
                         if (!span.classList.contains('active-glow')) {
                             span.classList.add('active-glow');
                         }
                         activeWordSpan = span;
                         activeSegmentIdx = w.segmentIdx;
                         
-                    } else if (t > w.end) {
-                        // Word Past
-                        span.style.setProperty('--fill', '100%');
-                        span.classList.remove('active-glow');
-                        span.style.webkitTextFillColor = 'var(--text-main)'; // Solid color
                     } else {
-                        // Word Future
-                        span.style.setProperty('--fill', '0%');
+                        // Word Past or Future (De-highlighted)
                         span.classList.remove('active-glow');
-                        span.style.webkitTextFillColor = 'var(--text-dimmed)'; // Dimmed
                     }
                 }
 
