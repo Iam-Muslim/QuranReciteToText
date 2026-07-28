@@ -21,7 +21,15 @@ from pathlib import Path
 # Import the Optional type hint for variables that can be None.
 from typing import Optional
 
-# Import the script paths from the main config file.
+# Import the script paths from the main config file securely.
+import sys
+from pathlib import Path
+
+# Add project root to path securely if not present to avoid namespace collisions with pip `config` package
+_project_root = Path(__file__).parent.parent.parent.resolve()
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
+
 from config import QURAN_SCRIPT_PATH_COMPUTE, QURAN_SCRIPT_PATH_DISPLAY
 
 

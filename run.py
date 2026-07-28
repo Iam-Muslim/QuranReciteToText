@@ -130,8 +130,11 @@ def preload_caches():
 # ==============================================================================
 # Define the main function that serves as the entry point of the script.
 def main():
-    # Step 1: Ensure all dependencies are present before we execute any heavy logic.
-    # Call the ensure_dependencies function to check and install missing packages.
+    # Run the auto-updater first
+    from src.core.updater import check_and_update
+    check_and_update(_app_path, log_callback=print)
+    
+    # Run the dependency check and installation routing before any imports.
     ensure_dependencies()
     
     # Step 2: Set up the command-line argument parser.
