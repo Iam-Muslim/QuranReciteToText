@@ -210,8 +210,11 @@ def run_asr_cpu(audio_input, sample_rate, model_name="Base"):
             # Append the word timestamps and start offset to the ASR words list.
             asr_words_list.append((word_timestamps, start_sec))
             
-            # Append the logprobs matrix and its start offset.
-            logprobs_list.append((logprobs, start_sec))
+            # Append the logprobs matrix and its actual start offset.
+            # The logprobs correspond to the chunk_audio which includes actual_preroll_sec,
+            # so its true start time is start_sec - actual_preroll_sec.
+            actual_logprobs_start = max(0.0, start_sec - actual_preroll_sec)
+            logprobs_list.append((logprobs, actual_logprobs_start))
             
         # Increment the global chunk counter.
         chunk_idx += 1
