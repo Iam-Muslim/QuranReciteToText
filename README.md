@@ -127,8 +127,7 @@ The JSON output unlocks several powerful applications:
 ---
 
 ## Insha'a Allah : 
-- [x] speedup matching
+- [x] speedup matching   الحمد لله رب العالمين
 - [x] integrate in QuranCaption application
-- [x] Improve Accuracy
+- [x] Improve Accuracy 
 - [x] Improve Json output (1:1 schema parity with original QUA)
-- [x] Purge interactive UI code to create a clean CLI engine
