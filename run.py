@@ -156,14 +156,19 @@ def main():
     parser.add_argument("--out", type=str, default="output.json", help="Path to save the JSON output")
     
     # Add a --fast flag to enable parallel chunk processing.
-    parser.add_argument("--fast", action="store_true", help="Enable parallel transcription for much faster speeds on multi-core CPUs")
+    parser.add_argument("--fast", action="store_true", help="Enable parallel transcription for much faster speeds on multi-core CPUs (defaults to 4 workers)")
+    
+    # Add a --workers flag to allow custom core scaling.
+    parser.add_argument("--workers", type=int, default=None, help="Manually set the number of parallel CPU workers (e.g. 8, 12, 16)")
     
     # Parse the arguments provided by the user in the terminal.
     # Parse the command-line arguments and store them in the args object.
     args = parser.parse_args()
     
-    # Configure the chunk workers based on the --fast flag.
-    if args.fast:
+    # Configure the chunk workers based on the --fast flag or --workers.
+    if args.workers is not None:
+        os.environ["ASR_CHUNK_WORKERS"] = str(args.workers)
+    elif args.fast:
         os.environ["ASR_CHUNK_WORKERS"] = "4"
     else:
         os.environ["ASR_CHUNK_WORKERS"] = "1"

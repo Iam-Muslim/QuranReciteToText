@@ -90,6 +90,7 @@ class FastConformerONNX:
         import onnxruntime as ort
         # Import the urllib.request module to download files over HTTP.
         import urllib.request
+        import os
         
         # Auto-provision the model from GitHub Releases
         # Check if the FastConformer model file exists locally.
@@ -127,8 +128,14 @@ class FastConformerONNX:
         sess_opts.intra_op_num_threads = 2
         # Restrict inter-op threads to 2 to prevent CPU lockup.
         sess_opts.inter_op_num_threads = 2
+        
         # Instantiate the InferenceSession with the model path and options.
-        self.session = ort.InferenceSession(FASTCONFORMER_ONNX_PATH, sess_opts)
+        # (We strictly use CPUExecutionProvider as it is the most stable and heavily optimized for this model)
+        self.session = ort.InferenceSession(
+            FASTCONFORMER_ONNX_PATH, 
+            sess_opts,
+            providers=['CPUExecutionProvider']
+        )
 
         # Load vocabulary so we can manually decode the integer predictions back to Arabic text
         # Open the tokens text file in read mode with UTF-8 encoding.
