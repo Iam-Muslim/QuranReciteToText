@@ -100,10 +100,22 @@ class FastConformerONNX:
             os.makedirs(os.path.dirname(FASTCONFORMER_ONNX_PATH), exist_ok=True)
             # Define the URL to download the quantized model from GitHub.
             url = "https://github.com/yazinsai/tilawa/releases/download/v0.1.0/fastconformer_ar_ctc_q8.onnx"
-            # Execute the download and save it to the specified path.
-            urllib.request.urlretrieve(url, FASTCONFORMER_ONNX_PATH)
-            # Print a success message.
-            print("Download complete.")
+            
+            # Helper for download progress
+            import sys
+            def _progress_hook(block_num, block_size, total_size):
+                downloaded = block_num * block_size
+                if total_size > 0:
+                    pct = min(100.0, downloaded * 100 / total_size)
+                    sys.stdout.write(f"\rDownloading FastConformer: {pct:.1f}% ({downloaded/(1024*1024):.1f} MB / {total_size/(1024*1024):.1f} MB)")
+                else:
+                    sys.stdout.write(f"\rDownloading FastConformer: {downloaded/(1024*1024):.1f} MB")
+                sys.stdout.flush()
+
+            # Execute the download with the progress hook.
+            urllib.request.urlretrieve(url, FASTCONFORMER_ONNX_PATH, reporthook=_progress_hook)
+            # Print a newline and success message.
+            print("\nDownload complete.")
             
         # Print a status message indicating ONNXRuntime initialization.
         print("Loading FastConformer via ONNXRuntime...")

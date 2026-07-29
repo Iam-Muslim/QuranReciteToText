@@ -49,10 +49,11 @@ Voice Activity Detection segments the incoming raw PCM stream into clean, contin
   - `max_speech_duration`: 30.0s (prevents mega-chunks exhausting model context window).
   - `buffer_size_in_seconds`: 30.0s.
 - **Context Padding**: 500ms preroll and 500ms postroll of real audio around each VAD segment, preventing mid-consonant cuts at boundaries.
-- **Feeding Logic**:
+- **Feeding & Async Parallel Execution Logic**:
   - Small PCM blocks (0.5s) are read sequentially from FFmpeg stdout and fed to `vad.accept_waveform(samples)`.
-  - When `vad.is_speech_detected()` triggers, speech segments (`vad.front`) are popped and passed to `process_speech_segment()`.
-  - Upon EOF, `vad.flush()` drains any trailing speech segments.
+  - When `vad.is_speech_detected()` triggers, speech segments (`vad.front`) are popped and passed to `extract_speech_segment()`.
+  - To maximize CPU utilization, the audio chunks are **asynchronously submitted** to a `ThreadPoolExecutor` (enabled via the `--fast` flag). This streams the chunks directly to the ONNX model in real-time, completely parallelizing the transcription workload while the VAD continues detecting future segments.
+  - Upon EOF, `vad.flush()` drains any trailing speech segments, and the executor gathers the perfectly chronological sequence of transcribed text via `future.result()`.
 
 ### 2.3 Native ONNXRuntime FastConformer Acoustic Engine (`fastconformer.py`)
 - **Model**: NVIDIA NeMo FastConformer quantized to int8 (`fastconformer_ar_ctc_q8.onnx`). Auto-downloaded to `data/onnx/fastconformer_ar_ctc_q8.onnx` from the Tilawa GitHub release if missing.

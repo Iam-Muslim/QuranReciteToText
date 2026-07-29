@@ -62,7 +62,7 @@ graph TD
 Use the provided `run.py` script to transcribe an audio file from the command line. This will process the audio offline on your CPU and output a highly detailed JSON file.
 
 ```bash
-python run.py --audio <path-to-audio-file> --out <path-to-output-json>
+python run.py --audio <path-to-audio-file> --out <path-to-output-json> [--fast]
 ```
 
 ### Examples
@@ -70,7 +70,11 @@ python run.py --audio <path-to-audio-file> --out <path-to-output-json>
 To process a sample audio file named `recitation.mp3`:
 
 ```bash
+# Normal mode (sequential, lightweight on CPU)
 python run.py --audio recitation.mp3
+
+# Fast mode (parallel asynchronous transcription, blazing fast on multi-core CPUs)
+python run.py --audio recitation.mp3 --fast
 ```
 
 ---

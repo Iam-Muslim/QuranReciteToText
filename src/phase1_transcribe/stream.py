@@ -144,94 +144,38 @@ def run_asr_cpu(audio_input, sample_rate, model_name="Base"):
     # Initialize the chunk index counter to 0.
     chunk_idx = 0
 
+    import concurrent.futures
+    max_workers = int(os.environ.get("ASR_CHUNK_WORKERS", 1))
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+    futures = []
+
+    def transcribe_chunk_task(chunk_audio, start_sec, actual_preroll_sec, idx, dur):
+        text, word_timestamps, logprobs = fc.transcribe(chunk_audio, orig_sr=sample_rate)
+        if dur > 0:
+            chunk_end_sec = start_sec + (len(chunk_audio) / sample_rate)
+            pct = min(100.0, (chunk_end_sec / dur) * 100.0)
+            print(f"[PROGRESS] Transcribing {pct:.1f}%")
+        return (text, word_timestamps, logprobs, start_sec, actual_preroll_sec, idx)
+
     # Define an inner callback function to process individual speech segments.
-    def process_speech_segment(segment, get_real_audio_fn):
+    def extract_speech_segment(segment, get_real_audio_fn):
         """
         Inner callback: Executed every time VAD spits out a valid speech segment.
-        Extracts the audio, passes it to FastConformer, and records the text/timings.
+        Extracts the audio and buffers it for parallel processing.
         """
         nonlocal chunk_idx
         start_sec = segment.start / sample_rate
         
-        # Calculate and emit progress (0-100)
-        if audio_dur > 0:
-            pct = min(100.0, ((start_sec + len(segment.samples)/sample_rate) / audio_dur) * 100.0)
-            print(f"[PROGRESS] Transcribing {pct:.1f}%")
-
         # We fetch the *actual* audio for this segment, plus a tiny bit of pre-roll 
         # (context) so the model doesn't clip the first syllable.
         # Call the injected function to pull the audio array from memory/disk buffers.
         chunk_audio, actual_preroll_sec = get_real_audio_fn(segment.start, len(segment.samples))
         
         # Guard clause: check if the returned audio is empty.
-        if len(chunk_audio) == 0:
-            # Abort processing if empty.
-            return
-
-        # Perform the actual heavy-lifting transcription.
-        # Pass the extracted audio to the FastConformer engine.
-        text, word_timestamps, logprobs = fc.transcribe(chunk_audio, orig_sr=sample_rate)
-        
-        # Append the raw text to the debugging list.
-        raw_transcriptions.append({
-            # Store the current 1-based chunk number.
-            "chunk": chunk_idx + 1,
-            # Store the absolute start time of the chunk.
-            "chunk_start_time_seconds": start_sec,
-            # Store the raw text output.
-            "raw_text": text,
-        })
-        
-        # Check if the transcription returned any actual words.
-        if word_timestamps:
-            # The ASR model returns timestamps relative to the start of the tiny chunk.
-            # We must mathematically adjust them to be absolute times in the full audio file.
-            # Iterate through each word dictionary in the list.
-            for w in word_timestamps:
-                # Subtract the pre-roll, add the segment's absolute start time.
-                # Calculate the absolute start time, clamping at 0.0 to avoid negatives.
-                w['start'] = max(0.0, w['start'] - actual_preroll_sec + start_sec)
-                # Calculate the absolute end time, clamping at 0.0.
-                w['end']   = max(0.0, w['end'] - actual_preroll_sec + start_sec)
-                
-            # Filter out overlapping words caught in the preroll audio
-            if regions_list:
-                prev_end = regions_list[-1].end_s
-                filtered_words = [w for w in word_timestamps if w['start'] >= prev_end - 0.05]
-                if not filtered_words:
-                    chunk_idx += 1
-                    return
-                word_timestamps = filtered_words
-
-            # Reconstruct the sentence by joining the word strings.
-            chunk_text = " ".join([w['word'] for w in word_timestamps])
-            # Determine the absolute start time of the first word.
-            abs_start_time = word_timestamps[0]['start']
-            # Determine the absolute end time of the last word.
-            abs_end_time   = word_timestamps[-1]['end']
-
-            # Record the absolute boundary of this spoken phrase.
-            # Append a new Region object to the master list.
-            regions_list.append(Region(start_s=abs_start_time, end_s=abs_end_time))
-            
-            # Normalize the Arabic text (remove diacritics) for the DP matcher.
-            # Call the normalizer on the raw text.
-            norm_text = normalize_arabic(chunk_text)
-            # Append the characters as a list, plus a space to denote word boundaries, to the tokens array.
-            tokens.append(list(norm_text) + [' '])
-            
-            # Append the word timestamps and start offset to the ASR words list.
-            asr_words_list.append((word_timestamps, start_sec))
-            
-            # Append the logprobs matrix and its actual start offset.
-            # The logprobs correspond to the chunk_audio which includes actual_preroll_sec,
-            # so its true start time is start_sec - actual_preroll_sec.
-            actual_logprobs_start = max(0.0, start_sec - actual_preroll_sec)
-            logprobs_list.append((logprobs, actual_logprobs_start))
-            
-        # Increment the global chunk counter.
-        chunk_idx += 1
-
+        if len(chunk_audio) > 0:
+            fut = executor.submit(transcribe_chunk_task, chunk_audio, start_sec, actual_preroll_sec, chunk_idx, audio_dur)
+            futures.append(fut)
+            chunk_idx += 1
 
     # ==============================================================================
     # 3. Execution Branches (Disk Stream vs. Memory Buffer)
@@ -374,7 +318,7 @@ def run_asr_cpu(audio_input, sample_rate, model_name="Base"):
                 # Loop while the VAD engine has detected completed speech segments in its queue.
                 while not vad.empty():
                     # Process the front-most segment using our callback.
-                    process_speech_segment(vad.front, get_real_audio_stream)
+                    extract_speech_segment(vad.front, get_real_audio_stream)
                     # Pop the segment off the queue.
                     vad.pop()
                         
@@ -389,7 +333,7 @@ def run_asr_cpu(audio_input, sample_rate, model_name="Base"):
         # Loop while there are remaining segments in the queue.
         while not vad.empty():
             # Process the front-most segment.
-            process_speech_segment(vad.front, get_real_audio_stream)
+            extract_speech_segment(vad.front, get_real_audio_stream)
             # Pop the segment off the queue.
             vad.pop()
             
@@ -452,7 +396,7 @@ def run_asr_cpu(audio_input, sample_rate, model_name="Base"):
             # Drain any completed segments.
             while not vad.empty():
                 # Process the segment.
-                process_speech_segment(vad.front, get_real_audio_mem)
+                extract_speech_segment(vad.front, get_real_audio_mem)
                 # Pop the segment.
                 vad.pop()
                     
@@ -466,9 +410,63 @@ def run_asr_cpu(audio_input, sample_rate, model_name="Base"):
         # Drain any final segments.
         while not vad.empty():
             # Process the segment.
-            process_speech_segment(vad.front, get_real_audio_mem)
+            extract_speech_segment(vad.front, get_real_audio_mem)
             # Pop the segment.
             vad.pop()
+
+    # ==============================================================================
+    # 4. Parallel Transcription & Aggregation
+    # ==============================================================================
+    
+    # We iterate over the futures in the exact order they were submitted
+    # future.result() will block until the specific chunk finishes transcribing.
+    # Because we evaluate them in order, the reconstructed arrays perfectly match chronological order.
+    # Shutdown the executor (don't accept new tasks), but wait for all existing ones to finish
+    for fut in futures:
+        text, word_timestamps, logprobs, start_sec, actual_preroll_sec, idx = fut.result()
+        
+        # Append the raw text to the debugging list.
+        raw_transcriptions.append({
+            "chunk": idx + 1,
+            "chunk_start_time_seconds": start_sec,
+            "raw_text": text,
+        })
+        
+        # Check if the transcription returned any actual words.
+        if word_timestamps:
+            # Adjust timestamps to be absolute times in the full audio file.
+            for w in word_timestamps:
+                w['start'] = max(0.0, w['start'] - actual_preroll_sec + start_sec)
+                w['end']   = max(0.0, w['end'] - actual_preroll_sec + start_sec)
+                
+            # Filter out overlapping words caught in the preroll audio
+            if regions_list:
+                prev_end = regions_list[-1].end_s
+                filtered_words = [w for w in word_timestamps if w['start'] >= prev_end - 0.05]
+                if not filtered_words:
+                    continue
+                word_timestamps = filtered_words
+
+            # Reconstruct the sentence by joining the word strings.
+            chunk_text = " ".join([w['word'] for w in word_timestamps])
+            abs_start_time = word_timestamps[0]['start']
+            abs_end_time   = word_timestamps[-1]['end']
+
+            # Record the absolute boundary of this spoken phrase.
+            regions_list.append(Region(start_s=abs_start_time, end_s=abs_end_time))
+            
+            # Normalize the Arabic text (remove diacritics) for the DP matcher.
+            norm_text = normalize_arabic(chunk_text)
+            tokens.append(list(norm_text) + [' '])
+            
+            # Append the word timestamps and start offset to the ASR words list.
+            asr_words_list.append((word_timestamps, start_sec))
+            
+            # Append the logprobs matrix and its actual start offset.
+            actual_logprobs_start = max(0.0, start_sec - actual_preroll_sec)
+            logprobs_list.append((logprobs, actual_logprobs_start))
+
+    executor.shutdown(wait=True)
 
     # Calculate the total elapsed wall-clock time for the ASR phase.
     asr_time = time.time() - t_asr_start

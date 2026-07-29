@@ -104,9 +104,14 @@ def preload_caches():
     
     # Start a try block to attempt loading the caches.
     try:
-        # Load the base Quran text index (the canonical reference).
-        # Call the load_quran_index function.
-        load_quran_index()
+        import io
+        import contextlib
+        
+        # Suppress the harmless "digital_khatt_v2_script.json not found" print from qua_sdk
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            # Call the load_quran_index function.
+            load_quran_index()
+            
         # Load the N-Gram index (used for fast anchor voting) using the "full" inventory mode.
         # Call the load_ngram_index function with the "full" argument.
         load_ngram_index("full")
@@ -150,9 +155,18 @@ def main():
     # Add an argument for the output JSON file, providing a default value.
     parser.add_argument("--out", type=str, default="output.json", help="Path to save the JSON output")
     
+    # Add a --fast flag to enable parallel chunk processing.
+    parser.add_argument("--fast", action="store_true", help="Enable parallel transcription for much faster speeds on multi-core CPUs")
+    
     # Parse the arguments provided by the user in the terminal.
     # Parse the command-line arguments and store them in the args object.
     args = parser.parse_args()
+    
+    # Configure the chunk workers based on the --fast flag.
+    if args.fast:
+        os.environ["ASR_CHUNK_WORKERS"] = "4"
+    else:
+        os.environ["ASR_CHUNK_WORKERS"] = "1"
 
     # Step 3: Validate that the requested audio file actually exists on the filesystem.
     # Check if the audio file specified in the arguments exists.

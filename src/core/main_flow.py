@@ -232,7 +232,7 @@ def process_audio(
     # Call the sdk_adapt helper to copy metrics.
     sdk_adapt.metrics_to_profiling(stage_metrics, profiling)
     # Print the total wall time taken for ASR prep.
-    print(f"[ASR] Pipeline prep completed in {wall_time:.2f}s")
+    print(f"[ASR] Acoustic Transcription Phase completed in {wall_time:.2f}s")
 
     # Extract clean start/end time intervals from the raw VAD regions.
     # Call the sdk_adapt helper to determine raw speech state (unused variables).
