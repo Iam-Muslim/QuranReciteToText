@@ -11,19 +11,14 @@ This project provides an automated, lightweight pipeline for transcribing and al
 <img width="593" height="523" alt="image" src="https://github.com/user-attachments/assets/86cd301d-5de3-4f45-ad50-edccbdc957fb" />
 
 
-## BUGS :
-  1-Sometimes there is overlap between words
-  2-sometimes repeated words are dropped
-  3-Sometimes last word in segment ends early
-  4-Can be fixed easily ..if you want to use it it's ok but better to fix those by testing
-
 ## Fast Use
 - **fast usage to test** : go to folder where run.py is and add a recitation "audio.mp3" then open cmd in folder ```
-python run.py --audio audio.mp3``` then go to ui folder and open "viewer.html" then load the "output.json" and "audio.mp3"
+python run.py --audio audio.mp3``` 
+The output will be saved as `output.json` in the same directory, featuring a production-ready schema perfectly matched to downstream applications like QuranCaption.
   
 ##  Projects Used
 
-- **Original System**: This architecture is ported from [Hetchy's Quranic Universal Aligner](https://huggingface.co/spaces/hetchyy/quranic-universal-aligner). While Hetchy's version utilized heavy models on HuggingFace Space requiring GPUs, this repository provides a highly optimized, lightweight version that runs entirely on the CPU.
+- **Original System**: This architecture is ported from [Hetchy's Quranic Universal Aligner](https://huggingface.co/spaces/hetchyy/quranic-universal-aligner). While Hetchy's version utilized heavy models on HuggingFace Space requiring GPUs and interactive UIs, this repository provides a highly optimized, pure CLI version that runs entirely on the CPU.
 - **Acoustic Model**: The transcription is powered by the FastConformer model, utilizing the [Tilawa](https://github.com/yazinsai/tilawa) dataset/model trained by [@yazinsai](https://github.com/yazinsai). 
 - **VAD Segmenter**: Silence and speech segmentation is handled by a lightweight Silero VAD running purely on CPU.
 
@@ -82,7 +77,7 @@ python run.py --audio recitation.mp3
 
 ## 📄 JSON Output Structure
 
-The output is saved as a JSON array where each element represents a discrete, continuous recitation segment. The structure is designed for rich downstream applications.
+The output is saved as a JSON array perfectly mirroring the schema of the original QUA engine, including comprehensive repetition tracking.
 
 ```json
 [
@@ -92,7 +87,7 @@ The output is saved as a JSON array where each element represents a discrete, co
     "end_time": 12.5,
     "transcribed_text": "...",
     "matched_text": "بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ",
-    "matched_ref": "1:1-1:1",
+    "matched_ref": "1:1:1-1:1:4",
     "match_score": 0.98,
     "has_missing_words": false,
     "has_repeated_words": false,
@@ -101,7 +96,7 @@ The output is saved as a JSON array where each element represents a discrete, co
         "word": "بِسْمِ",
         "start": 0.5,
         "end": 1.2,
-        "location": "1:1:1",
+        "location": "1:1:1"
       }
     ]
   }
@@ -111,9 +106,10 @@ The output is saved as a JSON array where each element represents a discrete, co
 ### Key Fields:
 - `start_time` / `end_time`: The absolute boundaries of the spoken segment in the audio.
 - `matched_text`: The exact, orthographically correct Quranic text matched from the canonical index.
-- `matched_ref`: The Quranic reference span (e.g., `Surah:Ayah-Surah:Ayah`).
+- `matched_ref`: The Quranic reference span (e.g., `Surah:Ayah:Word-Surah:Ayah:Word`).
 - `match_score`: Confidence score of the match.
 - `has_missing_words` / `has_repeated_words`: Flags indicating recitation anomalies (useful for grading).
+- `wrap_word_ranges`, `repeated_ranges`, `repeated_text`: Arrays that mathematically track when a reciter loops back and repeats verses (Wraparound DP tracking).
 - `words`: Detailed array of every word spoken, containing absolute `start`/`end` times, and its exact `location` index in the Quran (e.g., `1:1:1` for Surah 1, Ayah 1, Word 1).
 
 ---
@@ -128,12 +124,11 @@ The JSON output unlocks several powerful applications:
 4. **Smart Audio Search**: Jump to a specific Ayah or Surah inside a massive audio file instantly using the absolute timestamps.
 5. **Dataset Generation**: Automatically clip long hours of Taraweeh or Murattal audio into cleanly segmented, labeled Ayah-by-Ayah datasets for training other AI models. (using a larger model is better for this)
 
-
-
 ---
 
 ## Insha'a Allah : 
-1. speedup matching
-2. integrate in QuranCaption application
-3. Improve Accuracy
-4. Improve Json output
+- [x] speedup matching
+- [x] integrate in QuranCaption application
+- [x] Improve Accuracy
+- [x] Improve Json output (1:1 schema parity with original QUA)
+- [x] Purge interactive UI code to create a clean CLI engine

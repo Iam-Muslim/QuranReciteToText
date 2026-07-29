@@ -106,12 +106,21 @@ Phase 3 assigns frame-perfect timestamps to every authenticated Uthmani word by 
   - `torchaudio` returns the optimal target sequence labels frame-by-frame (80ms per frame).
   - Since CTC strongly peaks tokens (emitting them for just 1 frame), the algorithm distributes the surrounding `BLANK` frames intelligently (up to a max expansion bound of 320ms) to generate natural, contiguous spoken word boundaries that perfectly track the reciter's pace without drifting or artificially overlapping.
 
-### 4.2 Boundary Enforcement & Splitting (`split.py`)
+### 4.2 Boundary Enforcement & Exporting (`fused_split.py`, `export.py`)
 - **Ayah Splitting**: After word timings are injected, `_split_fused_segments()` iterates through the data and cleanly cuts massive continuous VAD chunks into separate per-Ayah blocks, accurately tracking repetitions and jumps.
+- **Exporting**: The data is exported via `export.py` into a robust JSON schema matching the original QUA specification perfectly, outputting `wrap_word_ranges` and `repeated_ranges` directly for downstream consumers.
 
 ---
 
-## 5. AI Troubleshooting Guide
+## 5. Evolution from Original QUA
+
+Unlike the original Quranic Universal Aligner which was designed as an interactive Gradio web app, this fork has been ruthlessly optimized for headless CLI execution:
+- **Zero UI Bloat**: Over 700+ lines of interactive manual splitting, manual merging, undo/redo states, and legacy Gradio `gr.State` shapes were purged.
+- **Pure CLI Export**: Bypassing UI data structures, the engine produces a clean `output.json` directly upon completion, achieving 1:1 schema parity with the original space.
+
+---
+
+## 6. AI Troubleshooting Guide
 
 If you are an AI agent analyzing this repository to fix a bug, **use this guide**. Do not make assumptions about standard pipelines. Use the exact variables referenced in this document.
 
