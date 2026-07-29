@@ -285,11 +285,17 @@ def process_audio(
     from src.phase4_splitting.fused_split import _split_fused_segments
     segments = _split_fused_segments(segments)
 
-    # Step 5b: Stamp sequential segment numbers (1-based).
+    # Step 5b: Split multi-ayah segments at ayah boundaries using word timestamps.
+    # This replicates what the reference project's batch_align SDK does internally:
+    # each VAD chunk that covers N ayahs becomes N separate segments.
+    from src.phase4_splitting.ayah_split import split_segments_at_ayah_boundaries
+    segments = split_segments_at_ayah_boundaries(segments)
+
+    # Step 5c: Stamp sequential segment numbers (1-based).
     for i, seg in enumerate(segments):
         seg.segment_number = i + 1
 
-    # Step 5c: Derive has_missing_words flag via coverage analysis.
+    # Step 5d: Derive has_missing_words flag via coverage analysis.
     # This is the single authoritative source — we do NOT inject words into the list.
     from src.core.missing_words import recompute_missing_words
     recompute_missing_words(segments)

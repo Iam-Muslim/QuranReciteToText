@@ -209,16 +209,38 @@ def _split_fused_segments(segments):
             if verse_text.startswith(_BASMALA_TEXT):
                 verse_text = verse_text[len(_BASMALA_TEXT):].lstrip()
 
+            verse_words = None
+            basmala_words = None
+            if seg.words:
+                split_rel = basmala_end - seg.start_time
+                b_list = []
+                v_list = []
+                for w in seg.words:
+                    w_copy = dict(w)
+                    loc = w_copy.get("location", "")
+                    if loc.startswith("0:0:"):
+                        b_list.append(w_copy)
+                    else:
+                        if w_copy.get("start") is not None:
+                            w_copy["start"] = max(0.0, round(w_copy["start"] - split_rel, 4))
+                        if w_copy.get("end") is not None:
+                            w_copy["end"]   = max(0.0, round(w_copy["end"]   - split_rel, 4))
+                        v_list.append(w_copy)
+                basmala_words = b_list or None
+                verse_words   = v_list or None
+
             new_segments.append(SegmentInfo(
                 start_time=seg.start_time, end_time=basmala_end,
                 transcribed_text="", matched_text=_BASMALA_TEXT,
                 matched_ref="Basmala", match_score=seg.match_score,
+                words=basmala_words,
             ))
             new_segments.append(SegmentInfo(
                 start_time=basmala_end, end_time=seg.end_time,
                 transcribed_text=seg.transcribed_text, matched_text=verse_text,
                 matched_ref=verse_ref, match_score=seg.match_score,
                 error=seg.error, has_missing_words=seg.has_missing_words,
+                words=verse_words,
                 _original_alignment_idx=seg._original_alignment_idx,
             ))
             print(f"[MFA_SPLIT] Segment {idx}: fused_basmala split at {basmala_end:.3f}s")

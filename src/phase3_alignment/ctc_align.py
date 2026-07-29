@@ -485,6 +485,13 @@ def run_ctc_alignment(
             existing_locs = [w.get("location") for w in seg.words]
             
         # If locations are still missing, we generate them from QuranIndex
+        if not any(existing_locs):
+            from qua_sdk.domain import SPECIAL_TEXT, SPECIAL_NAMES as ALL_SPECIAL_REFS
+
+            # Handle pure special segments: Basmala → 0:0:1..4, Isti'adha → 0:0:1..5
+            if seg.matched_ref in ALL_SPECIAL_REFS:
+                existing_locs = [f"0:0:{k+1}" for k in range(len(ref_words))]
+
         if not any(existing_locs) and seg.matched_ref and ":" in seg.matched_ref and "+" not in seg.matched_ref:
             from src.core.quran_index import get_quran_index
             from qua_sdk.domain import SPECIAL_TEXT, SPECIAL_NAMES as ALL_SPECIAL_REFS
@@ -505,7 +512,7 @@ def run_ctc_alignment(
                     prefix_locs = [f"0:0:{i+1}" for i in range(len(_ISTIATHA_TEXT.split()))] # 0:0:1 to 0:0:5
                     verse_ref_words -= len(prefix_locs)
                 elif seg.matched_text.startswith(_BASMALA_TEXT):
-                    prefix_locs = [f"0:0:{i+6}" for i in range(len(_BASMALA_TEXT.split()))] # 0:0:6 to 0:0:9
+                    prefix_locs = [f"0:0:{i+1}" for i in range(len(_BASMALA_TEXT.split()))] # 0:0:1 to 0:0:4
                     verse_ref_words -= len(prefix_locs)
 
             # Helper to extract sequential references handling wraps
@@ -543,17 +550,31 @@ def run_ctc_alignment(
                 indices = qi.ref_to_indices(seg.matched_ref)
                 if indices:
                     s, e = indices
-                    if (e - s + 1) == verse_ref_words:
-                        existing_locs = prefix_locs + [
-                            f"{qi.words[gi].surah}:{qi.words[gi].ayah}:{qi.words[gi].word}"
-                            for gi in range(s, e + 1)
-                        ]
+                    seq_locs = [
+                        f"{qi.words[gi].surah}:{qi.words[gi].ayah}:{qi.words[gi].word}"
+                        for gi in range(s, e + 1)
+                    ]
+                    # Map seq_locs onto ref_words (skipping section markers like ۞)
+                    q_idx = 0
+                    aligned_locs = list(prefix_locs)
+                    words_to_match = ref_words[len(prefix_locs):]
+                    for w in words_to_match:
+                        if w in ["۞", "۩"] or w.startswith("۞"):
+                            aligned_locs.append(None)
+                        elif q_idx < len(seq_locs):
+                            aligned_locs.append(seq_locs[q_idx])
+                            q_idx += 1
+                        else:
+                            aligned_locs.append(None)
+                    existing_locs = aligned_locs
         
         while len(existing_locs) < len(ref_words):
             existing_locs.append(None)
 
         new_words = []
         for j, (word, wt) in enumerate(zip(ref_words, word_times)):
+            if word in ["۞", "۩"] or word.startswith("۞") or word.startswith("۩"):
+                continue  # Skip section/sajdah markers in timed words list
             entry: dict = {"word": word}
             loc = existing_locs[j] if j < len(existing_locs) else None
             if loc:

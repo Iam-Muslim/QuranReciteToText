@@ -106,16 +106,12 @@ def run_asr_cpu(audio_input, sample_rate, model_name="Base"):
     # Set the expected sample rate (must match audio input).
     config.sample_rate = sample_rate
     
-    # Quran-specific VAD tuning — ultra-sensitive to catch soft Arabic endings (ع,ح,ه,خ)
-    # and extended vowels (مد). Optimized for maximum word/letter accuracy.
-    # Set the minimum silence duration to 0.8 seconds to avoid splitting mid-breath.
-    config.silero_vad.min_silence_duration = 0.8   # 0.8s — don't split mid-Waqf pauses
-    # Set the activation threshold to a low 0.15 to catch quiet tails.
-    config.silero_vad.threshold = 0.15             # 0.15 — catch soft consonants & vowel tails
-    # Set the minimum speech duration to 0.15 seconds to allow very short words.
-    config.silero_vad.min_speech_duration = 0.15   # 0.15 — keep very short Ayahs (طه, يس)
-    # Set the maximum speech duration to 30.0 seconds to prevent massive chunks.
-    config.silero_vad.max_speech_duration = 30.0   # 30s — prevent mega-chunks exhausting model context
+    # Quran-specific VAD tuning — ultra-sensitive (threshold=0.15) to avoid clipping soft words (e.g. فَذَرْهُمْ).
+    # Ayah-level splitting is handled downstream by ayah_split.py using CTC word alignment.
+    config.silero_vad.min_silence_duration = 0.5    # 500ms — clean natural pauses
+    config.silero_vad.threshold = 0.15              # 0.15 — catch soft initial/final words & madd
+    config.silero_vad.min_speech_duration = 0.15    # 150ms — catch short initial words
+    config.silero_vad.max_speech_duration = 20.0    # 20s cap
     
     # Initialize the VAD engine with a 30-second context buffer.
     # Instantiate the VoiceActivityDetector using the constructed config.
