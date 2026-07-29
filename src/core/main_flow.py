@@ -292,6 +292,10 @@ def process_audio(
         # 3. Inject missing words
         from src.phase4_splitting.inject_missing import inject_missing_words
         segments = inject_missing_words(segments)
+        
+        # 4. Global timestamp smoothing and gap filling
+        from src.phase4_splitting.smoothing import smooth_timestamps
+        segments = smooth_timestamps(segments)
     except Exception as e:
         import traceback
         print(f"[Split] Splitting failed: {e}")

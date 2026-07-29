@@ -451,10 +451,10 @@
                     const segTimeFrom = seg.time_from || 0.0;
                     
                     seg.words.forEach((w, wIdx) => {
-                        if (w.is_missing || w.start === null || w.end === null) {
+                        if (w.start === null || w.end === null) {
                             this.allWords.push({
                                 text: w.word,
-                                is_missing: true,
+                                is_missing: w.is_missing || false,
                                 start: -1,
                                 end: -1,
                                 duration: 0,
@@ -770,7 +770,6 @@
                 // Sync Words
                 for (let i = 0; i < this.data.allWords.length; i++) {
                     const w = this.data.allWords[i];
-                    if (w.is_missing) continue;
 
                     const span = document.getElementById(w.id);
                     if (!span) continue;

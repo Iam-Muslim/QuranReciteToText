@@ -318,7 +318,10 @@ def _frames_to_word_times(
             token_ends_f.append(token_frames[i][-1])
 
     # 3. Distribute blank frames between adjacent tokens
-    MAX_EXPAND = 4  # max 320ms expansion into silence
+    # We apply a strict, tight padding of max 160ms (2 frames) for both start and end.
+    # Gap-filling and missing word interpolation will happen in Phase 4 post-processing globally.
+    
+    MAX_EXPAND = 2  # max 160ms expansion
 
     actual_starts_f = []
     actual_ends_f = []
@@ -327,7 +330,7 @@ def _frames_to_word_times(
         core_start = token_starts_f[i]
         core_end = token_ends_f[i]
 
-        # Expand start
+        # Expand start tightly
         if i == 0:
             start_f = max(0, core_start - MAX_EXPAND)
         else:
@@ -339,7 +342,7 @@ def _frames_to_word_times(
             else:
                 start_f = core_start
 
-        # Expand end
+        # Expand end tightly
         if i == N - 1:
             end_f = min(T - 1, core_end + MAX_EXPAND)
         else:
