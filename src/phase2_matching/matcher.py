@@ -25,9 +25,9 @@ from src.phase2_matching.normalize import get_arabic_resources
 
 # Import our custom SDK adapter utilities.
 from src.core import sdk_adapt
-# Import the final JSON serializer.
-from src.phase4_splitting.export import segments_to_json
-# Import the boundary splitting post-processor.
+# segments_to_json is used only for the intermediate (no-words) pass.
+# It lives in segment_types; the phase4 export module re-exports it but this is cleaner.
+from src.core.segment_types import segments_to_json
 
 
 def _run_post_asr_pipeline(
@@ -142,63 +142,83 @@ def _run_post_asr_pipeline(
     sdk_adapt.metrics_to_profiling({"matching": sdk_result.metrics}, profiling)
 
     # =====================================================================
-    # RESULTS BUILDING STAGE
+    # RESULTS BUILDING STAGE (1:1 Clone of QUA SDK Handling)
     # =====================================================================
     print(f"[STAGE] Building results...")
 
-    segments = []
-    from src.core.segment_types import SegmentInfo
-    from src.core.segment_types import compute_reading_sequence
+    from qua_sdk.schemas import Alignment, AlignedSegment
 
-    # Lazy-load Quran index (needed for repetition text rebuilding).
-    q_index = None
-    ref_to_idx = None
-
-    def _ensure_q_index():
-        nonlocal q_index, ref_to_idx
-        if q_index is None:
-            from src.core.quran_index import get_quran_index
-            q_index = get_quran_index()
-            ref_to_idx = {f"{w.surah}:{w.ayah}:{w.word}": idx for idx, w in enumerate(q_index.words)}
+    # The official app uses batch_align which returns an Alignment object.
+    # Since we use sequential DP here, we bridge the gap by constructing an
+    # Alignment object so we can pipe it through the official sdk_adapt layer 1:1.
+    alignment = Alignment(
+        chapter=start_surah,
+        segments=[],
+    )
 
     for i, res in enumerate(sdk_result.results):
         matched_text, score, matched_ref, wrap_ranges = res
-        seg_start = regions.regions[i].start_s
-        seg_end = regions.regions[i].end_s
-        transcribed_text = " ".join(transcribed_tokens[i])
-
+        
         # For repetition segments, rebuild matched_text in chronological reading order.
+        # This is critical for CTC alignment, as it needs the exact spoken sequence.
         if wrap_ranges and matched_ref and ":" in matched_ref:
-            _ensure_q_index()
+            from src.core.quran_index import get_quran_index
+            qi = get_quran_index()
+            
             parts = matched_ref.split("-")
             ref_from = parts[0]
             ref_to = parts[1] if len(parts) > 1 else parts[0]
-
-            sections = compute_reading_sequence(ref_from, ref_to, wrap_ranges)
+            
+            # Use the same logic we put in ctc_align to get the sections
+            sections = []
+            if len(wrap_ranges[0]) >= 3:
+                sections.append([ref_from, wrap_ranges[0][1]])
+                for wr in wrap_ranges:
+                    sections.append([wr[0], wr[2]])
+            else:
+                sections.append([ref_from, wrap_ranges[0][1]])
+                for i_wr in range(len(wrap_ranges) - 1):
+                    sections.append([wrap_ranges[i_wr][0], wrap_ranges[i_wr + 1][1]])
+                sections.append([wrap_ranges[-1][0], ref_to])
+                
             recited_words = []
-            for sec in sections:
-                s_ref, e_ref = sec
-                if s_ref in ref_to_idx and e_ref in ref_to_idx:
-                    for w_i in range(ref_to_idx[s_ref], ref_to_idx[e_ref] + 1):
-                        recited_words.append(q_index.words[w_i].text)
-
+            for s_ref, e_ref in sections:
+                indices = qi.ref_to_indices(f"{s_ref}-{e_ref}")
+                if indices:
+                    s, e = indices
+                    for gi in range(s, e + 1):
+                        recited_words.append(qi.words[gi].text)
+            
             if recited_words:
+                # Keep any prefix specials (like Basmala) that were in the original matched_text
+                # Find the canonical text words
+                canon_indices = qi.ref_to_indices(matched_ref)
+                if canon_indices:
+                    canon_count = canon_indices[1] - canon_indices[0] + 1
+                    orig_words = matched_text.split()
+                    if len(orig_words) > canon_count:
+                        prefix_words = orig_words[:len(orig_words) - canon_count]
+                        recited_words = prefix_words + recited_words
                 matched_text = " ".join(recited_words)
 
-        # words=None here. Phase 3 (CTC Forced Alignment) will fill this field.
-        segments.append(SegmentInfo(
-            start_time=seg_start,
-            end_time=seg_end,
-            transcribed_text=transcribed_text,
+        # Build the exact AlignedSegment schema expected by sdk_adapt
+        seg = AlignedSegment(
+            id=i,
+            region=regions.regions[i],
             matched_text=matched_text,
             matched_ref=matched_ref,
-            match_score=score,
+            confidence=score,
             wrap_word_ranges=wrap_ranges,
             error=f"Low confidence ({score:.0%})" if score < 0.2 and score > 0 else ("Failed" if score == 0 else None),
-            has_missing_words=(i in sdk_result.gap_segments),
-            has_repeated_words=(i in sdk_result.repetition_segments),
-            words=None,  # Phase 3 fills this
-        ))
+        )
+        alignment.segments.append(seg)
+
+    # Use the official adapter exactly like the reference app
+    segments = sdk_adapt.alignment_to_segment_infos(alignment, emissions, regions)
+    
+    # Restore the repetition flags that were computed sequentially
+    for i, seg in enumerate(segments):
+        seg.has_repeated_words = (i in getattr(sdk_result, "repetition_segments", set()))
 
     # =====================================================================
     # POST-PROCESSING: Split fused segments at Ayah boundaries

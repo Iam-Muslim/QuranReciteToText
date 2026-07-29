@@ -14,7 +14,8 @@ word-level timestamps, then cut at the best word boundary:
 
 Recurses until every leaf sub-segment satisfies the active criteria (no cap).
 
-Pure module: no Gradio, no session state.
+Pure module: no Gradio, no session state. The caller injects an ``mfa_caller``
+closure that handles the actual MFA call + audio slicing.
 """
 
 from __future__ import annotations
@@ -30,91 +31,13 @@ from qua_sdk.domain import SPECIAL_NAMES as ALL_SPECIAL_REFS
 from config import AUTO_MERGE_GROUP_PREFIX
 from src.core.quran_index import get_quran_index
 from src.core.segment_types import SegmentInfo
-from src.core.segment_types import SegmentInfo
-# src.ui does not exist in this repo, so we remove the imports and hardcode what's needed.
+from src.core.missing_words import _parse_ref_verse_ranges
 
 WAQF_MARK_BY_LABEL = {
     "preferred_stop": "ۖ",
     "optional_stop": "ۚ",
     "preferred_continue": "صلے",
 }
-
-import json
-from pathlib import Path
-
-_verse_word_counts_cache = None
-
-def _load_verse_word_counts() -> dict[int, dict[int, int]]:
-    """Load and cache verse word counts from surah_info.json."""
-    global _verse_word_counts_cache
-    if _verse_word_counts_cache is not None:
-        return _verse_word_counts_cache
-
-    # Assuming surah_info.json is in the data folder relative to project root
-    app_path = Path(__file__).parent.parent.parent.resolve()
-    surah_info_path = app_path / "data" / "surah_info.json"
-
-    with open(surah_info_path, 'r', encoding='utf-8') as f:
-        surah_info = json.load(f)
-
-    _verse_word_counts_cache = {}
-    for surah_num, data in surah_info.items():
-        surah_int = int(surah_num)
-        _verse_word_counts_cache[surah_int] = {}
-        for verse_data in data.get('verses', []):
-            verse_num = verse_data.get('verse')
-            num_words = verse_data.get('num_words', 0)
-            if verse_num:
-                _verse_word_counts_cache[surah_int][verse_num] = num_words
-
-    return _verse_word_counts_cache
-
-def _parse_ref_verse_ranges(matched_ref: str) -> list[tuple[int, int, int, int]]:
-    """Decompose a ref into per-verse (surah, ayah, word_from, word_to) ranges."""
-    if not matched_ref:
-        return []
-    if "-" not in matched_ref:
-        parts = matched_ref.split(":")
-        if len(parts) < 3:
-            return []
-        try:
-            s, a, w = int(parts[0]), int(parts[1]), int(parts[2])
-        except (ValueError, IndexError):
-            return []
-        return [(s, a, w, w)]
-    try:
-        start_ref, end_ref = matched_ref.split("-", 1)
-        sp = start_ref.split(":")
-        ep = end_ref.split(":")
-        if len(sp) < 3 or len(ep) < 3:
-            return []
-        s_surah, s_ayah, s_word = int(sp[0]), int(sp[1]), int(sp[2])
-        e_surah, e_ayah, e_word = int(ep[0]), int(ep[1]), int(ep[2])
-    except (ValueError, IndexError):
-        return []
-
-    if s_surah != e_surah:
-        return []
-
-    surah = s_surah
-    if s_ayah == e_ayah:
-        return [(surah, s_ayah, s_word, e_word)]
-
-    verse_wc = _load_verse_word_counts()
-    ranges = []
-    for ayah in range(s_ayah, e_ayah + 1):
-        expected = verse_wc.get(surah, {}).get(ayah, 0)
-        if expected == 0:
-            continue
-        if ayah == s_ayah:
-            ranges.append((surah, ayah, s_word, expected))
-        elif ayah == e_ayah:
-            ranges.append((surah, ayah, 1, e_word))
-        else:
-            ranges.append((surah, ayah, 1, expected))
-    return ranges
-
-
 
 # Waqf stop-sign priority for SPLITTING (phonemizer-canonical labels, highest
 # first). A deliberate subset of the canonical waqf marks (see src/ui/waqf.py):
@@ -146,7 +69,7 @@ def is_eligible(seg: SegmentInfo) -> bool:
         return False
     if "+" in seg.matched_ref:
         return False   # compound special+verse (e.g. "Basmala+2:255:1-2:255:5")
-    if seg.has_repeated_words:
+    if seg.has_missing_words or seg.has_repeated_words:
         return False
     if seg.error:
         return False
@@ -730,7 +653,8 @@ def split_segments(segments: list[SegmentInfo],
 
 def split_segment_manual(segments: list[SegmentInfo],
                          segment_idx: int,
-                         cut_after_local: list[int]) -> tuple[list[SegmentInfo], dict]:
+                         cut_after_local: list[int],
+                         mfa_caller: Callable) -> tuple[list[SegmentInfo], dict]:
     """Split a single user-selected segment at explicit local-word cuts."""
     n = len(segments)
     report: dict = {
@@ -766,9 +690,18 @@ def split_segment_manual(segments: list[SegmentInfo],
         raise ValueError("Split points are out of range.")
 
     mfa_words = parent.words
+    if not mfa_words:
+        from src.ui.mfa_lookups import _build_mfa_ref
+
+        mfa_ref = _build_mfa_ref(parent.to_json_dict())
+        if not mfa_ref:
+            raise ValueError("This segment cannot be aligned for manual splitting.")
+
+        results = mfa_caller([mfa_ref], [(parent.start_time, parent.end_time)])
+        mfa_words = results[0] if results else None
 
     if not mfa_words:
-        raise RuntimeError("No word boundaries for this segment.")
+        raise RuntimeError("MFA failed to return word boundaries for this segment.")
 
     group_id = parent.split_group_id or f"split-{uuid.uuid4().hex[:8]}"
     children = _split_by_indices(parent, mfa_words, cuts, group_id)
@@ -1126,8 +1059,8 @@ def _slice_segment_words(source: SegmentInfo, g_lo: int, g_hi: int,
     if sliced_words:
         starts = [w["start"] for w in sliced_words if isinstance(w.get("start"), (int, float))]
         ends = [w["end"] for w in sliced_words if isinstance(w.get("end"), (int, float))]
-        abs_start = (source.start_time + min(starts)) if starts else source.start_time
-        abs_end = (source.start_time + max(ends)) if ends else source.end_time
+        abs_start = min(starts) if starts else source.start_time
+        abs_end = max(ends) if ends else source.end_time
     else:
         # Proportional fallback based on local word offsets within the source.
         local_lo = g_lo - s0

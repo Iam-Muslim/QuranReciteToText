@@ -467,7 +467,6 @@ def run_ctc_alignment(
         full_word_times = _frames_to_word_times(
             alignments, scores, token_ids, word_token_counts, chunk_start_sec, seg.start_time
         )
-
         # Slice out only the timings that correspond to the actual matched_text
         start_idx = len(prefix_words)
         end_idx = len(prefix_words) + len(ref_words)
@@ -481,23 +480,74 @@ def run_ctc_alignment(
             word_times = full_word_times[start_idx:end_idx]
 
         # Build final words list, attaching locations from seg.words if available
-        # (Phase 2 sometimes stores location refs in seg.words when repetitions are detected)
         existing_locs: list[Optional[str]] = []
         if seg.words:
             existing_locs = [w.get("location") for w in seg.words]
             
-        # If locations are still missing and we have a valid verse reference, pull them from QuranIndex
+        # If locations are still missing, we generate them from QuranIndex
         if not any(existing_locs) and seg.matched_ref and ":" in seg.matched_ref and "+" not in seg.matched_ref:
             from src.core.quran_index import get_quran_index
+            from qua_sdk.domain import SPECIAL_TEXT, SPECIAL_NAMES as ALL_SPECIAL_REFS
+            
             qi = get_quran_index()
-            indices = qi.ref_to_indices(seg.matched_ref)
-            if indices:
-                start_idx, end_idx = indices
-                if (end_idx - start_idx + 1) == len(ref_words):
-                    existing_locs = [
-                        f"{qi.words[gi].surah}:{qi.words[gi].ayah}:{qi.words[gi].word}"
-                        for gi in range(start_idx, end_idx + 1)
-                    ]
+            
+            # Check for fused prefix
+            prefix_locs = []
+            verse_ref_words = len(ref_words)
+            if seg.matched_ref not in ALL_SPECIAL_REFS and seg.matched_text:
+                _BASMALA_TEXT = SPECIAL_TEXT["Basmala"]
+                _ISTIATHA_TEXT = SPECIAL_TEXT["Isti'adha"]
+                _COMBINED_TEXT = _ISTIATHA_TEXT + " ۝ " + _BASMALA_TEXT
+                if seg.matched_text.startswith(_COMBINED_TEXT):
+                    prefix_locs = [f"0:0:{i+1}" for i in range(len(_COMBINED_TEXT.split()))] # 0:0:1 to 0:0:9
+                    verse_ref_words -= len(prefix_locs)
+                elif seg.matched_text.startswith(_ISTIATHA_TEXT):
+                    prefix_locs = [f"0:0:{i+1}" for i in range(len(_ISTIATHA_TEXT.split()))] # 0:0:1 to 0:0:5
+                    verse_ref_words -= len(prefix_locs)
+                elif seg.matched_text.startswith(_BASMALA_TEXT):
+                    prefix_locs = [f"0:0:{i+6}" for i in range(len(_BASMALA_TEXT.split()))] # 0:0:6 to 0:0:9
+                    verse_ref_words -= len(prefix_locs)
+
+            # Helper to extract sequential references handling wraps
+            def _get_locs(ref_from, ref_to):
+                indices = qi.ref_to_indices(f"{ref_from}-{ref_to}")
+                if not indices: return []
+                s, e = indices
+                return [f"{qi.words[gi].surah}:{qi.words[gi].ayah}:{qi.words[gi].word}" for gi in range(s, e + 1)]
+            
+            if seg.wrap_word_ranges:
+                # Reconstruct chronological reading sequence (same as old matcher logic)
+                parts = seg.matched_ref.split("-")
+                ref_from = parts[0]
+                ref_to = parts[1] if len(parts) > 1 else parts[0]
+                
+                sections = []
+                if len(seg.wrap_word_ranges[0]) >= 3:
+                    sections.append([ref_from, seg.wrap_word_ranges[0][1]])
+                    for wr in seg.wrap_word_ranges:
+                        sections.append([wr[0], wr[2]])
+                else:
+                    sections.append([ref_from, seg.wrap_word_ranges[0][1]])
+                    for i_wr in range(len(seg.wrap_word_ranges) - 1):
+                        sections.append([seg.wrap_word_ranges[i_wr][0], seg.wrap_word_ranges[i_wr + 1][1]])
+                    sections.append([seg.wrap_word_ranges[-1][0], ref_to])
+                
+                seq_locs = []
+                for s_ref, e_ref in sections:
+                    seq_locs.extend(_get_locs(s_ref, e_ref))
+                    
+                if len(seq_locs) == verse_ref_words:
+                    existing_locs = prefix_locs + seq_locs
+            else:
+                # Normal unbroken sequence
+                indices = qi.ref_to_indices(seg.matched_ref)
+                if indices:
+                    s, e = indices
+                    if (e - s + 1) == verse_ref_words:
+                        existing_locs = prefix_locs + [
+                            f"{qi.words[gi].surah}:{qi.words[gi].ayah}:{qi.words[gi].word}"
+                            for gi in range(s, e + 1)
+                        ]
         
         while len(existing_locs) < len(ref_words):
             existing_locs.append(None)

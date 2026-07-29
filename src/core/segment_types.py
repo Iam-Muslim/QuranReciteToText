@@ -1,156 +1,127 @@
-"""
-Data types for the segmentation pipeline.
+"""Data types for the segmentation pipeline."""
 
-This module defines the core data classes used throughout the application to store
-information about each audio segment (start time, end time, transcribed text, matched text, etc.).
-"""
-
-# Import the dataclass decorator for clean, boilerplate-free data structures.
 from dataclasses import dataclass
-# Import the Optional type hint for attributes that can be None.
 from typing import Optional
 
 
-# Define a function to reconstruct the chronological reading order of repetitions.
 def compute_reading_sequence(ref_from: str, ref_to: str,
                              wrap_word_ranges: list) -> list:
-    """
-    Computes the chronological reading order of verses when a reciter repeats a section.
-    
-    When reciters read, they often pause, jump backwards a few words to establish context, 
-    and then continue. This function reconstructs that exact spoken sequence so UI applications
-    can highlight the text exactly as it was spoken.
-    
-    Args:
-        ref_from: The starting word of the entire sequence (e.g. "2:255:1")
-        ref_to: The ending word of the entire sequence (e.g. "2:255:10")
-        wrap_word_ranges: A list of tuples denoting where the reciter jumped back.
+    """Return reading-order [[ref_from, ref_to], ...] from wrap data.
 
-    Returns:
-        A list of [start, end] string pairs showing the chronological reading order.
-        Example: [["2:255:1", "2:255:5"], ["2:255:3", "2:255:8"]]
+    Given the overall matched range and the wrap points, reconstructs the
+    full recitation sequence showing how the text was actually read
+    (including repeated sections).
+
+    Supports 3-element tuples (jump_to, jump_from, repeat_end) and
+    legacy 2-element tuples (jump_to, jump_from).
+
+    Example: ref "2:255:1" to "2:255:10", wrap [("2:255:3", "2:255:5", "2:255:8")]
+    → [["2:255:1", "2:255:5"], ["2:255:3", "2:255:8"]]
+    (read words 1-5 forward, then repeated 3-8)
     """
-    # Check if there are no wrap ranges (meaning no repetitions occurred).
-    if not wrap_word_ranges:
-        # Return a simple single-element list with the start and end points.
-        return [[ref_from, ref_to]]
-        
-    # Check if wrap ranges exist and if they use the newer 3-element format.
     if wrap_word_ranges and len(wrap_word_ranges[0]) >= 3:
         # 3-element format: (jump_to, jump_from, repeat_end)
-        # Forward section: The initial recitation before the first jump backwards.
-        # Create the first section from the start to the word immediately before the first jump.
+        # Forward section: ref_from to first wrap's jump_from
         sections = [[ref_from, wrap_word_ranges[0][1]]]
-        
-        # Each wrap represents a repeated sequence.
-        # Loop through each wrap range tuple.
+        # Each wrap's actual repeated content
         for wr in wrap_word_ranges:
-            # Append the repeated section based on the jump_to (0) and repeat_end (2) indices.
             sections.append([wr[0], wr[2]])
-        # Return the fully reconstructed sequence.
         return sections
 
     # Legacy 2-element format: (jump_to, jump_from)
-    # Create the first section from the start to the first jump_from point.
     sections = [[ref_from, wrap_word_ranges[0][1]]]
-    # Loop through the remaining wraps, mapping each jump_to to the NEXT jump_from.
     for i in range(len(wrap_word_ranges) - 1):
-        # Append the intermediate sections.
         sections.append([wrap_word_ranges[i][0], wrap_word_ranges[i + 1][1]])
-    # Append the final section, from the last jump_to point to the absolute end.
     sections.append([wrap_word_ranges[-1][0], ref_to])
-    # Return the reconstructed sequence.
     return sections
 
 
-# Apply the dataclass decorator to the SegmentInfo class.
 @dataclass
-# Define the SegmentInfo class.
 class SegmentInfo:
-    """
-    The master data structure representing a single logical segment of recitation.
-    
-    This object holds everything: the raw audio timestamps, the transcribed text from 
-    FastConformer, the canonical matched text from the Quran index, and detailed 
-    word-level timings.
-    """
-    # Audio Boundaries (in seconds)
-    # The start time of the segment in seconds.
+    """Processed segment with transcription and matching results."""
     start_time: float
-    # The end time of the segment in seconds.
     end_time: float
-    
-    # Textual Information
-    # The raw, imperfect output from FastConformer ASR.
-    transcribed_text: str          
-    # The perfect, canonical Quranic script from the DP matcher.
-    matched_text: str              
-    # The exact verse bounds (e.g. "2:255:1-2:255:5").
-    matched_ref: str               
-    # Confidence score (0.0 to 1.0) from the alignment engine.
-    match_score: float             
-    # Any processing errors encountered during DP.
-    error: Optional[str] = None    
-    
-    # Grading & Anomaly Flags
-    # True if the reciter skipped a required word (Hifz error).
-    has_missing_words: bool = False   
-    # True if the reciter jumped backwards.
-    has_repeated_words: bool = False  
-    
-    # Repetition Tracking (Populated if has_repeated_words is True)
-    # The raw wrap ranges from the DP engine.
+    transcribed_text: str
+    matched_text: str
+    matched_ref: str  # e.g. "2:255:1-2:255:5" or "Basmala"
+    match_score: float
+    error: Optional[str] = None
+    has_missing_words: bool = False
+    has_repeated_words: bool = False
     wrap_word_ranges: Optional[list] = None
-    # The calculated chronological repetition ranges.
-    repeated_ranges: Optional[list] = None   
-    # The translated Arabic text for those repetitions.
-    repeated_text: Optional[list] = None     
-    
-    # Miscellaneous State
-    # 1-based index denoting order in the JSON array.
-    segment_number: int = 0                  
-    # Internal tracking for original references.
-    _original_ref: Optional[str] = None      
-    # Internal tracking for original DP score.
-    _original_score: Optional[float] = None  
-    # Boolean flag indicating if a human manually reviewed this segment.
-    manually_confirmed: bool = False         
-    
-    # High-Fidelity Word & Letter Timestamps
-    # A list of dictionaries containing precise word timings.
-    words: Optional[list] = None             
-    
-    # Grouping IDs (Used for UI rendering of split/merged segments)
-    # The 1-based ID from the raw SDK alignment output.
+    repeated_ranges: Optional[list] = None   # [["2:255:1", "2:255:5"], ...]
+    repeated_text: Optional[list] = None     # ["text section 1", "text section 2"]
+    # 1-based segment index
+    segment_number: int = 0
+    # Pipeline-assigned ref before any user edits (set once on first edit, not serialized)
+    _original_ref: Optional[str] = None
+    # Model confidence before the user manually confirmed the segment (set once on
+    # the first confirm / ref edit, restored on revert). Session-only, not serialized.
+    _original_score: Optional[float] = None
+    # True when the user pinned this segment to 100% confidence — via the confidence
+    # pill's confirm control or a ref edit. Drives the "solidified" thicker card
+    # border and the revert affordance. Session-only UI state, not serialized: a
+    # reopened session keeps the 100% in ``match_score`` but loses the revert handle.
+    manually_confirmed: bool = False
+    # MFA word/letter timestamps (list of dicts with location, start, end, letters)
+    words: Optional[list] = None
+    # Index into the DebugCollector's alignment[] list (pre-split alignment order).
+    # Preserved across _split_fused_segments so dp_debug lookup survives splits.
     _original_alignment_idx: Optional[int] = None
-    # A unique hash ID linking segments that were split.
+    # Shared id stamped on sub-segments produced by the Split Segments action —
+    # groups sibling sub-segments from the same pre-split parent for rendering.
     split_group_id: Optional[str] = None
-    # A unique hash ID linking segments that were algorithmically merged.
+    # Stable id stamped on the single collapsed card produced by the Merge action.
+    # Inverse of split: a merge fuses adjacent segments into ONE card, so the card
+    # itself carries the group id (cascaded merges keep the same id).
     merge_group_id: Optional[str] = None
-    # JSON stashes of the pre-merge segment states.
+    # Serialized pre-merge member dicts (to_json_dict form), in recitation order.
+    # Stored on the collapsed card so "Undo merge" can restore the originals exactly
+    # — a union ref can't be re-derived by any boundary cut (e.g. repetitions), so
+    # unlike split (which keeps live children) merge must stash its originals here.
     merge_members: Optional[list] = None
-    # Unmatched Arabic text leftover from a partial merge.
+    # Set on the *leftover* card produced by a partial merge: the trimmed remainder
+    # of a source segment after some of its words were moved into a neighbour. It
+    # renders as an ORDINARY card (no merge_group_id) and carries NO merge_members;
+    # it stores the grown card's merge id here so undo (driven from the grown card)
+    # can find and consume this sibling leftover slot.
     partial_merge_leftover: Optional[str] = None
-    
-    # Deduplication Flags (If multiple takes of the same verse exist)
-    # Boolean flag indicating if this segment is a duplicate take.
+    # Preload-only: per-segment dedup tagging. Stamped by
+    # ``build_segment_infos`` via ``occasion_dedup.classify_segments``.
+    # ``duplicated`` is True for any segment the dedup pass would consider
+    # redundant against another kept canonical take. ``duplicate_kind`` is one
+    # of ``"full_repeat" | "partial_leading" | "partial_trailing"`` per the
+    # algorithm in ``src/preload/occasion_dedup.py``. ``duplicate_context`` is
+    # ``"same_take"`` (the redundancy happened within one continuous occasion)
+    # or ``"across_takes"`` (the reciter rounded back through other verses
+    # before the redundant take). ``duplicated_by_segment`` is the 1-based
+    # ``segment_number`` of the canonical take that supersedes this one.
     duplicated: bool = False
-    # String indicating the reason/kind of deduplication.
     duplicate_kind: Optional[str] = None
-    # Context string regarding the deduplication.
     duplicate_context: Optional[str] = None
-    # The integer segment ID that supersedes this duplicate.
     duplicated_by_segment: Optional[int] = None
 
-    # Define a method to convert this class into a JSON-ready dictionary.
-    def to_json_dict(self, include_words: bool = False) -> dict:
-        """
-        Serializes this Python object into a clean dictionary ready for json.dump().
-        This dictates exactly what the final output.json looks like.
+    def to_json_dict(self, include_words: bool = False,
+                     include_letters: bool = False) -> dict:
+        """Convert to the JSON dict format used by exports and API.
+
+        Word timestamps are only emitted when ``include_words=True`` — set by
+        the Animate All flow, which is the only action that computes word
+        timestamps for every animatable segment. Silent-MFA flows (per-segment
+        animate, /split_segments, special-segment splitting) keep ``.words``
+        populated in-memory as an optimization but do not surface it in the
+        exported JSON.
+
+        Letter-level timestamps are stripped by default — the public API lists
+        ``words+chars`` as disabled, so ``letters`` must never appear in
+        exported / API responses. ``include_letters=True`` is the explicit
+        opt-in for internal state-stash paths (e.g. Preload's
+        ``_chapter_to_state``) where letter timings must survive a Gradio
+        ``gr.State`` round-trip so per-character animation can be stamped
+        post-rehydration.
         """
         from qua_sdk.domain import SPECIAL_NAMES as ALL_SPECIAL_REFS
         is_special = self.matched_ref in ALL_SPECIAL_REFS
-        
         if is_special:
             ref_from, ref_to = "", ""
         elif self.matched_ref and "-" in self.matched_ref:
@@ -158,223 +129,228 @@ class SegmentInfo:
             ref_from, ref_to = parts[0], parts[1]
         else:
             ref_from = ref_to = self.matched_ref or ""
-            
         d = {
             "segment": self.segment_number,
-            "time_from": round(self.start_time, 3) if self.start_time is not None else None, 
-            "time_to": round(self.end_time, 3) if self.end_time is not None else None,
+            "time_from": round(self.start_time, 3),
+            "time_to": round(self.end_time, 3),
             "ref_from": ref_from,
             "ref_to": ref_to,
             "matched_text": self.matched_text or "",
-            "confidence": round(self.match_score, 3) if self.match_score is not None else 0.0,
+            "confidence": round(self.match_score, 3),
             "has_missing_words": self.has_missing_words,
             "has_repeated_words": self.has_repeated_words,
             "special_type": self.matched_ref if is_special else None,
             "error": self.error,
         }
-        
         if self.wrap_word_ranges:
             d["wrap_word_ranges"] = self.wrap_word_ranges
         if self.repeated_ranges:
             d["repeated_ranges"] = self.repeated_ranges
         if self.repeated_text:
             d["repeated_text"] = self.repeated_text
-            
         if include_words and self.words is not None:
-            def _make_word(w):
-                entry = {}
-                entry["word"] = w.get("word", "")
-                if "location" in w:
-                    entry["location"] = w["location"]
-                if "line_idx" in w:
-                    entry["line_idx"] = w["line_idx"]
-                if w.get("is_missing"):
-                    entry["is_missing"] = True
-                    
-                start_val = w.get("start")
-                end_val = w.get("end")
-                
-                # Timestamps are natively relative to the segment's start time from Phase 3
-                entry["start"] = round(start_val, 3) if start_val is not None else None
-                entry["end"] = round(end_val, 3) if end_val is not None else None
-                return entry
-            d["words"] = [_make_word(w) for w in self.words]
-            
+            if include_letters:
+                d["words"] = [dict(w) for w in self.words]
+            else:
+                d["words"] = [
+                    {k: v for k, v in w.items() if k != "letters"}
+                    for w in self.words
+                ]
+        if self.split_group_id:
+            d["split_group_id"] = self.split_group_id
+        if self.merge_group_id:
+            d["merge_group_id"] = self.merge_group_id
+        if self.merge_members:
+            d["merge_members"] = self.merge_members
+        if self.partial_merge_leftover:
+            d["partial_merge_leftover"] = self.partial_merge_leftover
+        if self.duplicated:
+            d["duplicated"] = True
+        if self.duplicate_kind is not None:
+            d["duplicate_kind"] = self.duplicate_kind
+        if self.duplicate_context is not None:
+            d["duplicate_context"] = self.duplicate_context
+        if self.duplicated_by_segment is not None:
+            d["duplicated_by_segment"] = self.duplicated_by_segment
         return d
 
-    # Apply the classmethod decorator to define a factory constructor.
     @classmethod
-    # Define a method to instantiate SegmentInfo from a JSON dict.
     def from_json_dict(cls, d: dict, index: int = 0) -> 'SegmentInfo':
-        """
-        Deserializes a JSON dictionary back into a SegmentInfo Python object.
-        Used primarily when loading pre-existing sessions or cached data.
-        """
-        # Check if the special_type field is present in the dictionary.
+        """Reconstruct from a JSON dict (for loading old sessions)."""
         if d.get("special_type"):
-            # Use the special_type value as the matched reference.
             ref = d["special_type"]
-        # Check if ref_to field exists (indicating a range).
         elif d.get("ref_to"):
-            # Construct a hyphenated range string.
             ref = f"{d['ref_from']}-{d['ref_to']}"
-        # Execute if neither exist (meaning it's a single word or empty).
         else:
-            # Use ref_from, defaulting to empty string.
             ref = d.get("ref_from", "")
-            
-        # Call the class constructor (cls) with dictionary values.
         return cls(
-            # Extract time_from, defaulting to 0.
             start_time=d.get("time_from", 0),
-            # Extract time_to, defaulting to 0.
             end_time=d.get("time_to", 0),
-            # Set transcribed_text to an empty string (lost during serialization).
             transcribed_text="",
-            # Extract matched_text, defaulting to an empty string.
             matched_text=d.get("matched_text", ""),
-            # Set matched_ref to the string computed above.
             matched_ref=ref,
-            # Extract confidence, defaulting to 0.
             match_score=d.get("confidence", 0),
-            # Extract error string.
             error=d.get("error"),
-            # Extract has_missing_words flag.
             has_missing_words=d.get("has_missing_words", False),
-            # Extract has_repeated_words flag.
             has_repeated_words=d.get("has_repeated_words", False),
-            # Extract wrap_word_ranges array.
             wrap_word_ranges=d.get("wrap_word_ranges"),
-            # Extract repeated_ranges array.
             repeated_ranges=d.get("repeated_ranges"),
-            # Extract repeated_text array.
             repeated_text=d.get("repeated_text"),
-            # Extract segment number or compute it from the index parameter.
             segment_number=d.get("segment", index + 1),
-            # Extract words array.
             words=d.get("words"),
-            # Extract split_group_id.
             split_group_id=d.get("split_group_id"),
-            # Extract merge_group_id.
             merge_group_id=d.get("merge_group_id"),
-            # Extract merge_members array.
             merge_members=d.get("merge_members"),
-            # Extract partial_merge_leftover string.
             partial_merge_leftover=d.get("partial_merge_leftover"),
-            # Extract duplicated flag.
             duplicated=d.get("duplicated", False),
-            # Extract duplicate_kind string.
             duplicate_kind=d.get("duplicate_kind"),
-            # Extract duplicate_context string.
             duplicate_context=d.get("duplicate_context"),
-            # Extract duplicated_by_segment ID.
             duplicated_by_segment=d.get("duplicated_by_segment"),
         )
 
 
-# Apply the dataclass decorator to the ProfilingData class.
+def segments_to_json(segments: list, include_words: bool = False) -> dict:
+    """Convert a list of SegmentInfo to the {"segments": [...]} JSON structure.
+
+    See SegmentInfo.to_json_dict for the ``include_words`` semantics —
+    only the Animate All flow sets it True.
+    """
+    return {"segments": [seg.to_json_dict(include_words=include_words) for seg in segments]}
+
+
 @dataclass
-# Define the ProfilingData class.
 class ProfilingData:
-    """
-    A tracking object used to measure exactly how many seconds each phase of 
-    the pipeline takes. This is highly useful for benchmarking performance on 
-    different CPU architectures.
-    """
+    """Profiling metrics for the processing pipeline."""
     # Preprocessing
-    # Time spent in FFmpeg resampling
-    resample_time: float = 0.0               
-    
-    # ASR (Phase 1) Profiling
-    # Total FastConformer execution time
-    asr_time: float = 0.0                    
-    # Time taken to sort audio segments by length.
-    asr_sorting_time: float = 0.0            
-    # Time taken to group segments into computational batches.
-    asr_batch_build_time: float = 0.0        
-    # An array containing execution statistics for each individual batch.
-    asr_batch_profiling: list = None         
-    
-    # Global Anchor & DP (Phase 2) Profiling
-    # Time spent in N-gram anchoring
-    anchor_time: float = 0.0                 
-    # Total DP sequence matching time
-    match_wall_time: float = 0.0             
-    
-    # DP Edge Cases
-    # Total number of times the DP engine failed and retried.
+    resample_time: float = 0.0               # Audio resampling time
+    # VAD profiling
+    vad_model_load_time: float = 0.0
+    vad_model_move_time: float = 0.0
+    vad_inference_time: float = 0.0
+    vad_gpu_time: float = 0.0               # Actual GPU lease execution time
+    vad_wall_time: float = 0.0              # Wall-clock time (includes queue wait)
+    # Phoneme ASR profiling
+    asr_time: float = 0.0                    # Wav2vec wall-clock time (includes queue wait)
+    asr_gpu_time: float = 0.0               # Actual GPU lease execution time
+    asr_model_move_time: float = 0.0         # ASR model GPU move time
+    asr_sorting_time: float = 0.0            # Duration-sorting time
+    asr_batch_build_time: float = 0.0        # Dynamic batch construction time
+    asr_batch_profiling: list = None         # Per-batch timing details
+    # Global anchor profiling
+    anchor_time: float = 0.0                 # N-gram voting anchor detection
+    # Phoneme alignment profiling
+    phoneme_total_time: float = 0.0          # Overall phoneme matching time
+    phoneme_ref_build_time: float = 0.0      # Time to build chapter reference
+    phoneme_dp_total_time: float = 0.0       # Total DP time across all segments
+    phoneme_dp_min_time: float = 0.0         # Min DP time per segment
+    phoneme_dp_max_time: float = 0.0         # Max DP time per segment
+    phoneme_window_setup_time: float = 0.0   # Total window slicing time
+    phoneme_result_build_time: float = 0.0   # Total result construction time
+    phoneme_num_segments: int = 0            # Number of segments aligned
+    match_wall_time: float = 0.0             # Total matching wall-clock time
+    # Retry / reanchor counters
     retry_attempts: int = 0
-    # Total number of retries that successfully found a match.
     retry_passed: int = 0
-    # List of segment IDs that required a retry.
     retry_segments: list = None
-    # Number of times consecutive segments failed anchoring.
     consec_reanchors: int = 0
-    # Total number of segments sent to the DP engine.
     segments_attempted: int = 0
-    # Total number of segments successfully aligned by the DP engine.
     segments_passed: int = 0
-    # Total number of special algorithm merges performed (e.g. Sakt/Waqf).
     special_merges: int = 0
-    # Total number of transition skips executed.
     transition_skips: int = 0
+    phoneme_wraps_detected: int = 0
+    # Result building profiling
+    result_build_time: float = 0.0           # Total result building time
+    result_audio_encode_time: float = 0.0    # Audio-to-data-URL encoding
+    # GPU memory profiling
+    gpu_peak_vram_mb: float = 0.0            # torch.cuda.max_memory_allocated() in MB
+    gpu_reserved_vram_mb: float = 0.0        # torch.cuda.max_memory_reserved() in MB
+    # Total pipeline time
+    total_time: float = 0.0                  # End-to-end pipeline time
 
-    # Total End-to-End Pipeline Time
-    # Time taken to construct the final JSON object.
-    result_build_time: float = 0.0           
-    # Time taken to encode audio chunks into base64 (if requested).
-    result_audio_encode_time: float = 0.0    
-    # Total wall-clock time from start to finish.
-    total_time: float = 0.0                  
+    @property
+    def phoneme_dp_avg_time(self) -> float:
+        """Average DP time per segment."""
+        if self.phoneme_num_segments == 0:
+            return 0.0
+        return self.phoneme_dp_total_time / self.phoneme_num_segments
 
-    # Apply the staticmethod decorator to define a utility function attached to the class.
     @staticmethod
-    # Define an internal time formatting function.
     def _fmt(seconds):
-        # A docstring explaining the formatting logic.
         """Format seconds as m:ss.fff when >= 60s, else as s.fffs."""
-        # Check if the time is 60 seconds or longer.
         if seconds >= 60:
-            # Calculate minutes and remaining seconds using divmod.
             m, s = divmod(seconds, 60)
-            # Return string formatted as "M:SS.ms".
             return f"{int(m)}:{s:06.3f}"
-        # Execute if time is less than 60 seconds.
-        # Return string formatted as "SS.mss".
         return f"{seconds:.3f}s"
 
     def summary(self) -> str:
-        """Returns a human-readable string summarizing the pipeline's performance."""
+        """Return a formatted profiling summary."""
         _fmt = self._fmt
         lines = [
             "\n" + "=" * 60,
             "PROFILING SUMMARY",
             "=" * 60,
+            f"  Preprocessing:",
+            f"    Resample:        {self.resample_time:.3f}s",
+            f"  VAD:                                 wall {_fmt(self.vad_wall_time)}",
+            f"    GPU Time:        {self.vad_gpu_time:.3f}s   (queue {self.vad_wall_time - self.vad_gpu_time:.3f}s)",
+            f"    Model Load:      {self.vad_model_load_time:.3f}s",
+            f"    Model Move:      {self.vad_model_move_time:.3f}s",
+            f"    Inference:       {self.vad_inference_time:.3f}s",
+            f"  Phoneme ASR:                         wall {_fmt(self.asr_time)}",
+            f"    GPU Time:        {self.asr_gpu_time:.3f}s   (queue {self.asr_time - self.asr_gpu_time:.3f}s)",
+            f"    Model Move:      {self.asr_model_move_time:.3f}s",
+            f"    Sorting:         {self.asr_sorting_time:.3f}s",
+            f"    Batch Build:     {self.asr_batch_build_time:.3f}s",
+            f"    Batches:         {len(self.asr_batch_profiling) if self.asr_batch_profiling else 0}",
         ]
-        
-        if self.resample_time > 0.001:
-            lines.append(f"  Resample:          {self.resample_time:.3f}s")
-        if self.asr_time > 0.001:
-            lines.append(f"  Transcription:     {_fmt(self.asr_time)}")
-        if self.anchor_time > 0.001:
-            lines.append(f"  N-gram Voting:     {self.anchor_time:.3f}s")
-        if self.match_wall_time > 0.001:
-            lines.append(f"  DP Matching:       {_fmt(self.match_wall_time)}")
-
+        if self.asr_batch_profiling:
+            for b in self.asr_batch_profiling:
+                qk_per = b.get('qk_mb_per_head')
+                qk_all = b.get('qk_mb_all_heads')
+                qk_str = f", QK^T {qk_per:.1f} MB/head, {qk_all:.0f} MB total" if qk_per is not None else ""
+                lines.append(
+                    f"    Batch {b['batch_num']:>2}: {b['size']:>3} segs | "
+                    f"{b['time']:.3f}s | "
+                    f"{b['min_dur']:.2f}-{b['max_dur']:.2f}s "
+                    f"(A {b['total_seconds']/b['size']:.2f}s, T {b['total_seconds']:.1f}s, W {b['pad_waste']:.0%}{qk_str})"
+                )
+        lines += [
+            f"  Global Anchor:",
+            f"    N-gram Voting:   {self.anchor_time:.3f}s",
+            f"  Phoneme Alignment:                   wall {_fmt(self.match_wall_time)}",
+            f"    Ref Build:       {self.phoneme_ref_build_time:.3f}s",
+            f"    Window Setup:    {self.phoneme_window_setup_time:.3f}s",
+            f"    DP Total:        {self.phoneme_dp_total_time:.3f}s",
+            f"    Segments:        {self.phoneme_num_segments}",
+            f"    DP Avg/segment:  {1000*self.phoneme_dp_avg_time:.3f}ms",
+            f"    DP Min:          {1000*self.phoneme_dp_min_time:.3f}ms",
+            f"    DP Max:          {1000*self.phoneme_dp_max_time:.3f}ms",
+        ]
         pct = 100 * self.segments_passed / self.segments_attempted if self.segments_attempted else 0
-        lines.append(f"\n  Alignment:         {self.segments_passed}/{self.segments_attempted} segments ({pct:.1f}%)")
-        
-        if self.retry_attempts > 0:
-            lines.append(f"  Retries:           {self.retry_passed}/{self.retry_attempts} passed")
-        if self.consec_reanchors > 0:
-            lines.append(f"  Reanchors:         {self.consec_reanchors}")
-        if self.special_merges > 0:
-            lines.append(f"  Special Merges:    {self.special_merges}")
-        if self.transition_skips > 0:
-            lines.append(f"  Transition Skips:  {self.transition_skips}")
-
-        lines.append("-" * 60)
-        lines.append(f"  TOTAL TIME:        {_fmt(self.total_time)}")
+        retry_segs = self.retry_segments or []
+        lines += [
+            f"  Alignment Stats:",
+            f"    Attempted:       {self.segments_attempted}",
+            f"    Passed:          {self.segments_passed}  ({pct:.1f}%)",
+            f"    Retries:         {self.retry_passed}/{self.retry_attempts} passed   segments: {retry_segs}",
+            f"    Reanchors (consec failures): {self.consec_reanchors}",
+            f"    Special Merges:  {self.special_merges}",
+            f"    Transition Skips: {self.transition_skips}",
+            f"    Wraps Detected:  {self.phoneme_wraps_detected}",
+            "-" * 60,
+        ]
+        profiled_sum = (self.resample_time + self.vad_wall_time + self.asr_time
+                        + self.anchor_time + self.match_wall_time + self.result_build_time)
+        unaccounted = self.total_time - profiled_sum
+        lines += [
+            f"  PROFILED SUM:      {_fmt(profiled_sum)}",
+            f"  TOTAL (wall):      {_fmt(self.total_time)}   (unaccounted: {_fmt(unaccounted)})",
+        ]
+        if self.gpu_peak_vram_mb > 0:
+            lines += [
+                "-" * 60,
+                f"  GPU VRAM Peak:     {self.gpu_peak_vram_mb:.0f} MB",
+                f"  GPU VRAM Reserved: {self.gpu_reserved_vram_mb:.0f} MB",
+            ]
         lines.append("=" * 60)
-        
         return "\n".join(lines)

@@ -278,76 +278,29 @@ def process_audio(
         print(f"[Phase3] CTC alignment failed (timestamps will be absent): {e}")
         traceback.print_exc()
 
-    print(f"[STAGE] Post-alignment splitting...")
-    try:
-        from src.phase4_splitting.fused_split import _split_fused_segments
-        from src.phase4_splitting.segment_splitter import split_segments
-        
-        # 1. Split special fused segments
-        segments = _split_fused_segments(segments)
-        
-        # 2. Subdivide long segments using original repo logic
-        segments, _report = split_segments(segments, max_verses=1, max_words=None)
+    print(f"[STAGE] Post-alignment processing...")
 
-        # 3. Inject missing words
-        from src.phase4_splitting.inject_missing import inject_missing_words
-        segments = inject_missing_words(segments)
-        
-        # 4. Global timestamp smoothing and gap filling
-        from src.phase4_splitting.smoothing import smooth_timestamps
-        segments = smooth_timestamps(segments)
-    except Exception as e:
-        import traceback
-        print(f"[Split] Splitting failed: {e}")
-        traceback.print_exc()
+    # Step 5a: Split combined/fused special segments (Isti'adha+Basmala, etc.)
+    # Uses seg.words timestamps from Phase 3 to find the exact split boundary.
+    from src.phase4_splitting.fused_split import _split_fused_segments
+    segments = _split_fused_segments(segments)
 
-    def _resolve_overlaps(segs: list) -> list:
-        from dataclasses import replace
-        for i in range(len(segs) - 1):
-            seg1 = segs[i]
-            seg2 = segs[i + 1]
-            if seg1.end_time is not None and seg2.start_time is not None and seg1.end_time > seg2.start_time:
-                midpoint = (seg1.end_time + seg2.start_time) / 2.0
-                
-                # Adjust seg1
-                new_words1 = []
-                if seg1.words:
-                    for w in seg1.words:
-                        cw = w.copy()
-                        abs_end = seg1.start_time + cw["end"]
-                        if abs_end > midpoint:
-                            cw["end"] = max(cw["start"], midpoint - seg1.start_time)
-                        new_words1.append(cw)
-                seg1 = replace(seg1, end_time=midpoint, words=new_words1 if seg1.words else None)
-                
-                # Adjust seg2
-                new_words2 = []
-                if seg2.words:
-                    old_start2 = seg2.start_time
-                    for w in seg2.words:
-                        cw = w.copy()
-                        abs_start = old_start2 + cw["start"]
-                        abs_end = old_start2 + cw["end"]
-                        
-                        if abs_start < midpoint:
-                            abs_start = midpoint
-                        if abs_end < abs_start:
-                            abs_end = abs_start
-                            
-                        cw["start"] = max(0.0, abs_start - midpoint)
-                        cw["end"] = max(0.0, abs_end - midpoint)
-                        new_words2.append(cw)
-                seg2 = replace(seg2, start_time=midpoint, words=new_words2 if seg2.words else None)
-                
-                segs[i] = seg1
-                segs[i + 1] = seg2
-        return segs
+    # Step 5b: Stamp sequential segment numbers (1-based).
+    for i, seg in enumerate(segments):
+        seg.segment_number = i + 1
 
-    segments = _resolve_overlaps(segments)
+    # Step 5c: Derive has_missing_words flag via coverage analysis.
+    # This is the single authoritative source — we do NOT inject words into the list.
+    from src.core.missing_words import recompute_missing_words
+    recompute_missing_words(segments)
 
-    # Step 5: Re-serialize segments now that seg.words is filled by Phase 3.
-    from src.phase4_splitting.export import segments_to_json
-    json_output = segments_to_json(segments, include_words=True)
+    # Step 6: Serialize to the canonical JSON structure.
+    # SegmentInfo.to_json_dict(include_words=True) produces exactly:
+    #   { segment, time_from, time_to, ref_from, ref_to, matched_text, confidence,
+    #     has_missing_words, has_repeated_words, special_type, error, words: [...] }
+    # where each word is { word, location (if present), start, end }.
+    from src.phase4_splitting.export import build_segment_export
+    json_output = build_segment_export(segments, include_words=True)
 
-    # Step 6: Return the finalized, fully aligned payload.
+    # Step 7: Return the finalized, fully aligned payload.
     return json_output
