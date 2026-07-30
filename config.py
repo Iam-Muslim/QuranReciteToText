@@ -35,9 +35,6 @@ DATA_PATH = PROJECT_ROOT / "data"
 # Define the path to 'qpc_hafs.json' inside the data folder for computational matching.
 QURAN_SCRIPT_PATH_COMPUTE = DATA_PATH / "qpc_hafs.json"
 
-# Used by the presentation layer (if any) to display the beautifully formatted digital khatt script to the end-user.
-# Define the path to 'digital_khatt_v2_script.json' inside the data folder for display purposes.
-QURAN_SCRIPT_PATH_DISPLAY = DATA_PATH / "digital_khatt_v2_script.json"
 
 
 # ==============================================================================
@@ -57,3 +54,31 @@ AUTO_MERGE_GROUP_PREFIX = "merge-auto-"
 # to allow users to scale memory usage up or down depending on their hardware.
 # Retrieve the 'AUDIO_CACHE_MAX_ENTRIES' environment variable, default to '32', and convert it to an integer.
 AUDIO_CACHE_MAX_ENTRIES = int(os.environ.get("AUDIO_CACHE_MAX_ENTRIES", "32"))
+
+
+# ==============================================================================
+# 4. Word Timestamp Smoothing & Stretching Controls
+# ==============================================================================
+# ENABLE_WORD_SMOOTHING controls whether word end timestamps are extended into
+# trailing silence gaps after CTC forced alignment. Set to False to disable.
+ENABLE_WORD_SMOOTHING = True
+
+# WORD_SMOOTHING_MAX_STRETCH_S defines the maximum time (in seconds) to extend
+# a word's end timestamp into trailing silence (default: 1.0 second).
+# The extension is strictly capped at the next word's start time (zero overlap).
+WORD_SMOOTHING_MAX_STRETCH_S = 1.0
+
+# ENABLE_MISSING_WORD_INJECTION controls whether missing (unrecited) words are
+# injected into the 'words' array at their exact Quranic sequence position with
+# 'is_missing': True. Set to False if you prefer words array to hold only recited words.
+ENABLE_MISSING_WORD_INJECTION = True
+
+# ENABLE_SAME_AYAH_FUSION controls whether adjacent segments belonging to the SAME Ayah
+# (separated by VAD breath pauses or missing word gaps) are automatically fused into
+# a single unified Ayah card.
+ENABLE_SAME_AYAH_FUSION = False
+
+# FILTER_OUT_OF_ORDER_REPEATS controls whether backward out-of-sequence repeat segments
+# (e.g. reciter jumping back to an earlier ayah section after starting a later ayah)
+# are filtered out or tagged as duplicated. Set to True to filter them out of export.
+FILTER_OUT_OF_ORDER_REPEATS = False

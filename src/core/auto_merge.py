@@ -245,3 +245,92 @@ def _text_without_consumed_suffix(merged_text: str, consumed_text: str,
     s_i, e_i = indices
     # Reconstruct the string by joining the display_text of each word in the range.
     return " ".join(w.display_text for w in qi.words[s_i:e_i + 1])
+
+
+def fuse_adjacent_same_ayah_segments(segments: list[SegmentInfo]) -> list[SegmentInfo]:
+    """
+    Fuses adjacent segments belonging to the SAME Ayah into a single unified segment card.
+
+    E.g., if seg A is 3:72:1-6 and seg B is 3:72:8-17, they are fused into a single
+    segment 3:72:1-17 spanning from seg A.start_time to seg B.end_time.
+    """
+    try:
+        from config import ENABLE_SAME_AYAH_FUSION
+    except ImportError:
+        ENABLE_SAME_AYAH_FUSION = True
+
+    if not ENABLE_SAME_AYAH_FUSION or not segments:
+        return segments
+
+    merged = []
+    i = 0
+    n = len(segments)
+    n_fused = 0
+
+    while i < n:
+        curr = segments[i]
+        rf = str(curr.matched_ref or "")
+        if not rf or ":" not in rf:
+            merged.append(curr)
+            i += 1
+            continue
+        p = rf.split("-")[0].split(":")
+        if len(p) < 2:
+            merged.append(curr)
+            i += 1
+            continue
+        s_id, a_id = p[0], p[1]
+
+        to_fuse = [curr]
+        j = i + 1
+        while j < n:
+            n_rf = str(segments[j].matched_ref or "")
+            if not n_rf or ":" not in n_rf:
+                break
+            np = n_rf.split("-")[0].split(":")
+            if len(np) >= 2 and np[0] == s_id and np[1] == a_id:
+                to_fuse.append(segments[j])
+                j += 1
+            else:
+                break
+
+        if len(to_fuse) == 1:
+            merged.append(curr)
+            i += 1
+        else:
+            first = to_fuse[0]
+            last = to_fuse[-1]
+
+            fused_ref_start = first.matched_ref.split("-")[0]
+            fused_ref_end = last.matched_ref.split("-")[-1]
+            fused_ref = f"{fused_ref_start}-{fused_ref_end}"
+
+            fused_text = " ".join(s.matched_text for s in to_fuse if s.matched_text)
+            fused_words = []
+            for s in to_fuse:
+                if s.words:
+                    fused_words.extend(s.words)
+
+            from src.core.quran_index import parse_location_key
+            fused_words.sort(key=parse_location_key)
+
+
+            fused_seg = SegmentInfo(
+                start_time=first.start_time,
+                end_time=last.end_time,
+                transcribed_text="",
+                matched_text=fused_text,
+                matched_ref=fused_ref,
+                match_score=min(s.match_score for s in to_fuse),
+                words=fused_words,
+                has_missing_words=any(s.has_missing_words for s in to_fuse),
+                has_repeated_words=any(s.has_repeated_words for s in to_fuse),
+            )
+            merged.append(fused_seg)
+            n_fused += (len(to_fuse) - 1)
+            i = j
+
+    if n_fused > 0:
+        print(f"[SAME_AYAH_FUSE] Fused {n_fused} adjacent same-ayah segments into unified per-ayah cards.")
+
+    return merged

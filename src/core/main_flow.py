@@ -17,64 +17,14 @@ import numpy as np
 from src.core import sdk_adapt
 # Import the ProfilingData class to store performance metrics.
 from src.core.segment_types import ProfilingData
-# Import the resolve function from qua_sdk.registry (unused in this specific snippet but imported).
-from qua_sdk.registry import resolve
 
 # Import the Phase 1 processing logic from our custom pipeline.
-# Import specific functions from the stream module.
-from src.phase1_transcribe.stream import (
-    # Import the state reset function.
-    _reset_request_state,
-    # Import the CPU-based ASR execution function.
-    run_asr_cpu,
-)
+from src.phase1_transcribe.stream import run_asr_cpu
 # Import the Phase 2 DP matching logic from our custom pipeline.
-# Import the post-ASR pipeline execution function.
 from src.phase2_matching.matcher import _run_post_asr_pipeline
 # Import the Phase 3 CTC forced alignment.
 from src.phase3_alignment.ctc_align import run_ctc_alignment
 from src.phase1_transcribe.fastconformer import FASTCONFORMER_TOKENS_PATH
-
-
-# Define a function to load audio using FFmpeg directly.
-def _load_audio_ffmpeg(file_path, target_sr=16000):
-    """
-    Loads an audio file directly from disk into a 1D NumPy array of 32-bit floats.
-    
-    Why FFmpeg instead of librosa?
-    Loading massive 2-hour audio files via librosa can easily exhaust 16GB of RAM.
-    FFmpeg streams the decoded PCM audio directly into a NumPy buffer, which is 
-    orders of magnitude more memory-efficient and much faster.
-    """
-    # Build the FFmpeg command
-    # Define the command arguments as a list of strings.
-    command = [
-        # The base command to execute FFmpeg.
-        'ffmpeg',
-        '-v', 'quiet',           # Suppress FFmpeg terminal output
-        '-i', file_path,         # The input file path
-        '-f', 'f32le',           # Force output format to raw 32-bit little-endian floats
-        '-acodec', 'pcm_f32le',  # Use the float32 PCM encoder
-        '-ac', '1',              # Mix down to a single Mono channel
-        '-ar', str(target_sr),   # Resample to the target sample rate (default 16000Hz)
-        'pipe:1'                 # Output the raw audio bytes directly to stdout
-    ]
-    
-    # Execute the FFmpeg command
-    # Start the FFmpeg process, capturing stdout and stderr.
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    # Wait for the process to finish and capture the outputs.
-    stdout, stderr = process.communicate()
-    
-    # Check for errors during decoding
-    # Check if the process exited with a non-zero status code.
-    if process.returncode != 0:
-        # Raise a RuntimeError with the decoded stderr message.
-        raise RuntimeError(f"FFmpeg failed to load audio: {stderr.decode('utf-8', errors='ignore')}")
-        
-    # Convert the raw byte stream into a structured NumPy array
-    # Parse the stdout byte buffer into a float32 NumPy array and return it with the sample rate.
-    return np.frombuffer(stdout, dtype=np.float32), target_sr
 
 
 # Define a function to resample an in-memory audio array using FFmpeg.
@@ -85,47 +35,32 @@ def _resample_audio_ffmpeg(audio_array, orig_sr, target_sr=16000):
     This is used when an API or UI passes an already-loaded NumPy array, but the 
     sample rate doesn't match the 16kHz required by the acoustic model.
     """
-    # Define the FFmpeg command for reading from stdin and writing to stdout.
     command = [
-        # Base FFmpeg command.
         'ffmpeg',
-        # Suppress standard output logs.
         '-v', 'quiet',
         '-f', 'f32le',          # Tell FFmpeg the incoming data is raw float32
         '-ar', str(orig_sr),    # State the original sample rate
         '-ac', '1',             # State the original channel count (Mono)
         '-i', 'pipe:0',         # Tell FFmpeg to read the input from stdin
         '-f', 'f32le',          # Tell FFmpeg the output should be raw float32
-        # Specify the audio codec for the output.
         '-acodec', 'pcm_f32le',
-        # Specify the output channel count (Mono).
         '-ac', '1',
         '-ar', str(target_sr),  # The new target sample rate
         'pipe:1'                # Tell FFmpeg to write output to stdout
     ]
     
-    # Open the process and pipe our existing NumPy array bytes into stdin
-    # Start the FFmpeg process, mapping stdin, stdout, and stderr.
     process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    # Write the numpy array bytes to stdin and capture the output.
     stdout, stderr = process.communicate(input=audio_array.tobytes())
     
-    # Handle potential conversion errors
-    # Check if the process exited with a non-zero status code.
     if process.returncode != 0:
-        # Raise a RuntimeError with the decoded stderr message.
         raise RuntimeError(f"FFmpeg resample failed: {stderr.decode('utf-8', errors='ignore')}")
         
-    # Convert back from bytes to a NumPy array
-    # Parse the stdout byte buffer into a float32 NumPy array and return it.
     return np.frombuffer(stdout, dtype=np.float32)
 
 
 # Define the main pipeline processing function.
 def process_audio(
-    # The audio input data parameter.
     audio_data,
-    # The acoustic model name parameter, defaulting to "Base".
     model_name="Base"
 ):
     """
@@ -138,14 +73,8 @@ def process_audio(
     Returns:
         JSON structure containing highly precise, Uthmani-aligned Quranic text with timestamps.
     """
-    # Clear any residual state from previous requests.
-    # Call the reset function to clean up globally cached variables in the module.
-    _reset_request_state()
-
     # Fast-fail if no data was provided.
-    # Check if the audio_data parameter is None.
     if audio_data is None:
-        # Return an empty list if there's no data.
         return []
 
     # Print a decorative separator line.
@@ -235,10 +164,8 @@ def process_audio(
     print(f"[ASR] Acoustic Transcription Phase completed in {wall_time:.2f}s")
 
     # Extract clean start/end time intervals from the raw VAD regions.
-    # Call the sdk_adapt helper to determine raw speech state (unused variables).
-    raw_speech_intervals, raw_is_complete = sdk_adapt.regions_to_state(regions)
-    # Call the sdk_adapt helper to get the final cleaned intervals.
     intervals = sdk_adapt.intervals_from_regions(regions)
+
     
     # If no speech was detected in the entire audio file, return empty.
     # Check if the intervals list is empty.
@@ -291,14 +218,25 @@ def process_audio(
     from src.phase4_splitting.ayah_split import split_segments_at_ayah_boundaries
     segments = split_segments_at_ayah_boundaries(segments)
 
-    # Step 5c: Stamp sequential segment numbers (1-based).
+    # Step 5c: Fuse adjacent same-ayah segments into a single unified Ayah card.
+    # Stitches breath-pause fragments (e.g. 3:72:1-6 and 3:72:8-17) into a single 3:72:1-17 card.
+    from src.core.auto_merge import fuse_adjacent_same_ayah_segments
+    segments = fuse_adjacent_same_ayah_segments(segments)
+
+    # Step 5d: Stamp sequential segment numbers (1-based).
     for i, seg in enumerate(segments):
         seg.segment_number = i + 1
 
-    # Step 5d: Derive has_missing_words flag via coverage analysis.
-    # This is the single authoritative source — we do NOT inject words into the list.
-    from src.core.missing_words import recompute_missing_words
+    # Step 5e: Derive has_missing_words flag via coverage analysis & optionally inject missing words.
+    from src.core.missing_words import recompute_missing_words, inject_missing_words
     recompute_missing_words(segments)
+    inject_missing_words(segments)
+
+    # Step 5e: Smooth word end timestamps into trailing silence.
+    # Extends each word's end time by up to WORD_SMOOTHING_MAX_STRETCH_S (from config.py),
+    # capped at the next word's start time (or next segment's first word for segment endings).
+    from src.phase4_splitting.word_smoothing import smooth_word_timestamps
+    smooth_word_timestamps(segments)
 
     # Step 6: Serialize to the canonical JSON structure.
     # SegmentInfo.to_json_dict(include_words=True) produces exactly:

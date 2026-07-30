@@ -25,9 +25,8 @@ from src.phase2_matching.normalize import get_arabic_resources
 
 # Import our custom SDK adapter utilities.
 from src.core import sdk_adapt
-# segments_to_json is used only for the intermediate (no-words) pass.
-# It lives in segment_types; the phase4 export module re-exports it but this is cleaner.
-from src.core.segment_types import segments_to_json
+
+
 
 
 def _run_post_asr_pipeline(

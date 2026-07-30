@@ -157,30 +157,6 @@ def regions_to_state(regions: Regions) -> tuple[np.ndarray | None, bool | None]:
     return raw, regions.is_complete
 
 
-def state_to_regions(raw_state, is_complete, audio_duration_s: float | None = None) -> Regions:
-    """(raw sample intervals, is_complete) State values → Regions for clean().
-
-    Accepts the legacy shapes: numpy array, torch tensor, or list of pairs,
-    all in sample units. ``regions`` is left empty — clean() re-derives it.
-    """
-    if hasattr(raw_state, "detach"):  # torch tensor from an old session
-        raw_state = raw_state.detach().cpu().numpy()
-    if isinstance(raw_state, np.ndarray):
-        raw_state = raw_state.tolist()
-    raw = [
-        Region(start_s=float(s) / SAMPLE_RATE, end_s=float(e) / SAMPLE_RATE)
-        for s, e in raw_state
-    ]
-    if hasattr(is_complete, "item"):  # numpy scalar/array
-        is_complete = bool(np.asarray(is_complete).all())
-    return Regions(
-        regions=[],
-        is_complete=bool(is_complete) if is_complete is not None else None,
-        raw=raw,
-        audio_duration_s=audio_duration_s,
-    )
-
-
 def intervals_from_regions(regions: Regions) -> list[tuple[float, float]]:
     """Cleaned Regions → the legacy list of (start_s, end_s) tuples."""
     return [(r.start_s, r.end_s) for r in regions.regions]
@@ -191,12 +167,7 @@ def intervals_from_regions(regions: Regions) -> list[tuple[float, float]]:
 # ---------------------------------------------------------------------------
 
 def metrics_to_profiling(stages: dict, profiling: ProfilingData) -> None:
-    """Populate ProfilingData from per-stage SDK metrics, in place.
-
-    ``stages`` maps stage name → StageMeta (or a plain metrics dict). VAD/ASR
-    GPU/wall times and VRAM are lease-level concerns stamped by the caller —
-    only the per-component breakdowns land here.
-    """
+    """Populate ProfilingData from per-stage SDK metrics, in place."""
     seg = _metrics(stages.get("segmentation"))
     if seg:
         profiling.vad_model_load_time = seg.get("model_load_s", 0.0)
@@ -230,20 +201,6 @@ def metrics_to_profiling(stages: dict, profiling: ProfilingData) -> None:
         wall = _wall_s(stages.get("matching"))
         if wall is not None:
             profiling.phoneme_total_time = wall
-
-
-def matching_events_to_collector(stages: dict, dc) -> None:
-    """Bridge the matcher's event stream onto the app DebugCollector.
-
-    SDK events are ``{"event": name, **fields}``; the collector (and the v3
-    log row's events block) uses ``{"type": name, **fields}``.
-    """
-    if dc is None:
-        return
-    match = _metrics(stages.get("matching"))
-    for ev in (match or {}).get("events") or []:
-        fields = {k: v for k, v in ev.items() if k != "event"}
-        dc.add_event(ev.get("event"), **fields)
 
 
 def _metrics(stage) -> dict | None:

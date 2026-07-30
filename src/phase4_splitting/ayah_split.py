@@ -1,4 +1,4 @@
-﻿"""Ayah-Level Splitting via CTC Word Timestamps."""
+"""Ayah-Level Splitting via CTC Word Timestamps."""
 from __future__ import annotations
 from src.core.segment_types import SegmentInfo
 

@@ -146,3 +146,96 @@ def recompute_missing_words(segments: list[SegmentInfo]) -> None:
                 first_in_next = min(next_entries, key=lambda e: e[0])[2]
                 segments[last_in_prev].has_missing_words = True
                 segments[first_in_next].has_missing_words = True
+
+
+def inject_missing_words(segments: list[SegmentInfo]) -> None:
+    """
+    Inject missing (unrecited) Quranic words into seg.words at their exact sequence position.
+
+    Each injected missing word receives:
+      {"word": text, "location": "surah:ayah:word", "start": prev_end, "end": next_start, "is_missing": True}
+    """
+    try:
+        from config import ENABLE_MISSING_WORD_INJECTION
+    except ImportError:
+        ENABLE_MISSING_WORD_INJECTION = True
+
+    if not ENABLE_MISSING_WORD_INJECTION:
+        return
+
+    from src.core.quran_index import get_quran_index
+    qi = get_quran_index()
+    verse_wc = _load_verse_word_counts()
+
+    n_injected = 0
+
+    for seg_idx, seg in enumerate(segments):
+        if not seg.words or not seg.has_missing_words or not seg.matched_ref or ":" not in seg.matched_ref:
+            continue
+
+        loc_words: list[tuple[int, int, int, dict]] = []
+        for w in seg.words:
+            loc = w.get("location")
+            if loc and ":" in loc:
+                parts = loc.split(":")
+                try:
+                    s_id, a_id, w_id = int(parts[0]), int(parts[1]), int(parts[2])
+                    loc_words.append((s_id, a_id, w_id, w))
+                except ValueError:
+                    pass
+
+        if not loc_words:
+            continue
+
+        surah, ayah = loc_words[0][0], loc_words[0][1]
+        expected_total = verse_wc.get(surah, {}).get(ayah, 0)
+        if expected_total == 0:
+            continue
+
+        present_w_nums = set(lw[2] for lw in loc_words if lw[0] == surah and lw[1] == ayah)
+
+        min_w = min(present_w_nums)
+        max_w = max(present_w_nums)
+
+        target_max_w = max_w
+        if seg_idx + 1 < len(segments):
+            next_seg = segments[seg_idx + 1]
+            if next_seg.matched_ref and f"{surah}:{ayah}:" in next_seg.matched_ref:
+                next_locs = [w.get("location") for w in (next_seg.words or []) if w.get("location")]
+                next_nums = [int(l.split(":")[2]) for l in next_locs if l.count(":") >= 2 and l.split(":")[0] == str(surah) and l.split(":")[1] == str(ayah)]
+                if next_nums:
+                    target_max_w = min(next_nums) - 1
+
+        missing_nums = [w_num for w_num in range(min_w, target_max_w + 1) if w_num not in present_w_nums]
+        if not missing_nums:
+            continue
+
+        num_to_dict = {lw[2]: lw[3] for lw in loc_words if lw[0] == surah and lw[1] == ayah}
+
+        for m_num in missing_nums:
+            prev_num = max([n for n in present_w_nums if n < m_num], default=None)
+            next_num = min([n for n in present_w_nums if n > m_num], default=None)
+
+            prev_end = num_to_dict[prev_num].get("end", 0.0) if prev_num else 0.0
+            next_start = num_to_dict[next_num].get("start", prev_end) if next_num else prev_end
+
+            q_idx = qi.ref_to_indices(f"{surah}:{ayah}:{m_num}")
+            word_text = qi.words[q_idx[0]].text if q_idx else ""
+
+            if word_text:
+                injected_entry = {
+                    "word": word_text,
+                    "location": f"{surah}:{ayah}:{m_num}",
+                    "start": prev_end,
+                    "end": round(next_start, 4),
+                    "is_missing": True
+                }
+                seg.words.append(injected_entry)
+                n_injected += 1
+
+        from src.core.quran_index import parse_location_key
+        seg.words.sort(key=parse_location_key)
+
+
+    if n_injected > 0:
+        print(f"[MISSING_INJECT] Injected {n_injected} missing words into words array with 'is_missing': True.")

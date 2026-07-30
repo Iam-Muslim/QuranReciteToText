@@ -30,7 +30,7 @@ _project_root = Path(__file__).parent.parent.parent.resolve()
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
-from config import QURAN_SCRIPT_PATH_COMPUTE, QURAN_SCRIPT_PATH_DISPLAY
+from config import QURAN_SCRIPT_PATH_COMPUTE
 
 
 # Verse markers (the decorated circle denoting the end of an Ayah).
@@ -53,19 +53,13 @@ class WordInfo:
         ayah: Verse number.
         word: The N-th word within the Ayah.
         text: The computational text used for algorithmic matching (QPC Hafs).
-        display_text: The typographically rich text used for UI rendering (Digital Khatt).
+        display_text: The canonical text used for UI rendering.
     """
-    # Type hint for the global index integer.
     global_idx: int       
-    # Type hint for the surah number integer.
     surah: int
-    # Type hint for the ayah number integer.
     ayah: int
-    # Type hint for the word number integer.
     word: int
-    # Type hint for the computational text string.
     text: str             
-    # Type hint for the display text string.
     display_text: str     
 
 
@@ -79,117 +73,50 @@ class QuranIndex:
     Primary purpose: Converting string references like "2:255:1-2:255:5" (Al-Baqarah 255, words 1 to 5)
     back into the exact Arabic text that needs to be outputted to the final JSON payload.
     """
-    # Type hint for the list of WordInfo objects.
-    # A flat, ordered array of every word.
     words: list[WordInfo]                           
-    # Type hint for the reverse-lookup dictionary mapping tuples to integers.
-    # A fast reverse-lookup dictionary: (surah, ayah, word) -> global_idx
     word_lookup: dict[tuple[int, int, int], int]    
 
-    # Use the classmethod decorator to define a factory method.
     @classmethod
-    # Define the load method to construct a QuranIndex instance from files.
-    def load(cls, compute_path: Optional[Path] = None, display_path: Optional[Path] = None) -> "QuranIndex":
-        # A docstring explaining the load method.
+    def load(cls, compute_path: Optional[Path] = None) -> "QuranIndex":
         """
-        Reads the JSON scripts from disk, parses them, merges compute and display data,
-        and constructs the in-memory index.
+        Reads the JSON script from disk, parses it, and constructs the in-memory index.
         """
-        # Check if the compute_path parameter was not provided.
         if compute_path is None:
-            # Fall back to the default compute path from the config.
             compute_path = QURAN_SCRIPT_PATH_COMPUTE
-        # Check if the display_path parameter was not provided.
-        if display_path is None:
-            # Fall back to the default display path from the config.
-            display_path = QURAN_SCRIPT_PATH_DISPLAY
 
-        # Load the computational script (mandatory).
-        # Open the compute JSON file in read mode with UTF-8 encoding.
         with open(compute_path, "r", encoding="utf-8") as f:
-            # Parse the JSON file into a Python dictionary.
             compute_data = json.load(f)
-            
-        # Initialize an empty dictionary for display data.
-        display_data = {}
-        # Start a try block to handle potential missing display files gracefully.
-        try:
-            # Load the display script (optional, gracefully degrades if missing).
-            # Open the display JSON file in read mode.
-            with open(display_path, "r", encoding="utf-8") as f:
-                # Parse the JSON file into the display_data dictionary.
-                display_data = json.load(f)
-        # Catch the FileNotFoundError if the display file is missing.
-        except FileNotFoundError:
-            # Print a warning message and fallback.
-            print(f"[QuranIndex] Display file {display_path} not found. Falling back to compute text.")
 
-        # Initialize an empty list to store WordInfo objects.
         words: list[WordInfo] = []
-        # Initialize an empty dictionary for the reverse lookup map.
         word_lookup: dict[tuple[int, int, int], int] = {}
+        sorted_keys = sorted(compute_data.keys(), key=parse_location_key)
 
-        # The JSON dict keys are inherently unordered in old Python versions.
-        # We explicitly sort them by (surah, ayah, word) to guarantee 1:1:1 comes before 1:1:2.
-        # Extract keys from compute_data, sort them using the custom parse function.
-        sorted_keys = sorted(compute_data.keys(), key=_parse_location_key)
-
-        # Loop through each properly sorted key.
         for key in sorted_keys:
-            # Retrieve the entry data for the current key.
             entry = compute_data[key]
-            # Extract the computational text from the entry.
             text = entry["text"]
 
-            # Filter out non-spoken verse markers.
-            # Check if the text starts with the verse marker prefix.
             if text.startswith(VERSE_MARKER_PREFIX):
-                # Skip this entry entirely.
                 continue
 
-            # Extract the surah number and convert to integer.
             surah = int(entry["surah"])
-            # Extract the ayah number and convert to integer.
             ayah = int(entry["ayah"])
-            # Extract the word number and convert to integer.
             word = int(entry["word"])
 
-            # Attempt to pull the beautiful display text. If it doesn't exist, fallback to the compute text.
-            # Use dictionary get() to safely fetch the display entry.
-            dk_entry = display_data.get(key)
-            # Assign display_text from dk_entry if it exists, otherwise fallback to compute text.
-            display_text = dk_entry["text"] if dk_entry else text
-
-            # Create the WordInfo struct
-            # Instantiate a new WordInfo object with the extracted data.
             word_info = WordInfo(
-                # Set the global index based on the current length of the words list.
                 global_idx=len(words),
-                # Set the surah number.
                 surah=surah,
-                # Set the ayah number.
                 ayah=ayah,
-                # Set the word number.
                 word=word,
-                # Set the computational text.
                 text=text,
-                # Set the display text.
-                display_text=display_text,
+                display_text=text,
             )
-            # Append the completed WordInfo object to the main list.
             words.append(word_info)
-            # Add to fast-lookup dictionary
-            # Map the (surah, ayah, word) tuple to the global index integer.
             word_lookup[(surah, ayah, word)] = word_info.global_idx
 
-        # Print a message indicating how many words were successfully loaded.
         print(f"[QuranIndex] Loaded {len(words)} words")
 
-        # Return a new instance of the QuranIndex class populated with the parsed data.
         return cls(
-            # Pass the complete list of WordInfo objects.
             words=words,
-            # Pass the completed lookup dictionary.
             word_lookup=word_lookup,
         )
 
@@ -247,16 +174,28 @@ class QuranIndex:
             return None
 
 
-# Define a private helper function to parse dictionary keys for sorting.
-def _parse_location_key(key: str) -> tuple[int, int, int]:
+def parse_location_key(item) -> tuple[int, int, int]:
     """
-    Helper function to parse a string key like '2:255:3' into a comparable tuple (2, 255, 3).
-    Used as the `key` argument in `sorted()` to ensure mathematical ordering.
+    Universal helper to parse a location string like '2:255:3' or a word dict with a 'location' key
+    into a comparable tuple (2, 255, 3) for mathematical sorting.
     """
-    # Split the string key by colons.
-    parts = key.split(":")
-    # Return a tuple of integers representing the surah, ayah, and word.
-    return (int(parts[0]), int(parts[1]), int(parts[2]))
+    if isinstance(item, dict):
+        key = str(item.get("location", ""))
+    else:
+        key = str(item)
+
+    if ":" in key:
+        parts = key.split(":")
+        if len(parts) >= 3:
+            try:
+                return (int(parts[0]), int(parts[1]), int(parts[2]))
+            except ValueError:
+                pass
+    return (0, 0, 0)
+
+# Alias for backward compatibility
+_parse_location_key = parse_location_key
+
 
 
 # ==============================================================================

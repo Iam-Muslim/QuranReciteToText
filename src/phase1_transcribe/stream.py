@@ -39,12 +39,6 @@ from qua_sdk.schemas import Audio, Region, Regions, Emissions
 from src.phase2_matching.normalize import normalize_arabic
 
 
-# Define a placeholder function for resetting state.
-def _reset_request_state():
-    # A docstring explaining the placeholder.
-    """Placeholder for any state reset required between API calls."""
-    # Do nothing.
-    pass
 
 
 # Define a function to ensure the VAD model exists.

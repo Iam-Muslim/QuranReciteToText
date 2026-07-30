@@ -543,8 +543,19 @@ def run_ctc_alignment(
                 for s_ref, e_ref in sections:
                     seq_locs.extend(_get_locs(s_ref, e_ref))
                     
-                if len(seq_locs) == verse_ref_words:
-                    existing_locs = prefix_locs + seq_locs
+                # Map seq_locs onto ref_words (skipping section markers like ۞)
+                q_idx = 0
+                aligned_locs = list(prefix_locs)
+                words_to_match = ref_words[len(prefix_locs):]
+                for w in words_to_match:
+                    if w in ["۞", "۩"] or w.startswith("۞") or w.startswith("۩"):
+                        aligned_locs.append(None)
+                    elif q_idx < len(seq_locs):
+                        aligned_locs.append(seq_locs[q_idx])
+                        q_idx += 1
+                    else:
+                        aligned_locs.append(None)
+                existing_locs = aligned_locs
             else:
                 # Normal unbroken sequence
                 indices = qi.ref_to_indices(seg.matched_ref)
@@ -559,7 +570,7 @@ def run_ctc_alignment(
                     aligned_locs = list(prefix_locs)
                     words_to_match = ref_words[len(prefix_locs):]
                     for w in words_to_match:
-                        if w in ["۞", "۩"] or w.startswith("۞"):
+                        if w in ["۞", "۩"] or w.startswith("۞") or w.startswith("۩"):
                             aligned_locs.append(None)
                         elif q_idx < len(seq_locs):
                             aligned_locs.append(seq_locs[q_idx])

@@ -174,40 +174,6 @@ class SegmentInfo:
             d["duplicated_by_segment"] = self.duplicated_by_segment
         return d
 
-    @classmethod
-    def from_json_dict(cls, d: dict, index: int = 0) -> 'SegmentInfo':
-        """Reconstruct from a JSON dict (for loading old sessions)."""
-        if d.get("special_type"):
-            ref = d["special_type"]
-        elif d.get("ref_to"):
-            ref = f"{d['ref_from']}-{d['ref_to']}"
-        else:
-            ref = d.get("ref_from", "")
-        return cls(
-            start_time=d.get("time_from", 0),
-            end_time=d.get("time_to", 0),
-            transcribed_text="",
-            matched_text=d.get("matched_text", ""),
-            matched_ref=ref,
-            match_score=d.get("confidence", 0),
-            error=d.get("error"),
-            has_missing_words=d.get("has_missing_words", False),
-            has_repeated_words=d.get("has_repeated_words", False),
-            wrap_word_ranges=d.get("wrap_word_ranges"),
-            repeated_ranges=d.get("repeated_ranges"),
-            repeated_text=d.get("repeated_text"),
-            segment_number=d.get("segment", index + 1),
-            words=d.get("words"),
-            split_group_id=d.get("split_group_id"),
-            merge_group_id=d.get("merge_group_id"),
-            merge_members=d.get("merge_members"),
-            partial_merge_leftover=d.get("partial_merge_leftover"),
-            duplicated=d.get("duplicated", False),
-            duplicate_kind=d.get("duplicate_kind"),
-            duplicate_context=d.get("duplicate_context"),
-            duplicated_by_segment=d.get("duplicated_by_segment"),
-        )
-
 
 def segments_to_json(segments: list, include_words: bool = False) -> dict:
     """Convert a list of SegmentInfo to the {"segments": [...]} JSON structure.
