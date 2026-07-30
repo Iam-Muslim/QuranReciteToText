@@ -1,199 +1,87 @@
-"""
-Pipeline Entry Points
+"""Pipeline Entry Points — Orchestrates Phase 1, Phase 2, Phase 3, and Phase 4 processing."""
 
-This module acts as the central conductor for the entire transcription and matching pipeline.
-It handles audio ingestion (converting everything to standard 16kHz mono), orchestrates 
-the FastConformer acoustic engine (Phase 1), and then hands off the results to the 
-text-matching SDK (Phase 2).
-"""
-# Import the time module to measure execution duration.
 import time
-# Import the subprocess module to run external commands like FFmpeg.
 import subprocess
-# Import the numpy library for efficient numerical arrays.
 import numpy as np
 
-# Import the sdk_adapt module from the local core package.
 from src.core import sdk_adapt
-# Import the ProfilingData class to store performance metrics.
 from src.core.segment_types import ProfilingData
-
-# Import the Phase 1 processing logic from our custom pipeline.
 from src.phase1_transcribe.stream import run_asr_cpu
-# Import the Phase 2 DP matching logic from our custom pipeline.
 from src.phase2_matching.matcher import _run_post_asr_pipeline
-# Import the Phase 3 CTC forced alignment.
 from src.phase3_alignment.ctc_align import run_ctc_alignment
 from src.phase1_transcribe.fastconformer import FASTCONFORMER_TOKENS_PATH
 
 
-# Define a function to resample an in-memory audio array using FFmpeg.
 def _resample_audio_ffmpeg(audio_array, orig_sr, target_sr=16000):
-    """
-    Resamples an existing NumPy audio array in memory using FFmpeg via a stdin pipe.
-    
-    This is used when an API or UI passes an already-loaded NumPy array, but the 
-    sample rate doesn't match the 16kHz required by the acoustic model.
-    """
+    """Resamples in-memory NumPy audio array to target sample rate using FFmpeg stdin pipe."""
     command = [
-        'ffmpeg',
-        '-v', 'quiet',
-        '-f', 'f32le',          # Tell FFmpeg the incoming data is raw float32
-        '-ar', str(orig_sr),    # State the original sample rate
-        '-ac', '1',             # State the original channel count (Mono)
-        '-i', 'pipe:0',         # Tell FFmpeg to read the input from stdin
-        '-f', 'f32le',          # Tell FFmpeg the output should be raw float32
-        '-acodec', 'pcm_f32le',
-        '-ac', '1',
-        '-ar', str(target_sr),  # The new target sample rate
-        'pipe:1'                # Tell FFmpeg to write output to stdout
+        'ffmpeg', '-v', 'quiet',
+        '-f', 'f32le', '-ar', str(orig_sr), '-ac', '1',
+        '-i', 'pipe:0',
+        '-f', 'f32le', '-acodec', 'pcm_f32le', '-ac', '1', '-ar', str(target_sr),
+        'pipe:1'
     ]
-    
     process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     stdout, stderr = process.communicate(input=audio_array.tobytes())
-    
+
     if process.returncode != 0:
         raise RuntimeError(f"FFmpeg resample failed: {stderr.decode('utf-8', errors='ignore')}")
-        
+
     return np.frombuffer(stdout, dtype=np.float32)
 
 
-# Define the main pipeline processing function.
-def process_audio(
-    audio_data,
-    model_name="Base"
-):
-    """
-    The main execution wrapper for the transcription and matching pipeline.
-    
+def process_audio(audio_data, model_name="Base", return_profiling: bool = False):
+    """Main execution wrapper for the transcription and Quran alignment pipeline.
+
     Args:
-        audio_data: Either a file path (string) or a tuple containing (sample_rate, numpy_array).
-        model_name: The target FastConformer model to use (default: "Base").
-        
-    Returns:
-        JSON structure containing highly precise, Uthmani-aligned Quranic text with timestamps.
+        audio_data: Input audio file path or (sample_rate, numpy_array).
+        model_name: Acoustic model name.
+        return_profiling: If True, returns (json_output, profiling).
     """
-    # Fast-fail if no data was provided.
     if audio_data is None:
-        return []
+        return ([], ProfilingData()) if return_profiling else []
 
-    # Print a decorative separator line.
-    print(f"\n{'='*60}")
-    # Print the processing message.
-    print(f"Processing audio with acoustic sliding window")
-    # Print the execution settings.
-    print(f"Settings: device=CPU")
-    # Print a closing decorative separator line.
-    print(f"{'='*60}")
-
-    # Initialize a metrics tracker to monitor performance across pipeline stages.
-    # Create a new ProfilingData object.
     profiling = ProfilingData()
-    # Record the current wall-clock time for the start of the pipeline.
     pipeline_start = time.time()
 
-    # Step 1: Handle Audio Ingestion & Normalization
-    # Check if the audio_data provided is a string (a file path).
     if isinstance(audio_data, str):
-        # We received a file path. We won't load the file into memory here.
-        # Instead, we pass the path directly to `run_asr_cpu` so it can stream it block-by-block.
-        # Assign the file path directly to the audio variable.
         audio = audio_data
-        # Set the sample rate to the default 16000Hz.
         sample_rate = 16000
-        # Print a profiling log indicating disk streaming.
-        print(f"[PROFILE] Streaming audio directly from disk via FFmpeg pipe")
-    # Execute this block if the audio data is not a string (i.e., it's a tuple).
     else:
-        # We received raw audio data in memory (from an API call or another script).
-        # Unpack the tuple into sample_rate and audio array.
         sample_rate, audio = audio_data
 
-        # Normalize 16-bit integer PCM to float32 (-1.0 to 1.0)
-        # Check if the data type is 16-bit integer.
         if audio.dtype == np.int16:
-            # Convert to float32 and divide by the max int16 value.
             audio = audio.astype(np.float32) / 32768.0
-        # Normalize 32-bit integer PCM to float32
-        # Check if the data type is 32-bit integer.
         elif audio.dtype == np.int32:
-            # Convert to float32 and divide by the max int32 value.
             audio = audio.astype(np.float32) / 2147483648.0
 
-        # If the audio is stereo (2 channels) or more, average them down to mono
-        # Check if the array has more than one dimension.
         if len(audio.shape) > 1:
-            # Calculate the mean across the channel axis to create a mono track.
             audio = audio.mean(axis=1)
 
-        # If the sample rate isn't 16000Hz, we must resample it. FastConformer strictly requires 16kHz.
-        # Check if the sample rate differs from 16000Hz.
         if sample_rate != 16000:
-            # Record the start time of the resampling process.
             resample_start = time.time()
-            # Call the FFmpeg resampler function.
             audio = _resample_audio_ffmpeg(audio, orig_sr=sample_rate, target_sr=16000)
-            # Calculate the time taken and store it in the profiling object.
             profiling.resample_time = time.time() - resample_start
-            # Print a detailed log of the resampling duration and specs.
-            print(f"[PROFILE] Resampling {sample_rate}Hz -> 16000Hz took {profiling.resample_time:.3f}s (audio length: {len(audio)/16000:.1f}s, res_type=FFMPEG_PIPE)")
-            # Update the sample rate variable to the new rate.
             sample_rate = 16000
 
-    # Print a status message indicating the start of ASR.
-    print("[STAGE] Running Acoustic Transcription...")
-
-    # Step 2: Phase 1 (Acoustic Transcription via VAD)
-    # Record the start time of the ASR process.
-    asr_start = time.time()
-    
-    # run_asr_cpu splits the audio into voice segments, transcribes them, and returns raw text blocks.
-    # Call the ASR function, unpacking the returned tuple into variables.
-    (regions, emissions, stage_metrics, asr_time) = run_asr_cpu(
-        # Pass the pre-processed audio, sample rate, and model name.
-        audio, sample_rate, model_name
-    )
-    
-    # Calculate the elapsed wall time since the ASR phase started.
-    wall_time = time.time() - asr_start
-
-    # Move low-level ASR metrics into our global profiling tracker.
-    # Call the sdk_adapt helper to copy metrics.
+    (regions, emissions, stage_metrics, asr_time) = run_asr_cpu(audio, sample_rate, model_name)
     sdk_adapt.metrics_to_profiling(stage_metrics, profiling)
-    # Print the total wall time taken for ASR prep.
-    print(f"[ASR] Acoustic Transcription Phase completed in {wall_time:.2f}s")
-
-    # Extract clean start/end time intervals from the raw VAD regions.
     intervals = sdk_adapt.intervals_from_regions(regions)
 
-    
-    # If no speech was detected in the entire audio file, return empty.
-    # Check if the intervals list is empty.
+    profiling.audio_duration_s = regions.audio_duration_s
+
     if not intervals:
-        # Return an empty list to indicate no speech.
-        return []
+        profiling.total_time = time.time() - pipeline_start
+        return ([], profiling) if return_profiling else []
 
-    # Finalize ASR profiling metrics.
-    # Store the actual processing time taken by the ASR engine.
     profiling.asr_time = asr_time
-    # Print the ASR completion time.
-    print(f"[ASR] Transcription completed in {asr_time:.2f}s")
 
-    # Step 3: Phase 2 (SDK Text Matching — produces segments with words=None)
-    # The raw ASR text (emissions) is aligned to the authentic Uthmani Quranic script via qua_sdk.
-    # Phase 2 now returns BOTH the JSON dict and the segment objects.
-    # Phase 3 (CTC Forced Alignment) will fill in word-level timestamps on the segments.
     json_output, segments = _run_post_asr_pipeline(
         audio, sample_rate, intervals,
         model_name, profiling, pipeline_start,
-        regions=regions,
-        emissions=emissions, stage_metrics=stage_metrics
+        regions=regions, emissions=emissions, stage_metrics=stage_metrics
     )
 
-    # Step 4: Phase 3 — CTC Forced Alignment (fills seg.words with exact timestamps)
-    # Uses the raw logprobs matrix from FastConformer ONNX (shape 1×T×1025)
-    # and the reference text from Phase 2 to run Viterbi forced alignment.
-    print(f"[STAGE] CTC Forced Alignment (word timestamps)...")
     try:
         run_ctc_alignment(
             segments=segments,
@@ -202,49 +90,32 @@ def process_audio(
         )
     except Exception as e:
         import traceback
-        print(f"[Phase3] CTC alignment failed (timestamps will be absent): {e}")
         traceback.print_exc()
 
-    print(f"[STAGE] Post-alignment processing...")
-
-    # Step 5a: Split combined/fused special segments (Isti'adha+Basmala, etc.)
-    # Uses seg.words timestamps from Phase 3 to find the exact split boundary.
     from src.phase4_splitting.fused_split import _split_fused_segments
     segments = _split_fused_segments(segments)
 
-    # Step 5b: Split multi-ayah segments at ayah boundaries using word timestamps.
-    # This replicates what the reference project's batch_align SDK does internally:
-    # each VAD chunk that covers N ayahs becomes N separate segments.
     from src.phase4_splitting.ayah_split import split_segments_at_ayah_boundaries
     segments = split_segments_at_ayah_boundaries(segments)
 
-    # Step 5c: Fuse adjacent same-ayah segments into a single unified Ayah card.
-    # Stitches breath-pause fragments (e.g. 3:72:1-6 and 3:72:8-17) into a single 3:72:1-17 card.
     from src.core.auto_merge import fuse_adjacent_same_ayah_segments
     segments = fuse_adjacent_same_ayah_segments(segments)
 
-    # Step 5d: Stamp sequential segment numbers (1-based).
     for i, seg in enumerate(segments):
         seg.segment_number = i + 1
 
-    # Step 5e: Derive has_missing_words flag via coverage analysis & optionally inject missing words.
     from src.core.missing_words import recompute_missing_words, inject_missing_words
     recompute_missing_words(segments)
     inject_missing_words(segments)
 
-    # Step 5e: Smooth word end timestamps into trailing silence.
-    # Extends each word's end time by up to WORD_SMOOTHING_MAX_STRETCH_S (from config.py),
-    # capped at the next word's start time (or next segment's first word for segment endings).
     from src.phase4_splitting.word_smoothing import smooth_word_timestamps
     smooth_word_timestamps(segments)
 
-    # Step 6: Serialize to the canonical JSON structure.
-    # SegmentInfo.to_json_dict(include_words=True) produces exactly:
-    #   { segment, time_from, time_to, ref_from, ref_to, matched_text, confidence,
-    #     has_missing_words, has_repeated_words, special_type, error, words: [...] }
-    # where each word is { word, location (if present), start, end }.
-    from src.phase4_splitting.export import build_segment_export
-    json_output = build_segment_export(segments, include_words=True)
+    profiling.total_time = time.time() - pipeline_start
 
-    # Step 7: Return the finalized, fully aligned payload.
-    return json_output
+    from src.phase4_splitting.export import build_segment_export
+    payload = build_segment_export(segments, include_words=True)
+
+    if return_profiling:
+        return payload, profiling
+    return payload
