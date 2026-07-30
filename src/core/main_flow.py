@@ -92,27 +92,42 @@ def process_audio(audio_data, model_name="Base", return_profiling: bool = False)
         import traceback
         traceback.print_exc()
 
+    # Split fused specials (Isti'adha+Basmala) using CTC word timestamps.
     from src.phase4_splitting.fused_split import _split_fused_segments
     segments = _split_fused_segments(segments)
 
+    # Split multi-ayah VAD chunks into per-ayah segments using CTC word
+    # timestamps. The reference project's fine-grained VAD naturally produced
+    # one chunk per ayah; this project's Silero VAD fires at any silence and
+    # can span many ayahs per chunk. This step replicates the per-ayah
+    # granularity the reference achieves at the VAD stage.
+    # All metadata (repetitions, wrap_word_ranges, error) is preserved.
     from src.phase4_splitting.ayah_split import split_segments_at_ayah_boundaries
     segments = split_segments_at_ayah_boundaries(segments)
 
-    from src.core.auto_merge import fuse_adjacent_same_ayah_segments
-    segments = fuse_adjacent_same_ayah_segments(segments)
-
+    # Stamp segment numbers.
     for i, seg in enumerate(segments):
         seg.segment_number = i + 1
 
-    from src.core.missing_words import recompute_missing_words, inject_missing_words
+    # Recompute has_missing_words flags from word coverage (single authority).
+    from src.core.missing_words import recompute_missing_words
     recompute_missing_words(segments)
-    inject_missing_words(segments)
 
+    # Optional: extend word end-timestamps into trailing silence.
+    # Both smooth and inject mutate seg.words in-place before serialization.
+    # Controlled by ENABLE_WORD_SMOOTHING in config.py.
     from src.phase4_splitting.word_smoothing import smooth_word_timestamps
     smooth_word_timestamps(segments)
 
+    # Optional: inject missing (unrecited) words into the words array.
+    # Runs before serialization so injected words appear in the output JSON.
+    # Controlled by ENABLE_MISSING_WORD_INJECTION in config.py.
+    from src.core.missing_words import inject_missing_words
+    inject_missing_words(segments)
+
     profiling.total_time = time.time() - pipeline_start
 
+    # Build the core JSON payload (words always included).
     from src.phase4_splitting.export import build_segment_export
     payload = build_segment_export(segments, include_words=True)
 

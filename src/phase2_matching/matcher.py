@@ -112,6 +112,8 @@ def _run_post_asr_pipeline(
                         recited_words = prefix_words + recited_words
                 matched_text = " ".join(recited_words)
 
+        # Match reference project: only flag score==0 as low-confidence.
+        # Low-but-nonzero scores (< 20%) are accepted silently like the reference.
         seg = AlignedSegment(
             id=i,
             region=regions.regions[i],
@@ -119,15 +121,13 @@ def _run_post_asr_pipeline(
             matched_ref=matched_ref,
             confidence=score,
             wrap_word_ranges=wrap_ranges,
-            error=f"Low confidence ({score:.0%})" if 0 < score < 0.2 else ("Failed" if score == 0 else None),
+            error="Low confidence (0%)" if score == 0 else None,
         )
         alignment.segments.append(seg)
 
+    # alignment_to_segment_infos already sets has_repeated_words from wrap_word_ranges.
+    # Do NOT overwrite it — the wrap_ranges are the single source of truth.
     segments = sdk_adapt.alignment_to_segment_infos(alignment, emissions, regions)
-
-    for i, seg in enumerate(segments):
-        seg.has_repeated_words = (i in getattr(sdk_result, "repetition_segments", set()))
-        seg.segment_number = i + 1
 
     profiling.segments_attempted = len(segments)
     profiling.segments_passed = sum(1 for s in segments if s.match_score > 0.0)
