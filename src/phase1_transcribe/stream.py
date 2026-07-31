@@ -37,8 +37,8 @@ def run_asr_cpu(audio_input, sample_rate, model_name="Base"):
     config = sherpa_onnx.VadModelConfig()
     config.silero_vad.model = SILERO_VAD_ONNX_PATH
     config.sample_rate = sample_rate
-    config.silero_vad.min_silence_duration = 0.5
-    config.silero_vad.threshold = 0.15
+    config.silero_vad.min_silence_duration = 0.4
+    config.silero_vad.threshold = 0.20
     config.silero_vad.min_speech_duration = 0.15
     config.silero_vad.max_speech_duration = 20.0
 
@@ -121,10 +121,10 @@ def run_asr_cpu(audio_input, sample_rate, model_name="Base"):
         max_context_samples = int(60.0 * sample_rate)
 
         def get_real_audio_stream(seg_start, seg_length):
-            preroll_samples = int(0.5 * sample_rate)
-            postroll_samples = int(0.5 * sample_rate)
-            target_start = max(0, seg_start - preroll_samples)
-            target_end = seg_start + seg_length + postroll_samples
+            preroll = int(0.2 * sample_rate)
+            postroll = int(0.2 * sample_rate)
+            target_start = max(0, seg_start - preroll)
+            target_end = seg_start + seg_length + postroll
 
             context_start_idx = max(0, total_samples_read - len(context_buffer))
             idx_start = max(0, target_start - context_start_idx)
@@ -175,10 +175,10 @@ def run_asr_cpu(audio_input, sample_rate, model_name="Base"):
         samples = np.ascontiguousarray(audio_input, dtype=np.float32)
 
         def get_real_audio_mem(seg_start, seg_length):
-            preroll_samples = int(0.5 * sample_rate)
-            postroll_samples = int(0.5 * sample_rate)
-            idx_start = max(0, seg_start - preroll_samples)
-            idx_end = seg_start + seg_length + postroll_samples
+            preroll = int(0.2 * sample_rate)
+            postroll = int(0.2 * sample_rate)
+            idx_start = max(0, seg_start - preroll)
+            idx_end = seg_start + seg_length + postroll
             if idx_end > len(audio_input):
                 idx_end = len(audio_input)
             real_chunk = audio_input[idx_start:idx_end]

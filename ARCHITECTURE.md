@@ -43,12 +43,12 @@ Voice Activity Detection segments the incoming raw PCM stream into clean, contin
   - Auto-downloaded to `data/onnx/silero_vad.onnx` if missing.
 - **VAD Tuning Parameters (Ultra-Sensitive for Quran)**:
   - `sample_rate`: 16000 Hz.
-  - `min_silence_duration`: 0.8s (prevents splitting mid-Waqf pauses between Ayahs).
-  - `threshold`: 0.15 (ultra-sensitive — catches soft Arabic consonants ع,ح,ه,خ and vowel tails).
+  - `min_silence_duration`: 0.4s (Aggressive scanning to catch even the shortest breaths between Ayahs).
+  - `threshold`: 0.20 (Sensitive enough to catch soft Arabic consonants, but strict enough to force cuts on silence).
   - `min_speech_duration`: 0.15s (keeps very short Ayahs like طه, يس).
   - `max_speech_duration`: 30.0s (prevents mega-chunks exhausting model context window).
   - `buffer_size_in_seconds`: 30.0s.
-- **Context Padding**: 500ms preroll and 500ms postroll of real audio around each VAD segment, preventing mid-consonant cuts at boundaries.
+- **Context Padding (Audacity-Style Midpoint Cuts)**: 200ms preroll and 200ms postroll. Because `min_silence_duration` is 400ms, extending the audio chunk by exactly 200ms on both sides ensures the cut happens exactly dead-center in the middle of the silence (like a manual Audacity cut), preventing abrupt mid-consonant clips while still eliminating padding-induced duplicate words.
 - **Feeding & Async Parallel Execution Logic**:
   - Small PCM blocks (0.5s) are read sequentially from FFmpeg stdout and fed to `vad.accept_waveform(samples)`.
   - When `vad.is_speech_detected()` triggers, speech segments (`vad.front`) are popped and passed to `extract_speech_segment()`.
@@ -107,13 +107,22 @@ Phase 3 assigns frame-perfect timestamps to every authenticated Uthmani word by 
   - `torchaudio` returns the optimal target sequence labels frame-by-frame (80ms per frame).
   - Since CTC strongly peaks tokens (emitting them for just 1 frame), the algorithm distributes the surrounding `BLANK` frames intelligently (up to a max expansion bound of 320ms) to generate natural, contiguous spoken word boundaries that perfectly track the reciter's pace without drifting or artificially overlapping.
 
-### 4.2 Boundary Enforcement & Exporting (`fused_split.py`, `export.py`)
-- **Ayah Splitting**: After word timings are injected, `_split_fused_segments()` iterates through the data and cleanly cuts massive continuous VAD chunks into separate per-Ayah blocks, accurately tracking repetitions and jumps.
-- **Exporting**: The data is exported via `export.py` into a robust JSON schema matching the original QUA specification perfectly, outputting `wrap_word_ranges` and `repeated_ranges` directly for downstream consumers.
+## 5. Phase 4: Text-Based Ayah Splitting & Export (`src/phase4_splitting/`)
+
+Phase 4 solves the fundamental acoustic limitation of VAD. If a reciter reads two Ayahs continuously without pausing, Phase 1 (VAD) is physically unable to cut between them. Phase 4 uses the true text to surgically correct this.
+
+### 5.1 Fused Segment Splitting (`ayah_split.py`)
+- **Mathematical Slicing**: `_split_fused_segments()` iterates through the final, perfectly-timed words. It compares the Uthmani text sequence of the current VAD chunk against the canonical Quran index.
+- If it detects that a single VAD chunk contains a transition from one Ayah to the next (e.g., Word 15 belongs to Ayah 28, and Word 16 belongs to Ayah 29), it **forces a split** precisely at that frame boundary.
+- This guarantees that the final JSON output maintains absolute 1-to-1 Ayah parity, regardless of whether the reciter paused or merged the Ayahs acoustically.
+
+### 5.2 Exporting (`export.py`)
+- **JSON Formatting**: The separated, per-Ayah blocks are exported into a robust JSON schema (`output.json`) matching the original QUA specification perfectly.
+- Exposes `wrap_word_ranges` and `repeated_ranges` directly for downstream consumers.
 
 ---
 
-## 5. Evolution from Original QUA
+## 6. Evolution from Original QUA
 
 Unlike the original Quranic Universal Aligner which was designed as an interactive Gradio web app, this fork has been ruthlessly optimized for headless CLI execution:
 - **Zero UI Bloat**: Over 700+ lines of interactive manual splitting, manual merging, undo/redo states, and legacy Gradio `gr.State` shapes were purged.
@@ -121,7 +130,7 @@ Unlike the original Quranic Universal Aligner which was designed as an interacti
 
 ---
 
-## 6. AI Troubleshooting Guide
+## 7. AI Troubleshooting Guide
 
 If you are an AI agent analyzing this repository to fix a bug, **use this guide**. Do not make assumptions about standard pipelines. Use the exact variables referenced in this document.
 

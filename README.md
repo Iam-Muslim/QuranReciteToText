@@ -24,6 +24,30 @@ The output will be saved as `output.json` in the same directory, featuring a pro
 
 ---
 
+## 📂 Project Structure & File Architecture
+
+The codebase is strictly modularized into 4 distinct phases, orchestrated by a central entry point:
+
+- `run.py`: The main CLI entry point. It handles user arguments and triggers the pipeline.
+- `src/core/main_flow.py`: The orchestrator. It sequentially routes the audio through the 4 phases and passes data between them.
+
+**Phase 1: Acoustic Transcription** (`src/phase1_transcribe/`)
+- `stream.py`: Handles audio ingestion via FFmpeg, and splits the audio using Silero VAD (Voice Activity Detection). It feeds these acoustic chunks into the neural network.
+- `fastconformer.py`: The ONNX acoustic model that converts the raw audio into Arabic phonetics and CTC probabilities (`logprobs`).
+
+**Phase 2: Text Matching** (`src/phase2_matching/`)
+- `normalize.py`: Cleans the acoustic Arabic output (stripping diacritics/tashkeel) so it can be mathematically matched against the true Quran text.
+- `matcher.py`: Uses C++ Dynamic Programming (`qua_sdk`) to align the imperfect acoustic text exactly to the canonical Uthmani script.
+
+**Phase 3: CTC Forced Alignment** (`src/phase3_alignment/`)
+- `ctc_align.py`: Uses PyTorch/Torchaudio to execute Viterbi forced alignment, mapping the authenticated Uthmani words back onto the acoustic probability matrix to extract frame-perfect timestamps.
+
+**Phase 4: Ayah Splitting & Export** (`src/phase4_splitting/`)
+- `ayah_split.py`: A critical fallback module. Since VAD is "blind" and only cuts on silence, it may merge Ayahs if the reciter doesn't pause. This script uses the true matched Quran text to mathematically slice those merged chunks precisely at the Ayah boundaries.
+- `export.py`: Formats the final, perfected timeline into `output.json`.
+
+---
+
 ##  How It Works
 
 The pipeline abandons legacy overlapping sliding window approaches in favor of dynamic Voice Activity Detection (VAD) segmentation, ensuring optimal performance on a CPU-bound environment:
@@ -84,7 +108,12 @@ python run.py --audio recitation.mp3 --workers 12
 
 ## 📄 JSON Output Structure
 
-The output is saved as a JSON array perfectly mirroring the schema of the original QUA engine, including comprehensive repetition tracking.
+The pipeline generates two distinct outputs during execution:
+
+1. `raw_transcription.json`: The intermediate output from Phase 1. This contains purely acoustic chunks based on VAD silences. **Note:** VAD is blind; if a reciter reads two Ayahs without pausing, this file will merge them.
+2. `output.json`: The final, perfected output from Phase 4. This uses the true Quran text to slice the data mathematically, ensuring exact Ayah boundaries even if the reciter never paused.
+
+The `output.json` is saved as a JSON array perfectly mirroring the schema of the original QUA engine, including comprehensive repetition tracking.
 
 ```json
 [
