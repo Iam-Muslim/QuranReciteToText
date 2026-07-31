@@ -19,8 +19,8 @@ The output will be saved as `output.json` in the same directory, featuring a pro
 ##  Projects Used
 
 - **Original System**: This architecture is ported from [Hetchy's Quranic Universal Aligner](https://huggingface.co/spaces/hetchyy/quranic-universal-aligner). While Hetchy's version utilized heavy models on HuggingFace Space requiring GPUs and interactive UIs, this repository provides a highly optimized, pure CLI version that runs entirely on the CPU.
-- **Acoustic Model**: The transcription is powered by the FastConformer model, utilizing the [Tilawa](https://github.com/yazinsai/tilawa) dataset/model trained by [@yazinsai](https://github.com/yazinsai). 
-- **VAD Segmenter**: Silence and speech segmentation is handled by a lightweight Silero VAD running purely on CPU.
+- **Acoustic Model**: updating link insha'a Allah ..but it is in releases [Model](https://github.com/Iam-Muslim/QuranReciteToText/releases/tag/model)
+- **Adaptive Silence Engine**: Silence and speech segmentation is handled by the **ahmed-alramah PR in Munajjam PR #65 Adaptive Silence Engine** (Librosa RMS peak-relative splitting + 4-Level Progressive Retry Relaxation).[ahmed-alramah Pull Request](https://github.com/Itqan-community/Munajjam/pull/65/changes)
 
 ---
 
@@ -32,7 +32,7 @@ The codebase is strictly modularized into 4 distinct phases, orchestrated by a c
 - `src/core/main_flow.py`: The orchestrator. It sequentially routes the audio through the 4 phases and passes data between them.
 
 **Phase 1: Acoustic Transcription** (`src/phase1_transcribe/`)
-- `stream.py`: Handles audio ingestion via FFmpeg, and splits the audio using Silero VAD (Voice Activity Detection). It feeds these acoustic chunks into the neural network.
+- `stream.py`: Handles audio ingestion via FFmpeg, and splits the audio using Munajjam PR #65 Adaptive Silence Detection. It feeds these acoustic chunks into the neural network.
 - `fastconformer.py`: The ONNX acoustic model that converts the raw audio into Arabic phonetics and CTC probabilities (`logprobs`).
 
 **Phase 2: Text Matching** (`src/phase2_matching/`)
@@ -67,7 +67,7 @@ graph TD
 ```
 
 1. **Audio Ingestion**: Audio files (`.wav`, `.mp3`, etc.) are rapidly loaded and resampled to a consistent 16kHz mono format via an `ffmpeg` pipe for efficiency without memory bloat.
-2. **Dynamic VAD Segmentation**: The audio is processed sequentially using **Silero VAD** to detect genuine speech segments and accurately skip over non-speech silences.
+2. **Adaptive Silence Segmentation**: The audio is processed sequentially using **Munajjam PR #65 Adaptive Silence Engine** to detect genuine speech segments and accurately skip over non-speech silences.
 3. **CPU Acoustic Transcription**: Speech segments undergo exact Kaldi Mel feature extraction and are passed to a native **ONNXRuntime** FastConformer session, yielding a raw sequence of token probabilities (`logprobs`).
 4. **Quranic Text Matching**: The ASR text output is anchored and mathematically aligned to the true QPC Hafs script using a blazing-fast C++ Dynamic Programming engine (`qua_sdk`).
 5. **CTC Forced Alignment**: The exact, authenticated Uthmani words are mapped back onto the acoustic probability matrix via `torchaudio`'s Viterbi forced alignment, yielding mathematically optimal, frame-perfect start and end times for every single word without drifting or overlaps.
@@ -167,3 +167,5 @@ The JSON output unlocks several powerful applications:
 - [x] integrate in QuranCaption application
 - [x] Improve Accuracy 
 - [x] Improve Json output (1:1 schema parity with original QUA)
+
+## outdated data here

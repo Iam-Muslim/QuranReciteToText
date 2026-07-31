@@ -12,7 +12,6 @@ import kaldi_native_fbank as knf
 MODEL_DIR = Path(__file__).parent.parent.parent / "data" / "onnx"
 FASTCONFORMER_ONNX_PATH = str(MODEL_DIR / "qurankarim-fastconformer-q8.onnx")
 FASTCONFORMER_TOKENS_PATH = str(MODEL_DIR / "tokens.txt")
-SILERO_VAD_ONNX_PATH = str(MODEL_DIR / "silero_vad.onnx")
 
 FC_SAMPLE_RATE = 16000
 BLANK_ID = 1024
@@ -54,7 +53,7 @@ class FastConformerONNX:
         with open(FASTCONFORMER_TOKENS_PATH, "r", encoding="utf-8") as f:
             self.vocab = [line.strip("\r\n").rsplit(" ", 1)[0] for line in f if line.strip("\r\n")]
 
-    def transcribe(self, audio: np.ndarray, orig_sr: int = 16000):
+    def transcribe(self, audio: np.ndarray, orig_sr: int = 16000, safe_lufs: bool = True):
         """Transcribes a single chunk of audio and returns text, word_timestamps, logprobs."""
         if self.session is None or len(audio) == 0:
             return "", [], None
@@ -64,15 +63,22 @@ class FastConformerONNX:
         if orig_sr != FC_SAMPLE_RATE:
             clean_audio = librosa.resample(clean_audio, orig_sr=orig_sr, target_sr=FC_SAMPLE_RATE)
 
-        try:
-            meter = pyln.Meter(FC_SAMPLE_RATE)
-            loudness = meter.integrated_loudness(clean_audio)
-            if np.isfinite(loudness) and loudness < 0:
-                clean_audio = pyln.normalize.loudness(clean_audio, loudness, -23.0)
-        except Exception:
-            pass
+        # Check RMS power to prevent amplifying quiet noise floor / silence
+        rms = np.sqrt(np.mean(np.square(clean_audio))) if len(clean_audio) > 0 else 0.0
+        should_normalize = True
+        if safe_lufs and rms < 1e-3:  # RMS noise floor gate (~ -60 dB)
+            should_normalize = False
 
-        peak = np.max(np.abs(clean_audio))
+        if should_normalize:
+            try:
+                meter = pyln.Meter(FC_SAMPLE_RATE)
+                loudness = meter.integrated_loudness(clean_audio)
+                if np.isfinite(loudness) and loudness < 0:
+                    clean_audio = pyln.normalize.loudness(clean_audio, loudness, -23.0)
+            except Exception:
+                pass
+
+        peak = np.max(np.abs(clean_audio)) if len(clean_audio) > 0 else 0.0
         if peak > 1.0:
             clean_audio = clean_audio / peak
 

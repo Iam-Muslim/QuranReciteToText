@@ -30,12 +30,13 @@ def _resample_audio_ffmpeg(audio_array, orig_sr, target_sr=16000):
     return np.frombuffer(stdout, dtype=np.float32)
 
 
-def process_audio(audio_data, model_name="Base", return_profiling: bool = False):
+def process_audio(audio_data, model_name="Base", profile_name="auto", return_profiling: bool = False):
     """Main execution wrapper for the transcription and Quran alignment pipeline.
 
     Args:
         audio_data: Input audio file path or (sample_rate, numpy_array).
         model_name: Acoustic model name.
+        profile_name: Transcription profile preset ('auto', 'fast', 'noisy', 'clean', 'sliding').
         return_profiling: If True, returns (json_output, profiling).
     """
     if audio_data is None:
@@ -64,7 +65,9 @@ def process_audio(audio_data, model_name="Base", return_profiling: bool = False)
             profiling.resample_time = time.time() - resample_start
             sample_rate = 16000
 
-    (regions, emissions, stage_metrics, asr_time) = run_asr_cpu(audio, sample_rate, model_name)
+    (regions, emissions, stage_metrics, asr_time) = run_asr_cpu(
+        audio, sample_rate, model_name=model_name, profile_name=profile_name
+    )
     sdk_adapt.metrics_to_profiling(stage_metrics, profiling)
     intervals = sdk_adapt.intervals_from_regions(regions)
 
@@ -96,11 +99,9 @@ def process_audio(audio_data, model_name="Base", return_profiling: bool = False)
     from src.phase4_splitting.fused_split import _split_fused_segments
     segments = _split_fused_segments(segments)
 
-    # Split multi-ayah VAD chunks into per-ayah segments using CTC word
-    # timestamps. The reference project's fine-grained VAD naturally produced
-    # one chunk per ayah; this project's Silero VAD fires at any silence and
-    # can span many ayahs per chunk. This step replicates the per-ayah
-    # granularity the reference achieves at the VAD stage.
+    # Split multi-ayah audio chunks into per-ayah segments using CTC word
+    # timestamps. Munajjam PR #65's adaptive silence engine naturally produces
+    # 1-to-1 Ayah chunks for high-precision alignment.
     # All metadata (repetitions, wrap_word_ranges, error) is preserved.
     from src.phase4_splitting.ayah_split import split_segments_at_ayah_boundaries
     segments = split_segments_at_ayah_boundaries(segments)

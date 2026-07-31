@@ -66,6 +66,7 @@ def main():
     parser = argparse.ArgumentParser(description="Quran Alignment Runner")
     parser.add_argument("--audio", type=str, required=True, help="Path to input audio file")
     parser.add_argument("--out", type=str, default="output.json", help="Output JSON path")
+    parser.add_argument("--profile", type=str, default="auto", choices=["auto", "fast", "noisy", "clean", "sliding"], help="Transcription profile preset (default: auto)")
     parser.add_argument("--fast", action="store_true", help="Enable parallel transcription")
     parser.add_argument("--workers", type=int, default=None, help="Parallel CPU workers count")
 
@@ -87,7 +88,12 @@ def main():
     from src.core.main_flow import process_audio
 
     try:
-        json_output, profiling = process_audio(audio_data=args.audio, model_name="Base", return_profiling=True)
+        json_output, profiling = process_audio(
+            audio_data=args.audio,
+            model_name="Base",
+            profile_name=args.profile,
+            return_profiling=True
+        )
     except Exception as e:
         import traceback
         traceback.print_exc()

@@ -1,4 +1,4 @@
-"""ASR Runtime — Orchestrates acoustic inference on CPU using Silero VAD."""
+"""ASR Runtime — Orchestrates acoustic inference on CPU using Munajjam PR #65 Adaptive Engine."""
 
 import time
 import subprocess
@@ -6,7 +6,7 @@ import json
 import numpy as np
 import os
 import sys
-import urllib.request
+import librosa
 import concurrent.futures
 
 os.environ["OMP_NUM_THREADS"] = "2"
@@ -15,37 +15,40 @@ os.environ["OPENBLAS_NUM_THREADS"] = "2"
 
 from qua_sdk.schemas import Audio, Region, Regions, Emissions
 from src.phase2_matching.normalize import normalize_arabic
+from src.phase1_transcribe.fastconformer import FastConformerONNX
+from src.phase1_transcribe.silence import detect_non_silent_chunks
 
 
-def _ensure_silero_vad_downloaded(vad_path: str):
-    if not os.path.exists(vad_path):
-        os.makedirs(os.path.dirname(vad_path), exist_ok=True)
-        url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"
-        urllib.request.urlretrieve(url, vad_path)
-
-
-def run_asr_cpu(audio_input, sample_rate, model_name="Base"):
-    """VAD-Based Inference with fixed terminal progress bar."""
+def run_asr_cpu(audio_input, sample_rate: int = 16000, model_name: str = "Base", profile_name: str = "auto"):
+    """Phase 1 Acoustic Inference using Munajjam PR #65 Adaptive Silence Detection Engine."""
     audio_dur = 0.0
-    from qua_sdk.schemas import Emissions, Region, Regions
-    from src.phase1_transcribe.fastconformer import FastConformerONNX, SILERO_VAD_ONNX_PATH
-    import sherpa_onnx
 
-    device = "cpu"
-    _ensure_silero_vad_downloaded(SILERO_VAD_ONNX_PATH)
+    # Load audio array or handle file path
+    if isinstance(audio_input, str):
+        probe_cmd = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', audio_input]
+        try:
+            audio_dur = float(subprocess.check_output(probe_cmd).decode('utf-8').strip())
+        except Exception:
+            audio_dur = 0.0
 
-    config = sherpa_onnx.VadModelConfig()
-    config.silero_vad.model = SILERO_VAD_ONNX_PATH
-    config.sample_rate = sample_rate
-    config.silero_vad.min_silence_duration = 0.4
-    config.silero_vad.threshold = 0.20
-    config.silero_vad.min_speech_duration = 0.15
-    config.silero_vad.max_speech_duration = 20.0
+        audio_pcm, _ = librosa.load(audio_input, sr=sample_rate, mono=True)
+    else:
+        audio_pcm = audio_input.astype(np.float32)
+        audio_dur = len(audio_pcm) / sample_rate
 
-    vad = sherpa_onnx.VoiceActivityDetector(config, buffer_size_in_seconds=30.0)
-    window_size = config.silero_vad.window_size
+    fc = FastConformerONNX.get_instance(device="cpu")
 
-    fc = FastConformerONNX.get_instance(device=device)
+    # Step 1: Detect non-silent speech chunks using Munajjam PR #65 Adaptive Relaxation Engine
+    expected_chunks = max(3, int(audio_dur / 8.0))
+    chunk_ms_list = detect_non_silent_chunks(
+        audio_pcm,
+        min_silence_len=300,
+        silence_thresh=-30,
+        adaptive=True,
+        expected_chunks=expected_chunks,
+        min_chunks_ratio=0.5,
+        sample_rate=sample_rate
+    )
 
     regions_list = []
     tokens = []
@@ -54,154 +57,36 @@ def run_asr_cpu(audio_input, sample_rate, model_name="Base"):
     logprobs_list = []
 
     t_asr_start = time.time()
-    chunk_idx = 0
-
-    max_workers = int(os.environ.get("ASR_CHUNK_WORKERS", 1))
+    max_workers = int(os.environ.get("ASR_CHUNK_WORKERS", 4))
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
     futures = []
 
-    max_processed_sec = 0.0
+    pad_samples = int(0.20 * sample_rate)  # 200ms preroll/postroll context padding
+
     sys.stdout.write("\rTranscribing:   0.0%")
     sys.stdout.flush()
 
-    def _on_chunk_done(fut):
-        nonlocal max_processed_sec
-        try:
-            res = fut.result()
-            chunk_end = res[3] + res[6]
-            if chunk_end > max_processed_sec:
-                max_processed_sec = chunk_end
-            pct = min(100.0, (max_processed_sec / audio_dur) * 100.0) if audio_dur > 0 else 100.0
-            sys.stdout.write(f"\rTranscribing: {pct:5.1f}%")
-            sys.stdout.flush()
-        except Exception:
-            pass
+    def transcribe_chunk_task(chunk_audio, start_sec, idx):
+        text, word_timestamps, logprobs = fc.transcribe(chunk_audio, orig_sr=sample_rate, safe_lufs=True)
+        return (text, word_timestamps, logprobs, start_sec, idx)
 
-    def transcribe_chunk_task(chunk_audio, start_sec, actual_preroll_sec, idx, dur):
-        text, word_timestamps, logprobs = fc.transcribe(chunk_audio, orig_sr=sample_rate)
-        chunk_len_sec = len(chunk_audio) / sample_rate
-        return (text, word_timestamps, logprobs, start_sec, actual_preroll_sec, idx, chunk_len_sec)
+    for idx, (start_ms, end_ms) in enumerate(chunk_ms_list):
+        start_sample = max(0, int((start_ms / 1000.0) * sample_rate) - pad_samples)
+        end_sample = min(len(audio_pcm), int((end_ms / 1000.0) * sample_rate) + pad_samples)
+        actual_start_sec = start_sample / sample_rate
 
-    def extract_speech_segment(segment, get_real_audio_fn):
-        nonlocal chunk_idx
-        start_sec = segment.start / sample_rate
-        chunk_audio, actual_preroll_sec = get_real_audio_fn(segment.start, len(segment.samples))
+        chunk_audio = audio_pcm[start_sample:end_sample]
         if len(chunk_audio) > 0:
-            fut = executor.submit(transcribe_chunk_task, chunk_audio, start_sec, actual_preroll_sec, chunk_idx, audio_dur)
-            fut.add_done_callback(_on_chunk_done)
+            fut = executor.submit(transcribe_chunk_task, chunk_audio, actual_start_sec, idx)
             futures.append(fut)
-            chunk_idx += 1
 
-    if isinstance(audio_input, str):
-        probe_cmd = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', audio_input]
-        try:
-            audio_dur = float(subprocess.check_output(probe_cmd).decode('utf-8').strip())
-        except Exception:
-            audio_dur = 0.0
+    for i, fut in enumerate(futures):
+        text, word_timestamps, logprobs, start_sec, idx = fut.result()
 
-        command = [
-            'ffmpeg', '-v', 'quiet',
-            '-i', audio_input,
-            '-f', 'f32le', '-acodec', 'pcm_f32le', '-ac', '1', '-ar', str(sample_rate),
-            'pipe:1'
-        ]
-        try:
-            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        except FileNotFoundError:
-            raise RuntimeError("ffmpeg not found in system PATH.")
+        pct = min(100.0, ((i + 1) / max(1, len(futures))) * 100.0)
+        sys.stdout.write(f"\rTranscribing: {pct:5.1f}%")
+        sys.stdout.flush()
 
-        block_duration = 0.5
-        chunk_samples = int(block_duration * sample_rate)
-        bytes_per_sample = 4
-        chunk_bytes = chunk_samples * bytes_per_sample
-
-        pcm_buffer = np.array([], dtype=np.float32)
-        context_buffer = np.array([], dtype=np.float32)
-        total_samples_read = 0
-        max_context_samples = int(60.0 * sample_rate)
-
-        def get_real_audio_stream(seg_start, seg_length):
-            preroll = int(0.2 * sample_rate)
-            postroll = int(0.2 * sample_rate)
-            target_start = max(0, seg_start - preroll)
-            target_end = seg_start + seg_length + postroll
-
-            context_start_idx = max(0, total_samples_read - len(context_buffer))
-            idx_start = max(0, target_start - context_start_idx)
-            idx_end = max(0, target_end - context_start_idx)
-
-            if idx_end > len(context_buffer):
-                idx_end = len(context_buffer)
-
-            real_chunk = context_buffer[idx_start:idx_end]
-            actual_preroll_sec = (seg_start - (context_start_idx + idx_start)) / sample_rate
-            return real_chunk, actual_preroll_sec
-
-        while True:
-            new_bytes = process.stdout.read(chunk_bytes)
-            if not new_bytes:
-                break
-
-            samples = np.frombuffer(new_bytes, dtype=np.float32)
-            pcm_buffer = np.concatenate((pcm_buffer, samples))
-            context_buffer = np.concatenate((context_buffer, samples))
-            if len(context_buffer) > max_context_samples:
-                context_buffer = context_buffer[-max_context_samples:]
-            total_samples_read += len(samples)
-
-            while len(pcm_buffer) >= window_size:
-                vad.accept_waveform(pcm_buffer[:window_size])
-                pcm_buffer = pcm_buffer[window_size:]
-
-                while not vad.empty():
-                    extract_speech_segment(vad.front, get_real_audio_stream)
-                    vad.pop()
-
-        if len(pcm_buffer) > 0:
-            vad.accept_waveform(pcm_buffer)
-
-        vad.flush()
-        while not vad.empty():
-            extract_speech_segment(vad.front, get_real_audio_stream)
-            vad.pop()
-
-        process.stdout.close()
-        process.terminate()
-        process.wait()
-
-    else:
-        audio_dur = len(audio_input) / sample_rate
-        window_size = config.silero_vad.window_size
-        samples = np.ascontiguousarray(audio_input, dtype=np.float32)
-
-        def get_real_audio_mem(seg_start, seg_length):
-            preroll = int(0.2 * sample_rate)
-            postroll = int(0.2 * sample_rate)
-            idx_start = max(0, seg_start - preroll)
-            idx_end = seg_start + seg_length + postroll
-            if idx_end > len(audio_input):
-                idx_end = len(audio_input)
-            real_chunk = audio_input[idx_start:idx_end]
-            actual_preroll_sec = (seg_start - idx_start) / sample_rate
-            return real_chunk, actual_preroll_sec
-
-        while len(samples) > window_size:
-            vad.accept_waveform(samples[:window_size])
-            samples = samples[window_size:]
-            while not vad.empty():
-                extract_speech_segment(vad.front, get_real_audio_mem)
-                vad.pop()
-
-        if len(samples) > 0:
-            vad.accept_waveform(samples)
-
-        vad.flush()
-        while not vad.empty():
-            extract_speech_segment(vad.front, get_real_audio_mem)
-            vad.pop()
-
-    for fut in futures:
-        text, word_timestamps, logprobs, start_sec, actual_preroll_sec, idx, _ = fut.result()
         raw_transcriptions.append({
             "chunk": idx + 1,
             "chunk_start_time_seconds": start_sec,
@@ -210,15 +95,8 @@ def run_asr_cpu(audio_input, sample_rate, model_name="Base"):
 
         if word_timestamps:
             for w in word_timestamps:
-                w['start'] = max(0.0, w['start'] - actual_preroll_sec + start_sec)
-                w['end'] = max(0.0, w['end'] - actual_preroll_sec + start_sec)
-
-            if regions_list:
-                prev_end = regions_list[-1].end_s
-                filtered_words = [w for w in word_timestamps if w['start'] >= prev_end - 0.05]
-                if not filtered_words:
-                    continue
-                word_timestamps = filtered_words
+                w['start'] = max(0.0, w['start'] + start_sec)
+                w['end'] = max(0.0, w['end'] + start_sec)
 
             chunk_text = " ".join([w['word'] for w in word_timestamps])
             abs_start_time = word_timestamps[0]['start']
@@ -228,7 +106,7 @@ def run_asr_cpu(audio_input, sample_rate, model_name="Base"):
             norm_text = normalize_arabic(chunk_text)
             tokens.append(list(norm_text) + [' '])
             asr_words_list.append((word_timestamps, start_sec))
-            logprobs_list.append((logprobs, max(0.0, start_sec - actual_preroll_sec)))
+            logprobs_list.append((logprobs, max(0.0, start_sec)))
 
     executor.shutdown(wait=True)
     sys.stdout.write("\rTranscribing: 100.0%\n")
@@ -238,7 +116,6 @@ def run_asr_cpu(audio_input, sample_rate, model_name="Base"):
     regions = Regions(regions=regions_list, audio_duration_s=audio_dur)
     emissions = Emissions(tokens=tokens)
 
-    # Debug file dump disabled to avoid triggering dev server reloads
     with open("raw_transcription.json", "w", encoding="utf-8") as f:
         json.dump({"absolute_raw_transcriptions": raw_transcriptions}, f, ensure_ascii=False, indent=2)
 

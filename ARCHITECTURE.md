@@ -1,4 +1,5 @@
 # QuranReciteToText - Core Architecture & Technical Specification
+## outdated data here
 
 This document provides the definitive, mathematically accurate specification for the Quran transcription pipeline. It is written for researchers, system architects, and AI agents who need to understand or debug the exact data flow and algorithmic decisions of the engine.
 
@@ -6,18 +7,18 @@ This document provides the definitive, mathematically accurate specification for
 
 This system is a lightweight CPU-optimized port of the **Quranic Universal Aligner** originally developed by [hetchyy](https://huggingface.co/spaces/hetchyy/quranic-universal-aligner). While the original system utilized heavy models requiring GPU acceleration on Gradio, this architecture is redesigned for efficiency:
 - **Acoustic Model**: Uses a native ONNXRuntime implementation of the FastConformer model based on [Tilawa](https://github.com/yazinsai/tilawa) by [@yazinsai](https://github.com/yazinsai), executing entirely on the CPU.
-- **VAD Segmenter**: Utilizes a lightweight Silero Voice Activity Detection engine that runs completely on the CPU.
+- **Adaptive Silence Engine**: Uses **Munajjam PR #65 Adaptive Silence Engine** (Librosa RMS peak-relative splitting + 4-Level Progressive Retry Relaxation) for optimal 1-Ayah-per-chunk segmentation.
 
 ## 1. System Overview
 
 This pipeline takes a raw audio file of Quranic recitation and generates mathematically precise, word-by-word timestamps aligned exactly to the Uthmani text of the Quran.
 
-The system enforces **100% CPU execution** and is highly optimized for extreme memory constraints. It avoids loading entire audio files into memory by utilizing an FFmpeg process pipe stream paired with **Silero VAD** (Voice Activity Detection) and **Sherpa-ONNX FastConformer**.
+The system enforces **100% CPU execution** and is highly optimized for extreme memory constraints. It avoids loading entire audio files into memory by utilizing an FFmpeg process pipe stream paired with **Munajjam PR #65 Adaptive Silence Engine** and **FastConformer ONNX**.
 
 Furthermore, the system features **Auto-Environment Bootstrapping**. The `run.py` entrypoint is designed for a zero-configuration plug-and-play experience. When executed, it automatically verifies that all dependencies (including the local SDK wheel) are installed. If missing, it installs them via pip and dynamically restarts the process, requiring no manual setup from the user.
 
 The pipeline operates in three distinct phases:
-1. **Phase 1: Acoustic Transcription & VAD Segmentation** (FFmpeg streaming, Silero VAD, Kaldi Mel extraction, ONNXRuntime inference)
+1. **Phase 1: Acoustic Transcription & Adaptive Silence Segmentation** (Munajjam PR #65 Adaptive Engine, Kaldi Mel extraction, ONNXRuntime inference)
 2. **Phase 2: Text Matching** (Anchoring and DP alignment to exact Uthmani text via `qua_sdk`)
 3. **Phase 3: CTC Forced Alignment** (Viterbi forced alignment via `torchaudio` using FastConformer logprobs to extract frame-perfect timestamps)
 
@@ -37,17 +38,12 @@ To maintain zero-memory footprint on large audio files, audio is ingested direct
   - Spawns `ffmpeg -v quiet -i <path> -f f32le -acodec pcm_f32le -ac 1 -ar 16000 pipe:1`.
   - Reads stdout in small blocks of `0.5s` (`8000` samples = `32,000` bytes of float32 PCM data).
 
-### 2.2 Silero VAD Engine & Audio Feeding (`stream.py`)
-Voice Activity Detection segments the incoming raw PCM stream into clean, continuous speech segments based on natural pauses (waqf).
-- **VAD Model**: `silero_vad.onnx` executed via `sherpa-onnx` (`sherpa_onnx.VoiceActivityDetector`).
-  - Auto-downloaded to `data/onnx/silero_vad.onnx` if missing.
-- **VAD Tuning Parameters (Ultra-Sensitive for Quran)**:
-  - `sample_rate`: 16000 Hz.
-  - `min_silence_duration`: 0.4s (Aggressive scanning to catch even the shortest breaths between Ayahs).
-  - `threshold`: 0.20 (Sensitive enough to catch soft Arabic consonants, but strict enough to force cuts on silence).
-  - `min_speech_duration`: 0.15s (keeps very short Ayahs like طه, يس).
-  - `max_speech_duration`: 30.0s (prevents mega-chunks exhausting model context window).
-  - `buffer_size_in_seconds`: 30.0s.
+### 2.2 Munajjam PR #65 Adaptive Silence Engine & Audio Feeding (`stream.py`)
+Silence detection segments the incoming audio stream into clean, continuous speech segments based on natural pauses (waqf).
+- **Engine**: Munajjam PR #65 Adaptive Silence Engine (`vendor/munajjam_pr65/silence.py`).
+- **Mechanism**:
+  - Uses `librosa.effects.split` for fast RMS peak-relative energy thresholding (`top_db`).
+  - **4-Level Progressive Relaxation Loop**: If initial silence detection extracts fewer chunks than expected ($\text{expected\_chunks} \approx \max(3, \text{int}(\text{audio\_dur} / 8.0))$), the engine automatically executes a 4-level relaxation loop (lowering dB threshold and shortening min silence length down to 50ms) to ensure zero speech is lost.
 - **Context Padding (Audacity-Style Midpoint Cuts)**: 200ms preroll and 200ms postroll. Because `min_silence_duration` is 400ms, extending the audio chunk by exactly 200ms on both sides ensures the cut happens exactly dead-center in the middle of the silence (like a manual Audacity cut), preventing abrupt mid-consonant clips while still eliminating padding-induced duplicate words.
 - **Feeding & Async Parallel Execution Logic**:
   - Small PCM blocks (0.5s) are read sequentially from FFmpeg stdout and fed to `vad.accept_waveform(samples)`.
