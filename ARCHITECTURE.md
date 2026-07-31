@@ -56,7 +56,7 @@ Voice Activity Detection segments the incoming raw PCM stream into clean, contin
   - Upon EOF, `vad.flush()` drains any trailing speech segments, and the executor gathers the perfectly chronological sequence of transcribed text via `future.result()`.
 
 ### 2.3 Native ONNXRuntime FastConformer Acoustic Engine (`fastconformer.py`)
-- **Model**: NVIDIA NeMo FastConformer quantized to int8 (`fastconformer_ar_ctc_q8.onnx`). Auto-downloaded to `data/onnx/fastconformer_ar_ctc_q8.onnx` from the Tilawa GitHub release if missing.
+- **Model**: NVIDIA NeMo FastConformer quantized to int8 (`qurankarim-fastconformer-q8.onnx`). Auto-downloaded to `data/onnx/qurankarim-fastconformer-q8.onnx` if missing.
 - **Runtime**: `onnxruntime.InferenceSession` locked strictly to CPU (`intra_op_num_threads=2`, `inter_op_num_threads=2`). By dropping standard wrappers, the system gains direct access to the model's unadulterated probability distributions (`logprobs`).
 - **Inference & Timestamp Extraction**:
   - Speech samples from each VAD segment are fed into `fc.transcribe(chunk_audio)`.
