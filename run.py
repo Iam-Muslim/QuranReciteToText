@@ -58,8 +58,8 @@ def preload_caches():
 def main():
     script_start = time.time()
 
-    from src.core.updater import check_and_update
-    check_and_update(_app_path, log_callback=lambda x: None)
+    from src.core.updater import start_background_update
+    start_background_update(_app_path, log_callback=lambda x: None)
 
     ensure_dependencies()
 

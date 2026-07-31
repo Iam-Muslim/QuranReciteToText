@@ -8,18 +8,27 @@ import urllib.error
 import zipfile
 import shutil
 import tempfile
+import threading
+import socket
 from pathlib import Path
 
 
 def check_and_update(app_path: Path, log_callback=print):
     """Checks local version against GitHub Release tag and auto-updates if newer release exists."""
     try:
+        from config import ENABLE_AUTO_UPDATE
+        if not ENABLE_AUTO_UPDATE:
+            return
+    except Exception:
+        pass
+
+    try:
         version_file = app_path / "version.json"
         local_version = "v0.0.0"
 
         if version_file.exists():
             try:
-                with open(version_file, "r") as f:
+                with open(version_file, "r", encoding="utf-8") as f:
                     local_version = json.load(f).get("version", "v0.0.0")
             except Exception:
                 pass
@@ -53,7 +62,7 @@ def check_and_update(app_path: Path, log_callback=print):
                             repo_folder = extracted_folders[0]
                             shutil.copytree(repo_folder, app_path, dirs_exist_ok=True)
 
-                            with open(version_file, "w") as f:
+                            with open(version_file, "w", encoding="utf-8") as f:
                                 json.dump({"version": latest_version}, f)
 
                             req_path = app_path / "requirements.txt"
@@ -65,8 +74,29 @@ def check_and_update(app_path: Path, log_callback=print):
                                     log_callback(f"[*] Dependency sync warning: {e}")
 
                             log_callback("[*] Update complete! Restarting...")
-                            os.execv(sys.executable, ['python'] + sys.argv)
-    except urllib.error.URLError:
+                            os.execv(sys.executable, [sys.executable] + sys.argv)
+    except (urllib.error.URLError, socket.timeout, TimeoutError, OSError):
+        # Network timeout or offline, skip silently without delay
         pass
     except Exception as e:
         log_callback(f"[*] Auto-update check bypassed: {e}")
+
+
+def start_background_update(app_path: Path, log_callback=print) -> threading.Thread | None:
+    """Launches check_and_update in a background non-blocking daemon thread."""
+    try:
+        from config import ENABLE_AUTO_UPDATE
+        if not ENABLE_AUTO_UPDATE:
+            return None
+    except Exception:
+        pass
+
+    thread = threading.Thread(
+        target=check_and_update,
+        args=(app_path, log_callback),
+        daemon=True,
+        name="AutoUpdaterThread"
+    )
+    thread.start()
+    return thread
+
