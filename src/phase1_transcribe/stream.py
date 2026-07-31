@@ -238,6 +238,7 @@ def run_asr_cpu(audio_input, sample_rate, model_name="Base"):
     regions = Regions(regions=regions_list, audio_duration_s=audio_dur)
     emissions = Emissions(tokens=tokens)
 
+    # Debug file dump disabled to avoid triggering dev server reloads
     with open("raw_transcription.json", "w", encoding="utf-8") as f:
         json.dump({"absolute_raw_transcriptions": raw_transcriptions}, f, ensure_ascii=False, indent=2)
 

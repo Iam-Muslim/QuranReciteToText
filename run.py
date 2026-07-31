@@ -23,6 +23,8 @@ def ensure_dependencies():
         import numpy
         import librosa
         import pyloudnorm
+        import onnxruntime
+        import kaldi_native_fbank
         import sherpa_onnx
         import qua_sdk
     except ImportError as e:
