@@ -37,12 +37,21 @@ def _run_post_asr_pipeline(
     try:
         resources = get_arabic_resources()
         params = WraparoundDpParams()
-        params.anchor.ngram_size = 5
-        params.anchor.segments = 5
+        from qua_sdk.components.matching.runtimes.runtime import detect_opening_specials
 
-        start_surah, start_ayah = find_anchor_by_voting(transcribed_tokens, resources.ngram_index, params.anchor)
+        special_hits, first_quran_idx = detect_opening_specials(
+            transcribed_tokens,
+            resources.templates,
+            max_special_edit_distance=params.specials.max_special_edit_distance,
+            max_transition_edit_distance=params.specials.max_transition_edit_distance,
+        )
+
+        quran_tokens = transcribed_tokens[first_quran_idx:] if first_quran_idx < len(transcribed_tokens) else transcribed_tokens
+        start_surah, start_ayah = find_anchor_by_voting(quran_tokens, resources.ngram_index, params.anchor)
         if start_surah <= 0:
-            raise ValueError("Could not anchor to any chapter — no n-gram matches found")
+            start_surah, start_ayah = find_anchor_by_voting(transcribed_tokens, resources.ngram_index, params.anchor)
+            if start_surah <= 0:
+                raise ValueError("Could not anchor to any chapter — no n-gram matches found")
 
         chapter_ref = resources.chapter_refs[start_surah]
         start_pointer = 0
@@ -54,8 +63,8 @@ def _run_post_asr_pipeline(
         sdk_result = run_matching_sequence(
             phoneme_texts=transcribed_tokens,
             start_surah=start_surah,
-            first_quran_idx=0,
-            special_results=[],
+            first_quran_idx=first_quran_idx,
+            special_results=special_hits,
             start_pointer=start_pointer,
             params=params,
             resources=resources,
@@ -74,7 +83,11 @@ def _run_post_asr_pipeline(
     alignment = Alignment(chapter=start_surah, segments=[])
 
     for i, res in enumerate(sdk_result.results):
-        matched_text, score, matched_ref, wrap_ranges = res
+        if len(res) == 4:
+            matched_text, score, matched_ref, wrap_ranges = res
+        else:
+            matched_text, score, matched_ref = res
+            wrap_ranges = None
 
         if wrap_ranges and matched_ref and ":" in matched_ref:
             from src.core.quran_index import get_quran_index
@@ -128,6 +141,10 @@ def _run_post_asr_pipeline(
     # alignment_to_segment_infos already sets has_repeated_words from wrap_word_ranges.
     # Do NOT overwrite it — the wrap_ranges are the single source of truth.
     segments = sdk_adapt.alignment_to_segment_infos(alignment, emissions, regions)
+
+    gap_events = [e for e in getattr(sdk_result, "events", []) if isinstance(e, dict) and e.get("event") == "gap"]
+    for seg_info in segments:
+        seg_info._gap_events = gap_events
 
     profiling.segments_attempted = len(segments)
     profiling.segments_passed = sum(1 for s in segments if s.match_score > 0.0)

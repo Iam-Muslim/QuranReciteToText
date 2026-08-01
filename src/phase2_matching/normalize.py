@@ -68,9 +68,12 @@ def get_arabic_resources() -> MatchingResources:
     sub_table = SubCostTable(mode="arabic", default=1.0, pairs={})
     templates = SpecialTemplates(
         mode="arabic",
-        special={"Basmala": list(normalize_arabic("بسم الله الرحمن الرحيم")) + [' ']},
+        special={
+            "Basmala": list(normalize_arabic("بسم الله الرحمن الرحيم")) + [' '],
+            "Isti'adha": list(normalize_arabic("اعوذ بالله من الشيطان الرجيم")) + [' '],
+        },
         transition={"Tahmeed": list(normalize_arabic("سمع الله لمن حمده")) + [' ']},
-        combined={}
+        combined=list(normalize_arabic("اعوذ بالله من الشيطان الرجيم بسم الله الرحمن الرحيم")) + [' ']
     )
 
     return MatchingResources(
