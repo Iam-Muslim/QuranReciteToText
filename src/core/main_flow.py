@@ -106,6 +106,15 @@ def process_audio(audio_data, model_name="Base", profile_name="auto", return_pro
     from src.phase4_splitting.ayah_split import split_segments_at_ayah_boundaries
     segments = split_segments_at_ayah_boundaries(segments)
 
+    # Eliminate fake-repeat / trailing-fragment segments caused by VAD chunk
+    # audio overlap or edge-cuts.  Runs AFTER ayah_split so the dedup sees
+    # clean per-ayah segments and can correctly identify:
+    #   1. Overlap artifacts  (nxt.start < current.end, ref is subset)
+    #   2. Trailing fragments (gap ≈ 0, 1-2 words already in previous seg)
+    # Genuine reciter repetitions (wrap_word_ranges set) are never removed.
+    from src.core.dedup_segments import dedup_vad_overlaps
+    segments = dedup_vad_overlaps(segments)
+
     # Stamp segment numbers.
     for i, seg in enumerate(segments):
         seg.segment_number = i + 1

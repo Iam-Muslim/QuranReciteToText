@@ -68,7 +68,10 @@ def split_segments_at_ayah_boundaries(segments: list[SegmentInfo]) -> list[Segme
     # Minimum silence gap (seconds) between the end of the last word of one
     # ayah group and the start of the first word of the next to justify a split.
     # Below this threshold the groups are merged back (reciter read continuously).
-    MIN_SPLIT_GAP_S = 0.15
+    # Set to 0.08s: the reference project's neural Waqf VAD fires on pauses as
+    # short as ~100ms.  CTC timestamp jitter is typically < 40ms, so 80ms is a
+    # safe floor that honours genuine ayah boundaries while ignoring jitter.
+    MIN_SPLIT_GAP_S = 0.08
 
     from qua_sdk.domain import SPECIAL_NAMES as ALL_SPECIAL_REFS
     result: list[SegmentInfo] = []
