@@ -19,7 +19,7 @@ from src.phase1_transcribe.fastconformer import FastConformerONNX
 from src.phase1_transcribe.silence import detect_non_silent_chunks
 
 
-def run_asr_cpu(audio_input, sample_rate: int = 16000, model_name: str = "Base", profile_name: str = "auto"):
+def run_asr_cpu(audio_input, sample_rate: int = 16000, model_name: str = "Base", profile_name: str = "auto", progress_callback=None):
     """Phase 1 Acoustic Inference using Munajjam PR #65 Adaptive Silence Detection Engine."""
     audio_dur = 0.0
 
@@ -144,6 +144,11 @@ def run_asr_cpu(audio_input, sample_rate: int = 16000, model_name: str = "Base",
         pct = min(100.0, ((i + 1) / max(1, len(futures))) * 100.0)
         sys.stdout.write(f"\rTranscribing: {pct:5.1f}%")
         sys.stdout.flush()
+        if progress_callback:
+            try:
+                progress_callback(pct, f"Transcribing audio: {pct:.1f}%")
+            except Exception:
+                pass
 
         raw_transcriptions.append({
             "chunk": idx + 1,

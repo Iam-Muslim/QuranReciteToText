@@ -30,7 +30,7 @@ def _resample_audio_ffmpeg(audio_array, orig_sr, target_sr=16000):
     return np.frombuffer(stdout, dtype=np.float32)
 
 
-def process_audio(audio_data, model_name="Base", profile_name="auto", return_profiling: bool = False):
+def process_audio(audio_data, model_name="Base", profile_name="auto", return_profiling: bool = False, progress_callback=None):
     """Main execution wrapper for the transcription and Quran alignment pipeline.
 
     Args:
@@ -38,6 +38,7 @@ def process_audio(audio_data, model_name="Base", profile_name="auto", return_pro
         model_name: Acoustic model name.
         profile_name: Transcription profile preset ('auto', 'fast', 'noisy', 'clean', 'sliding').
         return_profiling: If True, returns (json_output, profiling).
+        progress_callback: Optional callable(pct, msg) for progress tracking.
     """
     if audio_data is None:
         return ([], ProfilingData()) if return_profiling else []
@@ -66,7 +67,7 @@ def process_audio(audio_data, model_name="Base", profile_name="auto", return_pro
             sample_rate = 16000
 
     (regions, emissions, stage_metrics, asr_time) = run_asr_cpu(
-        audio, sample_rate, model_name=model_name, profile_name=profile_name
+        audio, sample_rate, model_name=model_name, profile_name=profile_name, progress_callback=progress_callback
     )
     sdk_adapt.metrics_to_profiling(stage_metrics, profiling)
     intervals = sdk_adapt.intervals_from_regions(regions)

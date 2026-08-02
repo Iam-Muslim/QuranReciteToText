@@ -205,6 +205,9 @@ def _transfer_leading_conjunction(current: SegmentInfo, nxt: SegmentInfo) -> tup
             _original_alignment_idx=current._original_alignment_idx,
         )
 
+        new_nxt_start = current.start_time + (last_curr_word.get("start", 0.0) or 0.0)
+        new_nxt_start = round(new_nxt_start, 3)
+
         prep_word = dict(last_curr_word)
         prep_word["start"] = 0.0
         prep_word["end"] = round((last_curr_word.get("end", 0.0) or 0.0) - (last_curr_word.get("start", 0.0) or 0.0), 4)
@@ -213,10 +216,13 @@ def _transfer_leading_conjunction(current: SegmentInfo, nxt: SegmentInfo) -> tup
         new_nxt_words = [prep_word]
         for w in nxt_words:
             entry = dict(w)
+            orig_abs_start = nxt.start_time + (w.get("start", 0.0) or 0.0)
+            orig_abs_end = nxt.start_time + (w.get("end", 0.0) or 0.0)
+            
             if entry.get("start") is not None:
-                entry["start"] = round(entry["start"] + duration, 4)
+                entry["start"] = round(max(0.0, orig_abs_start - new_nxt_start), 4)
             if entry.get("end") is not None:
-                entry["end"] = round(entry["end"] + duration, 4)
+                entry["end"] = round(max(0.0, orig_abs_end - new_nxt_start), 4)
             new_nxt_words.append(entry)
 
         n_locs = [w.get("location") for w in new_nxt_words if w.get("location") and not w.get("location","").startswith("0:0:")]
@@ -224,7 +230,7 @@ def _transfer_leading_conjunction(current: SegmentInfo, nxt: SegmentInfo) -> tup
         n_text = " ".join(w.get("word", "") for w in new_nxt_words if not w.get("is_missing"))
 
         new_nxt = SegmentInfo(
-            start_time=c_end,
+            start_time=new_nxt_start,
             end_time=nxt.end_time,
             transcribed_text=nxt.transcribed_text,
             matched_text=n_text,
@@ -249,6 +255,9 @@ def dedup_vad_overlaps(segments: list[SegmentInfo]) -> list[SegmentInfo]:
     """Remove phantom duplicate/fragment segments and trim head overlaps from VAD chunking."""
     if not segments:
         return segments
+
+    # Merge false VAD splits in the same Ayah FIRST, before any transfers
+    segments = merge_continuous_vad_splits(segments)
 
     try:
         from qua_sdk.domain import SPECIAL_NAMES as _SPECIALS
@@ -339,4 +348,89 @@ def _extend_end(seg: SegmentInfo, new_end: float) -> SegmentInfo:
         repeated_text=seg.repeated_text,
         words=seg.words,
         _original_alignment_idx=seg._original_alignment_idx,
+    )
+
+
+def merge_continuous_vad_splits(segments: list[SegmentInfo]) -> list[SegmentInfo]:
+    """Merge adjacent segments if they are in the same Ayah and gap < 0.4s."""
+    MIN_SPLIT_GAP_S = 0.4
+    if not segments:
+        return segments
+        
+    result = []
+    current = segments[0]
+    
+    for nxt in segments[1:]:
+        curr_ref = current.matched_ref or ""
+        nxt_ref = nxt.matched_ref or ""
+        
+        c_parts = curr_ref.split("-")[0].split(":")
+        n_parts = nxt_ref.split("-")[0].split(":")
+        
+        same_ayah = (len(c_parts) >= 2 and len(n_parts) >= 2 and 
+                     c_parts[0] == n_parts[0] and c_parts[1] == n_parts[1])
+                     
+        if same_ayah:
+            curr_words = current.words or []
+            nxt_words = nxt.words or []
+            last_word = curr_words[-1] if curr_words else None
+            first_word = nxt_words[0] if nxt_words else None
+            
+            c_end_time = current.start_time + (last_word.get("end", 0.0) if last_word else 0.0)
+            n_start_time = nxt.start_time + (first_word.get("start", 0.0) if first_word else 0.0)
+            
+            gap = n_start_time - c_end_time
+            if '17:56' in curr_ref or '17:56' in nxt_ref:
+                print(f"[DEBUG 17:56] curr_ref={curr_ref} nxt_ref={nxt_ref} gap={gap} c_end={c_end_time} n_start={n_start_time}")
+                
+            if gap < MIN_SPLIT_GAP_S:
+                current = _merge_two_segments(current, nxt)
+                print(f"[DEDUP] Fused continuous false VAD split in same ayah: {current.matched_ref}")
+                continue
+                
+        result.append(current)
+        current = nxt
+        
+    result.append(current)
+    return result
+
+
+def _merge_two_segments(seg1: SegmentInfo, seg2: SegmentInfo) -> SegmentInfo:
+    words1 = seg1.words or []
+    words2 = seg2.words or []
+    
+    merged_words = list(words1)
+    
+    offset = seg2.start_time - seg1.start_time
+    for w in words2:
+        entry = dict(w)
+        if entry.get("start") is not None:
+            entry["start"] = round(entry["start"] + offset, 4)
+        if entry.get("end") is not None:
+            entry["end"] = round(entry["end"] + offset, 4)
+        merged_words.append(entry)
+        
+    locs = [w.get("location") for w in merged_words if w.get("location") and not w.get("location", "").startswith("0:0:")]
+    new_ref = locs[0] if locs and locs[0] == locs[-1] else f"{locs[0]}-{locs[-1]}" if locs else seg1.matched_ref
+    
+    new_text = " ".join(w.get("word", "") for w in merged_words if not w.get("is_missing"))
+    
+    has_rep = seg1.has_repeated_words or seg2.has_repeated_words
+    wrap_ranges = seg1.wrap_word_ranges or seg2.wrap_word_ranges
+    
+    return SegmentInfo(
+        start_time=seg1.start_time,
+        end_time=seg2.end_time,
+        transcribed_text=seg1.transcribed_text,
+        matched_text=new_text,
+        matched_ref=new_ref,
+        match_score=min(seg1.match_score, seg2.match_score),
+        error=seg1.error or seg2.error,
+        has_missing_words=seg1.has_missing_words or seg2.has_missing_words,
+        has_repeated_words=has_rep,
+        wrap_word_ranges=wrap_ranges,
+        repeated_ranges=seg1.repeated_ranges,
+        repeated_text=seg1.repeated_text,
+        words=merged_words,
+        _original_alignment_idx=seg1._original_alignment_idx,
     )
