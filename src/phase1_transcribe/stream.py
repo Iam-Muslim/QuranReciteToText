@@ -31,7 +31,10 @@ def run_asr_cpu(audio_input, sample_rate: int = 16000, model_name: str = "Base",
         except Exception:
             audio_dur = 0.0
 
-        audio_pcm, _ = librosa.load(audio_input, sr=sample_rate, mono=True)
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            audio_pcm, _ = librosa.load(audio_input, sr=sample_rate, mono=True)
     else:
         audio_pcm = audio_input.astype(np.float32)
         audio_dur = len(audio_pcm) / sample_rate

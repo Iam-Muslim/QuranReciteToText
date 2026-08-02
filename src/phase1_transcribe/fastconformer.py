@@ -91,7 +91,7 @@ class FastConformerONNX:
         opts.frame_opts.window_type = "hann"
         opts.mel_opts.low_freq = 0.0
         opts.mel_opts.high_freq = 0.0
-        opts.frame_opts.preemph_coeff = 0.97
+        opts.frame_opts.preemph_coeff = 0.0
         opts.frame_opts.frame_shift_ms = 10.0
         opts.frame_opts.frame_length_ms = 25.0
         opts.mel_opts.is_librosa = True
