@@ -1,40 +1,37 @@
-"""Segment Deduplication — Eliminate VAD Chunk Overlap/Fragment Artifacts.
+"""Segment Deduplication & Refinement Engine — VAD Artifact & Boundary Cleaner.
 
-Two types of VAD padding artifacts can appear in the output:
+Handles three types of post-ASR VAD/segmentation artifacts:
 
-1. OVERLAP ARTIFACT (original problem):
-   When two adjacent chunks share overlapping audio (padding > gap/2),
-   FastConformer transcribes boundary words twice.  The aligner produces a
-   "phantom" segment whose absolute time OVERLAPS the preceding segment
-   AND whose Quran ref is a strict subset of that segment's ref.
-   Detection: nxt.start_time < current.end_time  AND  ref subset.
+1. OVERLAP ARTIFACTS:
+   Adjacent chunks sharing overlapping audio (padding > gap/2), producing
+   a duplicate segment whose ref location is a strict subset of the previous segment.
+   Detection: nxt.start_time < current.end_time AND ref subset.
 
-2. TRAILING FRAGMENT (new, after gap-clamped padding):
-   After Fix 1 (gap-clamped padding) the audio no longer overlaps, but the
-   VAD silence cut happens at the very end of (or mid-) the last word of
-   chunk N.  Chunk N+1 starts at exactly the same sample, so its first
-   transcribed word is the tail of the same word already in chunk N.
-   This creates an adjacent (not overlapping) segment with 1–2 words whose
-   locations are already in the previous segment, and a negligible or zero
-   gap between the segments.
-   Detection: |nxt.start_time - current.end_time| <= ADJACENT_GAP_THRESH
-              AND nxt's ref locations are all already covered by current.
+2. TRAILING FRAGMENTS:
+   Adjacent chunks touching in time (gap <= 500ms) where the VAD cut lands on
+   the edge of the last word, producing a 1–2 word fragment whose locations are
+   already in the previous segment.
+   Detection: |gap| <= 500ms AND nxt word locations ⊂ current word locations.
 
-Both artifact types must be removed while preserving GENUINE reciter
-repetitions:
-  - Real repeats advance forward in time and the SDK sets wrap_word_ranges.
-  - The matched_ref of a real repeat starts BEFORE the repeated section, so
-    it is NOT a simple suffix/subset of the previous segment's ref.
+3. HEAD OVERLAP TRIMMING:
+   When nxt segment starts with the SAME word location that ended current segment
+   (e.g., current ends at '17:81:3', nxt starts at '17:81:3-9'). The duplicate word
+   is trimmed from the beginning of nxt.
+
+4. LEADING PARTICLE TRANSFER:
+   When current segment ends with a single leading particle (e.g. 'وَإِنْ', 'فَإِنْ')
+   at location L after a Waqf pause mark ('ۚ', 'ۘ', etc.) on location L-1, and nxt starts
+   with location L+1 ('عُدتُّمْ'), particle L is transferred to the start of nxt.
+
+GENUINE REPEATS (wrap_word_ranges / has_repeated_words) are strictly preserved.
 """
 
 from __future__ import annotations
 from src.core.segment_types import SegmentInfo
 
-# A next segment is "adjacent" (touching, not overlapping) when the gap
-# between its start and the current segment's end is within this threshold.
-# 50 ms covers timestamp rounding noise while staying well below any real
-# silence that would indicate a new sentence.
-ADJACENT_GAP_THRESH_S = 0.05  # 50 ms
+ADJACENT_GAP_THRESH_S = 0.50  # 500 ms
+LEADING_PARTICLES = {"وَإِنْ", "فَإِنْ", "وَإِذْ", "فَإِذَا", "وَإِنَّ", "وَإِذَا"}
+WAQF_MARKS = {"ۚ", "ۘ", "ۗ", "ۖ", "ۚ", "ۛ"}
 
 
 def _parse_ref(ref: str) -> tuple[str, str] | None:
@@ -66,7 +63,6 @@ def _ref_is_subset_of(inner_ref: str, outer_ref: str) -> bool:
     o_to   = _loc_tuple(outer[1])
     if not all([i_from, i_to, o_from, o_to]):
         return False
-    # Must be same surah for this to be a simple padding artifact
     if i_from[0] != o_from[0]:
         return False
     return o_from <= i_from and i_to <= o_to
@@ -78,66 +74,179 @@ def _is_genuine_repeat(seg: SegmentInfo) -> bool:
 
 
 def _trailing_fragment(current: SegmentInfo, nxt: SegmentInfo) -> bool:
-    """True when nxt is a trailing single-word fragment of current.
-
-    Conditions:
-    1. The segments are adjacent or touching (gap <= ADJACENT_GAP_THRESH_S).
-    2. nxt contains 1 or 2 words.
-    3. ALL of nxt's word locations are already present in current's words.
-    4. Neither segment is a genuine reciter repetition.
-    """
+    """True when nxt is a trailing single-word fragment of current."""
     gap = nxt.start_time - current.end_time
 
-    # DEBUG: trace any close pair
-    if abs(gap) <= 0.1:
-        curr_ref = current.matched_ref or ''
-        nxt_ref  = nxt.matched_ref or ''
-        nxt_words = nxt.words or []
-        curr_words = current.words or []
-        curr_locs = {w.get("location") for w in curr_words if w.get("location")}
-        nxt_locs  = {w.get("location") for w in nxt_words if w.get("location")}
-        print(f"[DEDUP-TRACE] gap={gap:.4f} curr={curr_ref!r}({len(curr_words)}w) "
-              f"nxt={nxt_ref!r}({len(nxt_words)}w) "
-              f"nxt_locs={nxt_locs} subset={nxt_locs <= curr_locs if nxt_locs else 'N/A'} "
-              f"curr_genuine={_is_genuine_repeat(current)} nxt_genuine={_is_genuine_repeat(nxt)}")
-
     if gap > ADJACENT_GAP_THRESH_S or gap < -ADJACENT_GAP_THRESH_S:
-        return False  # not adjacent
+        return False
 
     if _is_genuine_repeat(current) or _is_genuine_repeat(nxt):
         return False
 
     nxt_words = nxt.words or []
-    # Only handle short fragments (1–2 words)
     if not nxt_words or len(nxt_words) > 2:
         return False
 
-    # Collect all word locations already in current
     curr_locs = {w.get("location") for w in (current.words or []) if w.get("location")}
     nxt_locs  = {w.get("location") for w in nxt_words if w.get("location")}
 
     if not nxt_locs:
         return False
 
-    # Fragment if ALL of nxt's locations are already in current
     return nxt_locs <= curr_locs
 
 
+def _trim_head_overlap(current: SegmentInfo, nxt: SegmentInfo) -> SegmentInfo | None:
+    """Trims duplicate head word from nxt if it matches current's last word location."""
+    if _is_genuine_repeat(current) or _is_genuine_repeat(nxt):
+        return None
+
+    curr_words = current.words or []
+    nxt_words = nxt.words or []
+    if not curr_words or not nxt_words or len(nxt_words) <= 1:
+        return None
+
+    last_curr_loc = curr_words[-1].get("location")
+    first_nxt_loc = nxt_words[0].get("location")
+
+    if not last_curr_loc or not first_nxt_loc or last_curr_loc != first_nxt_loc:
+        return None
+
+    if last_curr_loc.startswith("0:0:"):
+        return None
+
+    trimmed_words = nxt_words[1:]
+    new_locs = [w.get("location") for w in trimmed_words if w.get("location") and not w.get("location", "").startswith("0:0:")]
+    if not new_locs:
+        return None
+
+    ref_from = new_locs[0]
+    ref_to = new_locs[-1]
+    new_ref = ref_from if ref_from == ref_to else f"{ref_from}-{ref_to}"
+    new_text = " ".join(w.get("word", "") for w in trimmed_words if not w.get("is_missing"))
+    new_start = round(nxt.start_time + (trimmed_words[0].get("start", 0.0) or 0.0), 3)
+
+    offset = new_start - nxt.start_time
+    adjusted_words = []
+    for w in trimmed_words:
+        entry = dict(w)
+        if entry.get("start") is not None:
+            entry["start"] = round(max(0.0, entry["start"] - offset), 4)
+        if entry.get("end") is not None:
+            entry["end"] = round(max(0.0, entry["end"] - offset), 4)
+        adjusted_words.append(entry)
+
+    print(f"[DEDUP] Trimmed head overlap '{first_nxt_loc}' from nxt segment: {nxt.matched_ref!r} -> {new_ref!r}")
+    return SegmentInfo(
+        start_time=new_start,
+        end_time=nxt.end_time,
+        transcribed_text=nxt.transcribed_text,
+        matched_text=new_text,
+        matched_ref=new_ref,
+        match_score=nxt.match_score,
+        error=nxt.error,
+        has_missing_words=nxt.has_missing_words,
+        has_repeated_words=nxt.has_repeated_words,
+        wrap_word_ranges=nxt.wrap_word_ranges,
+        repeated_ranges=nxt.repeated_ranges,
+        repeated_text=nxt.repeated_text,
+        words=adjusted_words,
+        _original_alignment_idx=nxt._original_alignment_idx,
+    )
+
+
+def _transfer_leading_conjunction(current: SegmentInfo, nxt: SegmentInfo) -> tuple[SegmentInfo, SegmentInfo] | None:
+    """Transfers a trailing leading conjunction (like 'وَإِنْ') from current to nxt when reciter paused before it."""
+    curr_words = current.words or []
+    nxt_words = nxt.words or []
+
+    if len(curr_words) < 2 or not nxt_words:
+        return None
+
+    last_curr_word = curr_words[-1]
+    last_word_text = last_curr_word.get("word", "")
+
+    if not any(last_word_text.startswith(p) or last_word_text == p for p in LEADING_PARTICLES):
+        return None
+
+    prev_curr_word = curr_words[-2]
+    prev_word_text = prev_curr_word.get("word", "")
+    if not any(m in prev_word_text for m in WAQF_MARKS):
+        return None
+
+    last_curr_loc = _loc_tuple(last_curr_word.get("location", ""))
+    first_nxt_loc = _loc_tuple(nxt_words[0].get("location", ""))
+    if not last_curr_loc or not first_nxt_loc:
+        return None
+
+    if last_curr_loc[0] == first_nxt_loc[0] and last_curr_loc[1] == first_nxt_loc[1] and last_curr_loc[2] + 1 == first_nxt_loc[2]:
+        new_curr_words = curr_words[:-1]
+        c_locs = [w.get("location") for w in new_curr_words if w.get("location") and not w.get("location","").startswith("0:0:")]
+        if not c_locs:
+            return None
+        c_ref = c_locs[0] if c_locs[0] == c_locs[-1] else f"{c_locs[0]}-{c_locs[-1]}"
+        c_text = " ".join(w.get("word", "") for w in new_curr_words if not w.get("is_missing"))
+        c_end = round(current.start_time + (new_curr_words[-1].get("end", 0.0) or 0.0), 3)
+
+        new_curr = SegmentInfo(
+            start_time=current.start_time,
+            end_time=c_end,
+            transcribed_text=current.transcribed_text,
+            matched_text=c_text,
+            matched_ref=c_ref,
+            match_score=current.match_score,
+            error=current.error,
+            has_missing_words=current.has_missing_words,
+            has_repeated_words=current.has_repeated_words,
+            wrap_word_ranges=current.wrap_word_ranges,
+            repeated_ranges=current.repeated_ranges,
+            repeated_text=current.repeated_text,
+            words=new_curr_words,
+            _original_alignment_idx=current._original_alignment_idx,
+        )
+
+        prep_word = dict(last_curr_word)
+        prep_word["start"] = 0.0
+        prep_word["end"] = round((last_curr_word.get("end", 0.0) or 0.0) - (last_curr_word.get("start", 0.0) or 0.0), 4)
+
+        duration = prep_word["end"]
+        new_nxt_words = [prep_word]
+        for w in nxt_words:
+            entry = dict(w)
+            if entry.get("start") is not None:
+                entry["start"] = round(entry["start"] + duration, 4)
+            if entry.get("end") is not None:
+                entry["end"] = round(entry["end"] + duration, 4)
+            new_nxt_words.append(entry)
+
+        n_locs = [w.get("location") for w in new_nxt_words if w.get("location") and not w.get("location","").startswith("0:0:")]
+        n_ref = n_locs[0] if n_locs[0] == n_locs[-1] else f"{n_locs[0]}-{n_locs[-1]}"
+        n_text = " ".join(w.get("word", "") for w in new_nxt_words if not w.get("is_missing"))
+
+        new_nxt = SegmentInfo(
+            start_time=c_end,
+            end_time=nxt.end_time,
+            transcribed_text=nxt.transcribed_text,
+            matched_text=n_text,
+            matched_ref=n_ref,
+            match_score=nxt.match_score,
+            error=nxt.error,
+            has_missing_words=nxt.has_missing_words,
+            has_repeated_words=nxt.has_repeated_words,
+            wrap_word_ranges=nxt.wrap_word_ranges,
+            repeated_ranges=nxt.repeated_ranges,
+            repeated_text=nxt.repeated_text,
+            words=new_nxt_words,
+            _original_alignment_idx=nxt._original_alignment_idx,
+        )
+        print(f"[DEDUP] Transferred leading particle '{last_word_text}' from seg end to nxt seg start.")
+        return new_curr, new_nxt
+
+    return None
+
+
 def dedup_vad_overlaps(segments: list[SegmentInfo]) -> list[SegmentInfo]:
-    """Remove phantom duplicate/fragment segments from VAD chunk padding.
-
-    Two cases are handled (see module docstring):
-    1. Overlap artifacts  — next segment starts before current ends,
-                            ref is a subset.
-    2. Trailing fragments — next segment touches (gap ≈ 0) with 1–2 words
-                            already present in the current segment.
-
-    Genuine reciter repetitions (wrap_word_ranges / has_repeated_words) are
-    never removed.
-
-    Returns a deduplicated list with segment end-times extended to cover any
-    absorbed fragments.
-    """
+    """Remove phantom duplicate/fragment segments and trim head overlaps from VAD chunking."""
     if not segments:
         return segments
 
@@ -158,11 +267,21 @@ def dedup_vad_overlaps(segments: list[SegmentInfo]) -> list[SegmentInfo]:
             current = nxt
             continue
 
+        # Check leading particle transfer
+        trans_res = _transfer_leading_conjunction(current, nxt)
+        if trans_res is not None:
+            current, nxt = trans_res
+
+        # Check head overlap trimming
+        trimmed_nxt = _trim_head_overlap(current, nxt)
+        if trimmed_nxt is not None:
+            nxt = trimmed_nxt
+
         curr_ref = current.matched_ref or ""
         nxt_ref  = nxt.matched_ref     or ""
 
         # ── Case 1: Overlap artifact ─────────────────────────────────────
-        time_overlaps = nxt.start_time < current.end_time - 0.001  # 1ms tolerance
+        time_overlaps = nxt.start_time < current.end_time - 0.001
         if time_overlaps:
             nxt_is_subset  = _ref_is_subset_of(nxt_ref,  curr_ref)
             curr_is_subset = (not nxt_is_subset) and _ref_is_subset_of(curr_ref, nxt_ref)
@@ -173,18 +292,12 @@ def dedup_vad_overlaps(segments: list[SegmentInfo]) -> list[SegmentInfo]:
                 new_end = max(current.end_time, nxt.end_time)
                 current = _extend_end(current, new_end)
                 n_removed += 1
-                print(
-                    f"[DEDUP] Overlap artifact dropped: ref={nxt_ref!r} "
-                    f"⊂ {curr_ref!r}, overlap={current.end_time - nxt.start_time:.3f}s"
-                )
+                print(f"[DEDUP] Overlap artifact dropped: ref={nxt_ref!r} ⊂ {curr_ref!r}")
                 continue
 
             if curr_is_subset and not curr_genuine and not nxt_genuine:
                 n_removed += 1
-                print(
-                    f"[DEDUP] Overlap artifact dropped (reversed): ref={curr_ref!r} "
-                    f"⊂ {nxt_ref!r}"
-                )
+                print(f"[DEDUP] Overlap artifact dropped (reversed): ref={curr_ref!r} ⊂ {nxt_ref!r}")
                 current = nxt
                 continue
 
@@ -193,10 +306,7 @@ def dedup_vad_overlaps(segments: list[SegmentInfo]) -> list[SegmentInfo]:
             new_end = max(current.end_time, nxt.end_time)
             current = _extend_end(current, new_end)
             n_removed += 1
-            print(
-                f"[DEDUP] Trailing fragment dropped: ref={nxt_ref!r} "
-                f"(already in {curr_ref!r}), gap={nxt.start_time - (new_end - nxt.end_time + current.end_time):.3f}s"
-            )
+            print(f"[DEDUP] Trailing fragment dropped: ref={nxt_ref!r} (already in {curr_ref!r})")
             continue
 
         result.append(current)
@@ -207,7 +317,7 @@ def dedup_vad_overlaps(segments: list[SegmentInfo]) -> list[SegmentInfo]:
     if n_removed:
         print(f"[DEDUP] Removed {n_removed} VAD-artifact segment(s).")
     else:
-        print("[DEDUP] No VAD-overlap duplicates found.")
+        print("[DEDUP] Cleaned segment boundaries.")
 
     return result
 

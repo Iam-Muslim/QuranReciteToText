@@ -115,6 +115,11 @@ def process_audio(audio_data, model_name="Base", profile_name="auto", return_pro
     from src.core.dedup_segments import dedup_vad_overlaps
     segments = dedup_vad_overlaps(segments)
 
+    # Fuse adjacent segments belonging to the SAME Ayah when the reciter
+    # recited continuously without a long pause (e.g. 17:56:1-9 + 17:56:10-13 -> 17:56:1-13).
+    from src.core.auto_merge import fuse_adjacent_same_ayah_segments
+    segments = fuse_adjacent_same_ayah_segments(segments)
+
     # Stamp segment numbers.
     for i, seg in enumerate(segments):
         seg.segment_number = i + 1
