@@ -16,10 +16,18 @@ os.environ["OPENBLAS_NUM_THREADS"] = "2"
 from qua_sdk.schemas import Audio, Region, Regions, Emissions
 from src.phase2_matching.normalize import normalize_arabic
 from src.phase1_transcribe.fastconformer import FastConformerONNX
-from src.phase1_transcribe.silence import detect_non_silent_chunks
+from src.phase1_transcribe.silence import detect_acoustic_silences, detect_non_silent_chunks
 
 
-def run_asr_cpu(audio_input, sample_rate: int = 16000, model_name: str = "Base", profile_name: str = "auto", progress_callback=None):
+def run_asr_cpu(
+    audio_input,
+    sample_rate: int = 16000,
+    model_name: str = "Base",
+    profile_name: str = "auto",
+    progress_callback=None,
+    min_silence_ms: int = 1200,
+    pad_ms: int = 600,
+):
     """Phase 1 Acoustic Inference using Munajjam PR #65 Adaptive Silence Detection Engine."""
     audio_dur = 0.0
 
@@ -45,11 +53,16 @@ def run_asr_cpu(audio_input, sample_rate: int = 16000, model_name: str = "Base",
     expected_chunks = max(1, int(audio_dur / 25.0))
     chunk_ms_list = detect_non_silent_chunks(
         audio_pcm,
-        min_silence_len=1200,
+        min_silence_len=min_silence_ms,
         silence_thresh=-45,
         adaptive=False,
         expected_chunks=expected_chunks,
         sample_rate=sample_rate
+    )
+    silence_intervals = detect_acoustic_silences(
+        audio_pcm,
+        min_silence_len_ms=min_silence_ms,
+        sample_rate=sample_rate,
     )
 
     regions_list = []
@@ -68,7 +81,7 @@ def run_asr_cpu(audio_input, sample_rate: int = 16000, model_name: str = "Base",
     # their padded audio ranges overlapped, so FastConformer transcribed boundary
     # words twice. We now clamp each side to at most half the actual silence gap
     # between adjacent chunks, guaranteeing zero audio overlap.
-    MAX_PAD_MS = 600  # maximum padding per side (ms)
+    MAX_PAD_MS = pad_ms  # maximum padding per side (ms)
     n_chunks = len(chunk_ms_list)
 
     preroll_samples_list = []
@@ -189,6 +202,7 @@ def run_asr_cpu(audio_input, sample_rate: int = 16000, model_name: str = "Base",
         "segmentation": {},
         "recognition": {},
         "asr_words": asr_words_list,
-        "logprobs": logprobs_list
+        "logprobs": logprobs_list,
+        "silence_intervals": silence_intervals,
     }
     return (regions, emissions, stage_metrics, asr_time)

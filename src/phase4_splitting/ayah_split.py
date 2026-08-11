@@ -16,6 +16,9 @@ from typing import Any
 from src.core.segment_types import SegmentInfo
 
 
+WAQF_MARKS = frozenset("ۖۗۘۚۛۜ")
+
+
 def _ayah_key_and_word(location: str | None):
     if not location:
         return None, None
@@ -50,15 +53,15 @@ def _new_group(key: str | None, reason: str, first_word: dict) -> dict:
     return {"key": key, "reason": reason, "words": [first_word]}
 
 
-def split_segments_at_ayah_boundaries(segments: list[SegmentInfo]) -> list[SegmentInfo]:
-    """Splits multi-ayah or multi-reading segments into individual per-ayah segments.
+def split_segments_at_ayah_boundaries(
+    segments: list[SegmentInfo],
+    min_word_gap_s: float = 0.5,
+    split_all_ayahs: bool = False,
+) -> list[SegmentInfo]:
+    """Splits segments at ayah, repetition, and meaningful intra-ayah pause boundaries.
 
-    Only splits at an ayah (or repetition) boundary when there is a meaningful
-    silence gap between the last word of the current group and the first word
-    of the next group. If the reciter read through without pausing (gap == 0 or
-    below MIN_SPLIT_GAP_S), the boundary is ignored and the groups are merged
-    back — matching the reference project's behaviour where a continuous reading
-    of two ayahs is kept as one segment (e.g. 52:9:1->52:10:3).
+    Ayah boundaries require a small meaningful silence gap, repetition boundaries
+    are always retained, and pauses within one ayah use ``min_word_gap_s``.
 
     Preserves all metadata from the parent segment including:
     - has_repeated_words / wrap_word_ranges / repeated_ranges / repeated_text
@@ -87,12 +90,14 @@ def split_segments_at_ayah_boundaries(segments: list[SegmentInfo]) -> list[Segme
         # A new group is opened when:
         #   a) the ayah key changes            → reason "ayah_boundary"
         #   b) the word index goes backward    → reason "repetition"
+        #   c) two words in one ayah have a meaningful pause → reason "word_gap"
+        #   d) a waqf mark is followed by a clear ASR gap   → reason "waqf"
         # ----------------------------------------------------------------
         groups: list[dict] = []
         prev_key: str | None = None
         prev_word_num: int | None = None
 
-        for w in seg.words:
+        for word_index, w in enumerate(seg.words):
             loc: str | None = w.get("location")
             if not loc or loc.startswith("0:0:"):
                 # Special-segment words (location 0:0:N) — attach to current group
@@ -103,6 +108,17 @@ def split_segments_at_ayah_boundaries(segments: list[SegmentInfo]) -> list[Segme
                 continue
 
             key, word_num = _ayah_key_and_word(loc)
+            acoustic_gap = (
+                seg._acoustic_word_gaps[word_index]
+                if seg._acoustic_word_gaps
+                and word_index < len(seg._acoustic_word_gaps)
+                else None
+            )
+            asr_gap = (
+                seg._asr_word_gaps[word_index]
+                if seg._asr_word_gaps and word_index < len(seg._asr_word_gaps)
+                else None
+            )
 
             if not groups:
                 groups.append(_new_group(key, "first", w))
@@ -115,6 +131,29 @@ def split_segments_at_ayah_boundaries(segments: list[SegmentInfo]) -> list[Segme
             ):
                 # Backward word index within the same ayah = repetition boundary
                 groups.append(_new_group(key, "repetition", w))
+            elif key == prev_key:
+                previous_word = groups[-1]["words"][-1]
+                previous_end = previous_word.get("end")
+                current_start = w.get("start")
+                ctc_gap = (
+                    current_start - previous_end
+                    if previous_end is not None and current_start is not None
+                    else None
+                )
+                has_waqf = any(mark in previous_word.get("word", "") for mark in WAQF_MARKS)
+                waqf_gap = asr_gap if asr_gap is not None else ctc_gap
+                if acoustic_gap is not None and acoustic_gap >= min_word_gap_s:
+                    groups.append(_new_group(key, "word_gap", w))
+                elif (
+                    has_waqf
+                    and waqf_gap is not None
+                    and waqf_gap >= max(0.4, min_word_gap_s)
+                ):
+                    # FastConformer timestamps advance in 80ms frames, so 400ms
+                    # safely represents the upstream model's nominal 0.5s waqf gap.
+                    groups.append(_new_group(key, "waqf", w))
+                else:
+                    groups[-1]["words"].append(w)
             else:
                 groups[-1]["words"].append(w)
 
@@ -131,11 +170,14 @@ def split_segments_at_ayah_boundaries(segments: list[SegmentInfo]) -> list[Segme
         # ----------------------------------------------------------------
         # Step 2: Merge back adjacent ayah-boundary groups that have no
         # meaningful silence gap (the reciter read continuously).
-        # Repetition boundaries are ALWAYS kept.
+        # Repetition and intra-ayah pause boundaries are ALWAYS kept.
         # ----------------------------------------------------------------
         merged: list[dict] = [groups[0]]
         for grp in groups[1:]:
             if grp["reason"] == "ayah_boundary":
+                if split_all_ayahs:
+                    merged.append(grp)
+                    continue
                 prev_words = merged[-1]["words"]
                 last_end = prev_words[-1].get("end")
                 next_start = grp["words"][0].get("start")
@@ -256,6 +298,9 @@ def split_segments_at_ayah_boundaries(segments: list[SegmentInfo]) -> list[Segme
                 repeated_text=sub_rep_text,
                 words=sub_words,
                 _original_alignment_idx=seg._original_alignment_idx,
+                _preserve_split_before=(
+                    not is_first and grp["reason"] in {"word_gap", "repetition", "waqf"}
+                ),
             )
             result.append(sub_seg)
 

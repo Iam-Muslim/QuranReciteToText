@@ -30,7 +30,15 @@ def _resample_audio_ffmpeg(audio_array, orig_sr, target_sr=16000):
     return np.frombuffer(stdout, dtype=np.float32)
 
 
-def process_audio(audio_data, model_name="Base", profile_name="auto", return_profiling: bool = False, progress_callback=None):
+def process_audio(
+    audio_data,
+    model_name="Base",
+    profile_name="auto",
+    return_profiling: bool = False,
+    progress_callback=None,
+    min_silence_ms: int = 1200,
+    pad_ms: int = 600,
+):
     """Main execution wrapper for the transcription and Quran alignment pipeline.
 
     Args:
@@ -39,6 +47,8 @@ def process_audio(audio_data, model_name="Base", profile_name="auto", return_pro
         profile_name: Transcription profile preset ('auto', 'fast', 'noisy', 'clean', 'sliding').
         return_profiling: If True, returns (json_output, profiling).
         progress_callback: Optional callable(pct, msg) for progress tracking.
+        min_silence_ms: Requested silence threshold for chunk detection and subtitle splitting.
+        pad_ms: Maximum adaptive padding added around speech chunks.
     """
     if audio_data is None:
         return ([], ProfilingData()) if return_profiling else []
@@ -67,7 +77,13 @@ def process_audio(audio_data, model_name="Base", profile_name="auto", return_pro
             sample_rate = 16000
 
     (regions, emissions, stage_metrics, asr_time) = run_asr_cpu(
-        audio, sample_rate, model_name=model_name, profile_name=profile_name, progress_callback=progress_callback
+        audio,
+        sample_rate,
+        model_name=model_name,
+        profile_name=profile_name,
+        progress_callback=progress_callback,
+        min_silence_ms=min_silence_ms,
+        pad_ms=pad_ms,
     )
     sdk_adapt.metrics_to_profiling(stage_metrics, profiling)
     intervals = sdk_adapt.intervals_from_regions(regions)
@@ -105,7 +121,11 @@ def process_audio(audio_data, model_name="Base", profile_name="auto", return_pro
     # 1-to-1 Ayah chunks for high-precision alignment.
     # All metadata (repetitions, wrap_word_ranges, error) is preserved.
     from src.phase4_splitting.ayah_split import split_segments_at_ayah_boundaries
-    segments = split_segments_at_ayah_boundaries(segments)
+    segments = split_segments_at_ayah_boundaries(
+        segments,
+        min_word_gap_s=min_silence_ms / 1000.0,
+        split_all_ayahs=bool(stage_metrics.get("multi_chapter")),
+    )
 
     # Eliminate fake-repeat / trailing-fragment segments caused by VAD chunk
     # audio overlap or edge-cuts.  Runs AFTER ayah_split so the dedup sees
@@ -113,8 +133,41 @@ def process_audio(audio_data, model_name="Base", profile_name="auto", return_pro
     #   1. Overlap artifacts  (nxt.start < current.end, ref is subset)
     #   2. Trailing fragments (gap ≈ 0, 1-2 words already in previous seg)
     # Genuine reciter repetitions (wrap_word_ranges set) are never removed.
-    from src.core.dedup_segments import dedup_vad_overlaps
+    from src.core.dedup_segments import dedup_vad_overlaps, _merge_two_segments
     segments = dedup_vad_overlaps(segments)
+
+    if stage_metrics.get("multi_chapter"):
+        # Rejoin a one-word recovery fragment without consuming the following repeat.
+        merged_segments = []
+        segment_index = 0
+        while segment_index < len(segments):
+            if segment_index + 2 < len(segments):
+                current, continuation, repeated = segments[segment_index:segment_index + 3]
+                current_words = current.words or []
+                current_loc = current_words[0].get("location") if len(current_words) == 1 else None
+                continuation_loc = (
+                    continuation.words[0].get("location")
+                    if continuation.words else None
+                )
+                repeated_loc = repeated.words[0].get("location") if repeated.words else None
+                try:
+                    current_ref = tuple(map(int, current_loc.split(":")))
+                    continuation_ref = tuple(map(int, continuation_loc.split(":")))
+                    repeated_ref = tuple(map(int, repeated_loc.split(":")))
+                except (AttributeError, ValueError):
+                    current_ref = continuation_ref = repeated_ref = None
+                if (
+                    current_ref
+                    and continuation_ref[:2] == current_ref[:2] == repeated_ref[:2]
+                    and continuation_ref[2] == current_ref[2] + 1
+                    and repeated_ref[2] <= current_ref[2]
+                ):
+                    merged_segments.append(_merge_two_segments(current, continuation))
+                    segment_index += 2
+                    continue
+            merged_segments.append(segments[segment_index])
+            segment_index += 1
+        segments = merged_segments
 
     # Fuse adjacent segments belonging to the SAME Ayah when the reciter
     # recited continuously without a long pause (e.g. 17:56:1-9 + 17:56:10-13 -> 17:56:1-13).
@@ -133,7 +186,28 @@ def process_audio(audio_data, model_name="Base", profile_name="auto", return_pro
     # Both smooth and inject mutate seg.words in-place before serialization.
     # Controlled by ENABLE_WORD_SMOOTHING in config.py.
     from src.phase4_splitting.word_smoothing import smooth_word_timestamps
-    smooth_word_timestamps(segments)
+    smooth_word_timestamps(
+        segments,
+        audio_data=audio,
+        sample_rate=sample_rate,
+        min_silence_ms=min_silence_ms,
+        pad_ms=pad_ms,
+        bridge_unsplit_gaps=bool(stage_metrics.get("multi_chapter")),
+    )
+    if stage_metrics.get("multi_chapter"):
+        for previous, current in zip(segments, segments[1:]):
+            if current.start_time > previous.end_time:
+                continue
+            old_start = current.start_time
+            current.start_time = round(previous.end_time + 0.001, 3)
+            offset = current.start_time - old_start
+            for word in current.words or []:
+                if word.get("start") is not None:
+                    word["start"] = round(max(0.0, word["start"] - offset), 4)
+                if word.get("end") is not None:
+                    word["end"] = round(max(0.0, word["end"] - offset), 4)
+            if current.end_time <= current.start_time:
+                current.end_time = round(current.start_time + 0.04, 3)
 
     # Optional: inject missing (unrecited) words into the words array.
     # Runs before serialization so injected words appear in the output JSON.
