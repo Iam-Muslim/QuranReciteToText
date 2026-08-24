@@ -9,7 +9,7 @@ from src.core.segment_types import ProfilingData
 from src.phase1_transcribe.stream import run_asr_cpu
 from src.phase2_matching.matcher import _run_post_asr_pipeline
 from src.phase3_alignment.ctc_align import run_ctc_alignment
-from src.phase1_transcribe.fastconformer import FASTCONFORMER_TOKENS_PATH
+from src.phase1_transcribe.zipformer import TOKENS_PATH
 
 
 def _resample_audio_ffmpeg(audio_array, orig_sr, target_sr=16000):
@@ -106,7 +106,7 @@ def process_audio(
         run_ctc_alignment(
             segments=segments,
             stage_metrics=stage_metrics,
-            vocab_path=FASTCONFORMER_TOKENS_PATH,
+            vocab_path=TOKENS_PATH,
         )
     except Exception as e:
         import traceback

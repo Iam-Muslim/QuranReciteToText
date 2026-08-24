@@ -15,7 +15,7 @@ AUTO_MERGE_GROUP_PREFIX = "merge-auto-"
 AUDIO_CACHE_MAX_ENTRIES = int(os.environ.get("AUDIO_CACHE_MAX_ENTRIES", "32"))
 
 # Auto-Updater Settings
-ENABLE_AUTO_UPDATE = os.environ.get("ENABLE_AUTO_UPDATE", "true").lower() in ("true", "1", "yes")
+ENABLE_AUTO_UPDATE = False
 
 # Word Timestamp Tuning Controls
 ENABLE_WORD_SMOOTHING = True

@@ -136,6 +136,15 @@ def _trim_head_overlap(current: SegmentInfo, nxt: SegmentInfo) -> SegmentInfo | 
             entry["start"] = round(max(0.0, entry["start"] - offset), 4)
         if entry.get("end") is not None:
             entry["end"] = round(max(0.0, entry["end"] - offset), 4)
+        if "phonemes" in entry:
+            entry["phonemes"] = [
+                {
+                    **p,
+                    "start": round(max(0.0, p["start"] - offset), 4) if p.get("start") is not None else None,
+                    "end": round(max(0.0, p["end"] - offset), 4) if p.get("end") is not None else None,
+                }
+                for p in entry["phonemes"]
+            ]
         adjusted_words.append(entry)
 
     print(f"[DEDUP] Trimmed head overlap '{first_nxt_loc}' from nxt segment: {nxt.matched_ref!r} -> {new_ref!r}")
@@ -211,11 +220,21 @@ def _transfer_leading_conjunction(current: SegmentInfo, nxt: SegmentInfo) -> tup
         new_nxt_start = round(new_nxt_start, 3)
 
         prep_word = dict(last_curr_word)
+        prep_s = last_curr_word.get("start", 0.0) or 0.0
         prep_word["start"] = 0.0
-        prep_word["end"] = round((last_curr_word.get("end", 0.0) or 0.0) - (last_curr_word.get("start", 0.0) or 0.0), 4)
+        prep_word["end"] = round((last_curr_word.get("end", 0.0) or 0.0) - prep_s, 4)
+        if "phonemes" in prep_word:
+            prep_word["phonemes"] = [
+                {
+                    **p,
+                    "start": round(max(0.0, p["start"] - prep_s), 4) if p.get("start") is not None else None,
+                    "end": round(max(0.0, p["end"] - prep_s), 4) if p.get("end") is not None else None,
+                }
+                for p in prep_word["phonemes"]
+            ]
 
-        duration = prep_word["end"]
         new_nxt_words = [prep_word]
+        nxt_offset = new_nxt_start - nxt.start_time
         for w in nxt_words:
             entry = dict(w)
             orig_abs_start = nxt.start_time + (w.get("start", 0.0) or 0.0)
@@ -225,6 +244,15 @@ def _transfer_leading_conjunction(current: SegmentInfo, nxt: SegmentInfo) -> tup
                 entry["start"] = round(max(0.0, orig_abs_start - new_nxt_start), 4)
             if entry.get("end") is not None:
                 entry["end"] = round(max(0.0, orig_abs_end - new_nxt_start), 4)
+            if "phonemes" in entry:
+                entry["phonemes"] = [
+                    {
+                        **p,
+                        "start": round(max(0.0, p["start"] - nxt_offset), 4) if p.get("start") is not None else None,
+                        "end": round(max(0.0, p["end"] - nxt_offset), 4) if p.get("end") is not None else None,
+                    }
+                    for p in entry["phonemes"]
+                ]
             new_nxt_words.append(entry)
 
         n_locs = [w.get("location") for w in new_nxt_words if w.get("location") and not w.get("location","").startswith("0:0:")]
@@ -410,6 +438,15 @@ def _merge_two_segments(seg1: SegmentInfo, seg2: SegmentInfo) -> SegmentInfo:
             entry["start"] = round(entry["start"] + offset, 4)
         if entry.get("end") is not None:
             entry["end"] = round(entry["end"] + offset, 4)
+        if "phonemes" in entry:
+            entry["phonemes"] = [
+                {
+                    **p,
+                    "start": round(p["start"] + offset, 4) if p.get("start") is not None else None,
+                    "end": round(p["end"] + offset, 4) if p.get("end") is not None else None,
+                }
+                for p in entry["phonemes"]
+            ]
         merged_words.append(entry)
         
     locs = [w.get("location") for w in merged_words if w.get("location") and not w.get("location", "").startswith("0:0:")]

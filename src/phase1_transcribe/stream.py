@@ -1,4 +1,4 @@
-"""ASR Runtime — Orchestrates acoustic inference on CPU using Munajjam PR #65 Adaptive Engine."""
+"""ASR Runtime — Orchestrates acoustic inference on CPU using Zipformer2 Arabic Phoneme model."""
 
 import time
 import subprocess
@@ -13,9 +13,8 @@ os.environ["OMP_NUM_THREADS"] = "2"
 os.environ["MKL_NUM_THREADS"] = "2"
 os.environ["OPENBLAS_NUM_THREADS"] = "2"
 
-from qua_sdk.schemas import Audio, Region, Regions, Emissions
-from src.phase2_matching.normalize import normalize_arabic
-from src.phase1_transcribe.fastconformer import FastConformerONNX
+from qua_sdk.schemas import Region, Regions, Emissions
+from src.phase1_transcribe.zipformer import ZipformerONNX
 from src.phase1_transcribe.silence import detect_acoustic_silences, detect_non_silent_chunks
 
 
@@ -28,7 +27,7 @@ def run_asr_cpu(
     min_silence_ms: int = 1200,
     pad_ms: int = 600,
 ):
-    """Phase 1 Acoustic Inference using Munajjam PR #65 Adaptive Silence Detection Engine."""
+    """Phase 1 Acoustic Inference using Zipformer2 Arabic Phoneme model & Munajjam PR #65 silence engine."""
     audio_dur = 0.0
 
     # Load audio array or handle file path
@@ -47,7 +46,7 @@ def run_asr_cpu(
         audio_pcm = audio_input.astype(np.float32)
         audio_dur = len(audio_pcm) / sample_rate
 
-    fc = FastConformerONNX.get_instance(device="cpu")
+    model = ZipformerONNX.get_instance(device="cpu")
 
     # Step 1: Detect non-silent speech chunks using non-neural gentle engine
     expected_chunks = max(1, int(audio_dur / 25.0))
@@ -77,58 +76,49 @@ def run_asr_cpu(
     futures = []
 
     # --- Gap-clamped adaptive padding ---
-    # Fixed 600ms padding caused fake repeats: when two chunks are close together,
-    # their padded audio ranges overlapped, so FastConformer transcribed boundary
-    # words twice. We now clamp each side to at most half the actual silence gap
-    # between adjacent chunks, guaranteeing zero audio overlap.
-    MAX_PAD_MS = pad_ms  # maximum padding per side (ms)
+    MAX_PAD_MS = pad_ms
     n_chunks = len(chunk_ms_list)
 
     preroll_samples_list = []
     postroll_samples_list = []
     for idx, (start_ms, end_ms) in enumerate(chunk_ms_list):
-        # Gap to previous chunk
         if idx > 0:
             prev_end_ms = chunk_ms_list[idx - 1][1]
-            gap_before_ms = start_ms - prev_end_ms  # silence before this chunk
+            gap_before_ms = start_ms - prev_end_ms
         else:
-            gap_before_ms = MAX_PAD_MS * 2  # no previous → full pad allowed
+            gap_before_ms = MAX_PAD_MS * 2
 
-        # Gap to next chunk
         if idx < n_chunks - 1:
             next_start_ms = chunk_ms_list[idx + 1][0]
-            gap_after_ms = next_start_ms - end_ms  # silence after this chunk
+            gap_after_ms = next_start_ms - end_ms
         else:
-            gap_after_ms = MAX_PAD_MS * 2  # no next → full pad allowed
+            gap_after_ms = MAX_PAD_MS * 2
 
-        # Clamp each side to half the available silence (prevents overlap)
-        preroll_ms  = min(MAX_PAD_MS, gap_before_ms // 2)
-        postroll_ms = min(MAX_PAD_MS, gap_after_ms  // 2)
-        preroll_samples_list.append(int((preroll_ms  / 1000.0) * sample_rate))
+        preroll_ms = min(MAX_PAD_MS, gap_before_ms // 2)
+        postroll_ms = min(MAX_PAD_MS, gap_after_ms // 2)
+        preroll_samples_list.append(int((preroll_ms / 1000.0) * sample_rate))
         postroll_samples_list.append(int((postroll_ms / 1000.0) * sample_rate))
 
     sys.stdout.write("\rTranscribing:   0.0%")
     sys.stdout.flush()
 
     def transcribe_chunk_task(chunk_audio, start_sec, idx):
-        text, word_timestamps, logprobs = fc.transcribe(chunk_audio, orig_sr=sample_rate, safe_lufs=True)
-        return (text, word_timestamps, logprobs, start_sec, idx)
+        text, phoneme_timestamps, logprobs = model.transcribe(chunk_audio, orig_sr=sample_rate, safe_lufs=True)
+        return (text, phoneme_timestamps, logprobs, start_sec, idx)
 
     for idx, (start_ms, end_ms) in enumerate(chunk_ms_list):
-        preroll  = preroll_samples_list[idx]
+        preroll = preroll_samples_list[idx]
         postroll = postroll_samples_list[idx]
         start_sample = max(0, int((start_ms / 1000.0) * sample_rate) - preroll)
-        end_sample   = min(len(audio_pcm), int((end_ms / 1000.0) * sample_rate) + postroll)
+        end_sample = min(len(audio_pcm), int((end_ms / 1000.0) * sample_rate) + postroll)
         actual_start_sec = start_sample / sample_rate
 
         chunk_audio = audio_pcm[start_sample:end_sample]
-        
-        # Intro split fix: For the first chunk (start_sample == 0), scan the first 10 seconds
-        # to find the quietest RMS frame (the pause between intro title and actual recitation).
-        # Split the chunk there so intro is isolated and the real Basmala+Ayah1 is a clean chunk.
+
+        # Intro split fix: For the first chunk, scan the first 10 seconds to find pause dip
         if start_sample == 0 and len(chunk_audio) > 0:
-            scan_end = min(len(chunk_audio), int(10.0 * sample_rate))  # scan first 10s
-            frame_hop = int(0.05 * sample_rate)  # 50ms frames
+            scan_end = min(len(chunk_audio), int(10.0 * sample_rate))
+            frame_hop = int(0.05 * sample_rate)
             min_rms = float('inf')
             split_sample = -1
             for f_start in range(int(1.0 * sample_rate), scan_end - frame_hop, frame_hop):
@@ -137,15 +127,12 @@ def run_asr_cpu(
                 if rms < min_rms:
                     min_rms = rms
                     split_sample = f_start
-            # Only split if we found a meaningful dip (the dip is < 10% of chunk mean RMS)
             chunk_mean_rms = float(np.sqrt(np.mean(np.square(chunk_audio[:scan_end]))))
             if split_sample > 0 and min_rms < chunk_mean_rms * 0.10:
-                # Submit intro as its own tiny chunk (will fail matching — expected)
                 intro_audio = chunk_audio[:split_sample]
                 if len(intro_audio) > 0:
                     fut_intro = executor.submit(transcribe_chunk_task, intro_audio, actual_start_sec, idx)
                     futures.append(fut_intro)
-                # Main recitation chunk starts after the split
                 recite_start_sec = split_sample / sample_rate
                 chunk_audio = chunk_audio[split_sample:]
                 actual_start_sec = recite_start_sec
@@ -155,7 +142,7 @@ def run_asr_cpu(
             futures.append(fut)
 
     for i, fut in enumerate(futures):
-        text, word_timestamps, logprobs, start_sec, idx = fut.result()
+        text, phoneme_timestamps, logprobs, start_sec, idx = fut.result()
 
         pct = min(100.0, ((i + 1) / max(1, len(futures))) * 100.0)
         sys.stdout.write(f"\rTranscribing: {pct:5.1f}%")
@@ -172,19 +159,19 @@ def run_asr_cpu(
             "raw_text": text,
         })
 
-        if word_timestamps:
-            for w in word_timestamps:
-                w['start'] = max(0.0, w['start'] + start_sec)
-                w['end'] = max(0.0, w['end'] + start_sec)
+        if phoneme_timestamps:
+            for p in phoneme_timestamps:
+                p['start'] = max(0.0, p['start'] + start_sec)
+                p['end'] = max(0.0, p['end'] + start_sec)
+                p['word'] = p.get('phoneme', '')
 
-            chunk_text = " ".join([w['word'] for w in word_timestamps])
-            abs_start_time = word_timestamps[0]['start']
-            abs_end_time = word_timestamps[-1]['end']
+            abs_start_time = phoneme_timestamps[0]['start']
+            abs_end_time = phoneme_timestamps[-1]['end']
 
             regions_list.append(Region(start_s=abs_start_time, end_s=abs_end_time))
-            norm_text = normalize_arabic(chunk_text)
-            tokens.append(list(norm_text) + [' '])
-            asr_words_list.append((word_timestamps, start_sec))
+            chunk_phonemes = [p['phoneme'] for p in phoneme_timestamps]
+            tokens.append(chunk_phonemes)
+            asr_words_list.append((phoneme_timestamps, start_sec))
             logprobs_list.append((logprobs, max(0.0, start_sec)))
 
     executor.shutdown(wait=True)

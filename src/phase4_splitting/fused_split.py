@@ -177,6 +177,15 @@ def _split_fused_segments(segments):
                             w_copy["start"] = max(0.0, round(w_copy["start"] - split_rel, 4))
                         if w_copy.get("end") is not None:
                             w_copy["end"] = max(0.0, round(w_copy["end"] - split_rel, 4))
+                        if "phonemes" in w_copy:
+                            w_copy["phonemes"] = [
+                                {
+                                    **p,
+                                    "start": max(0.0, round(p["start"] - split_rel, 4)) if p.get("start") is not None else None,
+                                    "end": max(0.0, round(p["end"] - split_rel, 4)) if p.get("end") is not None else None,
+                                }
+                                for p in w_copy["phonemes"]
+                            ]
                         v_list.append(w_copy)
                         v_asr_gaps.append(
                             seg._asr_word_gaps[word_index]

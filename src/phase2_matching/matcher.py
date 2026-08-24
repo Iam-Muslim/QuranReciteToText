@@ -66,9 +66,13 @@ def _chapter_similarity(tokens, chapter_ref) -> float:
 
 
 def _tokens_from_words(words: list[dict]) -> list[str]:
-    """Builds normalized matcher tokens from timestamped ASR words."""
-    text = " ".join(word.get("word", "") for word in words)
-    return list(normalize_arabic(text)) + [" "]
+    """Builds phoneme tokens from timestamped ASR words."""
+    tokens = []
+    for w in words:
+        tok = w.get("phoneme", w.get("word", ""))
+        if tok and tok.strip():
+            tokens.append(tok.strip())
+    return tokens
 
 
 def _chapter_word_index(text: str, chapter_ref) -> int | None:
@@ -87,14 +91,14 @@ def _chapter_word_index(text: str, chapter_ref) -> int | None:
 
 
 def _slice_logprobs(logprobs, chunk_start_s: float, start_s: float, end_s: float):
-    """Slices FastConformer emissions to one timestamped word group."""
+    """Slices Zipformer emissions to one timestamped word group."""
     if logprobs is None:
         return None, start_s
-    start_frame = max(0, int((start_s - chunk_start_s) * 12.5))
-    end_frame = max(start_frame + 1, int(np.ceil((end_s - chunk_start_s) * 12.5)))
+    start_frame = max(0, int((start_s - chunk_start_s) * 25.0))
+    end_frame = max(start_frame + 1, int(np.ceil((end_s - chunk_start_s) * 25.0)))
     if logprobs.ndim == 3:
-        return logprobs[:, start_frame:end_frame, :], chunk_start_s + start_frame / 12.5
-    return logprobs[start_frame:end_frame], chunk_start_s + start_frame / 12.5
+        return logprobs[:, start_frame:end_frame, :], chunk_start_s + start_frame / 25.0
+    return logprobs[start_frame:end_frame], chunk_start_s + start_frame / 25.0
 
 
 def _prepare_multi_chapter_units(
@@ -168,11 +172,11 @@ def _prepare_multi_chapter_units(
             gap = words[current_index]["start"] - words[current_index - 1]["end"]
             if gap < 0.5:
                 continue
-            current_text = normalize_arabic(words[current_index]["word"]).strip()
+            current_text = words[current_index].get("phoneme", words[current_index].get("word", "")).strip()
             previous_indices = [
                 previous_index
                 for previous_index in range(max(0, current_index - 12), current_index - 1)
-                if normalize_arabic(words[previous_index]["word"]).strip() == current_text
+                if words[previous_index].get("phoneme", words[previous_index].get("word", "")).strip() == current_text
                 and words[current_index]["start"] - words[previous_index]["start"] <= 15.0
             ]
             if previous_indices:
@@ -195,13 +199,13 @@ def _prepare_multi_chapter_units(
     refinements: dict[int, list[tuple[int, int, list[dict]]]] = defaultdict(list)
     if refinement_candidates:
         import librosa
-        from src.phase1_transcribe.fastconformer import FastConformerONNX
+        from src.phase1_transcribe.zipformer import ZipformerONNX
 
         if isinstance(audio, str):
             audio_pcm, _ = librosa.load(audio, sr=sample_rate, mono=True)
         else:
             audio_pcm = np.asarray(audio, dtype=np.float32)
-        model = FastConformerONNX.get_instance(device="cpu")
+        model = ZipformerONNX.get_instance(device="cpu")
 
         for chunk_index, start_index, end_index, surah, kind in refinement_candidates:
             if any(
@@ -235,8 +239,8 @@ def _prepare_multi_chapter_units(
                 len(replacement_words or []) < minimum_words
                 or (
                     kind == "repetition"
-                    and normalize_arabic(replacement_words[0]["word"]).strip()
-                    != normalize_arabic(source_words[0]["word"]).strip()
+                    and normalize_arabic(replacement_words[0].get("word", replacement_words[0].get("phoneme", ""))).strip()
+                    != normalize_arabic(source_words[0].get("word", source_words[0].get("phoneme", ""))).strip()
                 )
                 or not _chapter_scores(
                     replacement_tokens, resources.ngram_index
@@ -289,13 +293,13 @@ def _prepare_multi_chapter_units(
     if recovery_gaps:
         if model is None:
             import librosa
-            from src.phase1_transcribe.fastconformer import FastConformerONNX
+            from src.phase1_transcribe.zipformer import ZipformerONNX
 
             if isinstance(audio, str):
                 audio_pcm, _ = librosa.load(audio, sr=sample_rate, mono=True)
             else:
                 audio_pcm = np.asarray(audio, dtype=np.float32)
-            model = FastConformerONNX.get_instance(device="cpu")
+            model = ZipformerONNX.get_instance(device="cpu")
 
         for gap_start, gap_end, previous, current in recovery_gaps:
             slice_start = max(0.0, gap_start - 0.2)

@@ -9,6 +9,15 @@ __pycache__/
 .venv/
 venv/
 
+# Ignore test audio & output files
+*.mp3
+*.wav
+*.m4a
+output*.json
+raw_transcription.json
+test_output.json
+
 # Ignore IDE files
 .vscode/
 .idea/
+qua_sdk-0.5.9-py3-none-any - Copy

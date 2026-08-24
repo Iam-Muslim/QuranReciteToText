@@ -1,15 +1,29 @@
-"""Phase 3: CTC Forced Alignment — Per-Word Timestamp Extraction."""
+"""Phase 3: CTC Forced Alignment — Per-Word and Per-Phoneme Timestamp Extraction."""
 
 from __future__ import annotations
 import re
 from typing import Optional
+from functools import lru_cache
 import numpy as np
 
-BLANK_ID = 1024
-FRAME_RATE = 12.5
+from src.phase2_matching.normalize import tokenize_phoneme_string, get_phoneme_vocab_set, get_arabic_resources
+
+BLANK_ID = 250
+FRAME_RATE = 25.0  # 40ms per frame
 FRAME_STEP = 1.0 / FRAME_RATE
 
 _DIAC_RE = re.compile(r'[\u0610-\u061a\u064b-\u065f\u0670\u06d6-\u06dc\u06df-\u06e4\u06e7\u06e8\u06ea-\u06ed]')
+
+
+@lru_cache(maxsize=1)
+def get_loc_to_refword() -> dict[str, object]:
+    """Pre-indexes all 77,430+ Quranic words by their location 'surah:ayah:word_num'."""
+    resources = get_arabic_resources()
+    return {
+        f"{w.surah}:{w.ayah}:{w.word_num}": w
+        for s, ch in resources.chapter_refs.items()
+        for w in ch.words
+    }
 
 
 def _find_unmatched_affixes(transcribed_text: str, matched_text: str) -> tuple[list[str], list[str]]:
@@ -51,7 +65,7 @@ def _map_asr_words_to_reference(
     from src.phase2_matching.normalize import normalize_arabic
     import difflib
 
-    asr_norm = [normalize_arabic(word.get("word", "")) for word in asr_words]
+    asr_norm = [normalize_arabic(word.get("word", word.get("phoneme", ""))) for word in asr_words]
     ref_norm = [normalize_arabic(word) for word in ref_words]
     mapping: dict[int, dict] = {}
     missing: set[int] = set()
@@ -72,58 +86,34 @@ def _strip_diacritics(text: str) -> str:
     return _DIAC_RE.sub('', text)
 
 
-def _load_vocab(tokens_path: str) -> list[str]:
-    vocab = []
+def _load_vocab_and_mappings(tokens_path: str) -> tuple[list[str], dict[str, int]]:
+    """Loads vocabulary and token-to-id mapping from tokens.txt."""
+    id2token = {}
+    token2id = {}
     with open(tokens_path, 'r', encoding='utf-8') as f:
         for line in f:
-            line = line.rstrip('\r\n')
-            if line:
-                vocab.append(line.rsplit(' ', 1)[0])
-    return vocab
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.rsplit(" ", 1)
+            if len(parts) == 2:
+                tok, idx = parts[0], int(parts[1])
+                id2token[idx] = tok
+                token2id[tok] = idx
+    max_id = max(id2token.keys()) if id2token else 250
+    vocab = [id2token.get(i, "<blank>") for i in range(max_id + 1)]
+    return vocab, token2id
 
 
-def _build_char_to_id(vocab: list[str]) -> dict[str, int]:
-    return {tok: idx for idx, tok in enumerate(vocab)}
-
-
-def _tokenize_word(word: str, vocab: list[str], char_to_id: dict[str, int]) -> list[int]:
-    plain = _strip_diacritics(word)
-    if not plain:
-        return []
-
-    ids = []
-    pos = 0
-    first = True
-
-    while pos < len(plain):
-        best_len = 0
-        best_id = -1
-
-        for length in range(len(plain) - pos, 0, -1):
-            candidate = plain[pos:pos + length]
-            if first:
-                tok_with_marker = '▁' + candidate
-                if tok_with_marker in char_to_id:
-                    best_len = length
-                    best_id = char_to_id[tok_with_marker]
-                    break
-            if candidate in char_to_id:
-                best_len = length
-                best_id = char_to_id[candidate]
-                break
-
-        if best_id == -1:
-            pos += 1
-            continue
-
-        ids.append(best_id)
-        pos += best_len
-        first = False
-
-    return ids
+def _tokenize_word(word: str, vocab_set: set[str], token2id: dict[str, int]) -> list[int]:
+    """Tokenize a phoneme or text word into Zipformer token IDs."""
+    ph_tokens = tokenize_phoneme_string(word, vocab_set)
+    ids = [token2id[tok] for tok in ph_tokens if tok in token2id]
+    return ids if ids else [0]
 
 
 def _forced_align_chunk(log_probs_np: np.ndarray, token_ids: list[int]) -> tuple[np.ndarray, np.ndarray]:
+    """Runs Viterbi dynamic programming trellis forced alignment over logprobs."""
     lp = np.array(log_probs_np, dtype=np.float32)
     if lp.ndim == 3:
         lp = lp[0]
@@ -169,78 +159,80 @@ def _forced_align_chunk(log_probs_np: np.ndarray, token_ids: list[int]) -> tuple
         V_trellis[t] = max_v + lp[t, S]
 
     curr_s = L - 1 if V_trellis[T - 1, L - 1] > V_trellis[T - 1, L - 2] else L - 2
-    path = np.zeros(T, dtype=np.int64)
+    state_path = np.zeros(T, dtype=np.int64)
     scores = np.zeros(T, dtype=np.float32)
 
     for t in range(T - 1, -1, -1):
-        path[t] = S[curr_s]
+        state_path[t] = curr_s
         scores[t] = lp[t, S[curr_s]]
         curr_s = curr_s - B[t, curr_s]
 
-    return path, scores
+    return state_path, scores
 
 
 def _frames_to_word_times(
-    alignments: np.ndarray,
+    state_path: np.ndarray,
     scores: np.ndarray,
     token_ids: list[int],
     word_token_counts: list[int],
     chunk_start_sec: float,
     seg_start_time: float,
+    vocab: list[str] | None = None,
 ) -> list[dict]:
-    T = len(alignments)
+    """Converts CTC state trellis alignments into exact, non-overlapping word and phoneme spans."""
+    T = len(state_path)
     N = len(token_ids)
 
-    token_frames = [[] for _ in range(N)]
-    target_idx = 0
-    prev_label = BLANK_ID
+    active_frames = {}
+    for k in range(N):
+        target_state = 2 * k + 1
+        active_frames[k] = np.where(state_path == target_state)[0]
 
-    for t in range(T):
-        label = alignments[t]
-        if label == BLANK_ID:
-            prev_label = BLANK_ID
-            continue
-        if label == prev_label:
-            if target_idx < N:
-                token_frames[target_idx].append(t)
+    # Find peak frame for each token from active Viterbi states
+    peak_frames = np.zeros(N, dtype=float)
+    for k in range(N):
+        target_state = 2 * k + 1
+        f_list = active_frames[k]
+        if len(f_list) > 0:
+            pk_idx = int(np.argmax(scores[f_list]))
+            peak_frames[k] = float(f_list[pk_idx])
         else:
-            if target_idx < N and len(token_frames[target_idx]) > 0:
-                target_idx += 1
-            if target_idx < N:
-                token_frames[target_idx].append(t)
-            prev_label = label
+            peak_frames[k] = float(k * T / max(N, 1))
 
-    token_starts_f, token_ends_f = [], []
-    for i in range(N):
-        if len(token_frames[i]) == 0:
-            approx = int(i * T / max(N, 1))
-            token_starts_f.append(approx)
-            token_ends_f.append(approx)
-        else:
-            token_starts_f.append(token_frames[i][0])
-            token_ends_f.append(token_frames[i][-1])
+    # Midpoint acoustic boundary assignment within each word
+    token_starts_f = np.zeros(N, dtype=float)
+    token_ends_f = np.zeros(N, dtype=float)
 
-    MAX_EXPAND = 2
-    actual_starts_f, actual_ends_f = [], []
+    tok_offset = 0
+    for count in word_token_counts:
+        first_k = tok_offset
+        last_k = tok_offset + count - 1
 
-    for i in range(N):
-        core_start, core_end = token_starts_f[i], token_ends_f[i]
-        if i == 0:
-            start_f = max(0, core_start - MAX_EXPAND)
-        else:
-            prev_end = token_ends_f[i - 1]
-            gap = core_start - prev_end - 1
-            start_f = core_start - min(gap // 2, MAX_EXPAND) if gap > 0 else core_start
+        first_active = active_frames[first_k]
+        last_active = active_frames[last_k]
 
-        if i == N - 1:
-            end_f = min(T - 1, core_end + MAX_EXPAND)
-        else:
-            next_start = token_starts_f[i + 1]
-            gap = next_start - core_end - 1
-            end_f = core_end + min(gap - (gap // 2), MAX_EXPAND) if gap > 0 else core_end
+        w_start_f = float(first_active[0]) if len(first_active) > 0 else peak_frames[first_k]
+        w_end_f = float(last_active[-1] + 1) if len(last_active) > 0 else peak_frames[last_k] + 1.0
 
-        actual_starts_f.append(start_f)
-        actual_ends_f.append(end_f)
+        for i in range(count):
+            k = first_k + i
+            if i == 0:
+                s_f = w_start_f
+            else:
+                s_f = token_ends_f[k - 1]
+
+            if i == count - 1:
+                e_f = w_end_f
+            else:
+                next_k = k + 1
+                # Exact midpoint transition between peak energy of token k and token k+1
+                mid_f = (peak_frames[k] + peak_frames[next_k]) / 2.0
+                e_f = max(s_f + 0.5, mid_f)
+
+            token_starts_f[k] = s_f
+            token_ends_f[k] = max(s_f + 0.5, e_f)
+
+        tok_offset += count
 
     word_times: list[dict] = []
     tok_offset = 0
@@ -248,18 +240,36 @@ def _frames_to_word_times(
     for count in word_token_counts:
         if tok_offset >= N:
             break
-        ws_f = actual_starts_f[tok_offset]
-        we_f = actual_ends_f[tok_offset + count - 1]
+        ws_f = token_starts_f[tok_offset]
+        we_f = token_ends_f[tok_offset + count - 1]
 
         abs_ws = (ws_f * FRAME_STEP) + chunk_start_sec
-        abs_we = ((we_f + 1) * FRAME_STEP) + chunk_start_sec
+        abs_we = (we_f * FRAME_STEP) + chunk_start_sec
         if abs_we < abs_ws:
             abs_ws, abs_we = abs_we, abs_ws
 
         rel_ws = max(0.0, abs_ws - seg_start_time)
         rel_we = max(0.0, abs_we - seg_start_time)
 
-        word_times.append({"_start": rel_ws, "_end": rel_we})
+        phonemes_list = []
+        for k in range(tok_offset, tok_offset + count):
+            ps_f = token_starts_f[k]
+            pe_f = token_ends_f[k]
+            p_abs_ws = (ps_f * FRAME_STEP) + chunk_start_sec
+            p_abs_we = (pe_f * FRAME_STEP) + chunk_start_sec
+            if p_abs_we < p_abs_ws:
+                p_abs_ws, p_abs_we = p_abs_we, p_abs_ws
+            p_rel_ws = max(0.0, p_abs_ws - seg_start_time)
+            p_rel_we = max(0.0, p_abs_we - seg_start_time)
+            tok_id = token_ids[k]
+            tok_str = vocab[tok_id] if vocab and tok_id < len(vocab) else ""
+            phonemes_list.append({
+                "phoneme": tok_str,
+                "start": round(p_rel_ws, 4),
+                "end": round(p_rel_we, 4),
+            })
+
+        word_times.append({"_start": rel_ws, "_end": rel_we, "_phonemes": phonemes_list})
         tok_offset += count
 
     return word_times
@@ -270,9 +280,11 @@ def run_ctc_alignment(
     stage_metrics: dict,
     vocab_path: str,
 ) -> None:
-    """Fills seg.words for every segment using CTC forced alignment."""
-    vocab = _load_vocab(vocab_path)
-    char_to_id = _build_char_to_id(vocab)
+    """Fills seg.words for every segment using CTC forced alignment with Zipformer Tajweed phonemes."""
+    _vocab, token2id = _load_vocab_and_mappings(vocab_path)
+    vocab_set = get_phoneme_vocab_set()
+    loc_to_refword = get_loc_to_refword()
+
     logprobs_list = stage_metrics.get("logprobs", [])
     asr_words_list = stage_metrics.get("asr_words", [])
     silence_intervals = stage_metrics.get("silence_intervals", [])
@@ -295,7 +307,7 @@ def run_ctc_alignment(
         else:
             logprobs_np, chunk_start_sec = logprobs_entry, seg.start_time
 
-        if logprobs_np is None:
+        if logprobs_np is None or len(logprobs_np) == 0:
             continue
 
         prefix_words, suffix_words = _find_unmatched_affixes(transcribed_text, matched_text)
@@ -305,34 +317,10 @@ def run_ctc_alignment(
         asr_word_mapping, missing_word_indices = _map_asr_words_to_reference(
             asr_words or [], ref_words
         )
-        full_words = prefix_words + ref_words + suffix_words
 
-        token_ids: list[int] = []
-        word_token_counts: list[int] = []
-
-        for word in full_words:
-            ids = _tokenize_word(word, vocab, char_to_id) or [0]
-            token_ids.extend(ids)
-            word_token_counts.append(len(ids))
-
-        if not token_ids:
-            continue
-
-        try:
-            alignments, scores = _forced_align_chunk(logprobs_np, token_ids)
-        except Exception:
-            continue
-
-        full_word_times = _frames_to_word_times(
-            alignments, scores, token_ids, word_token_counts, chunk_start_sec, seg.start_time
-        )
-        start_idx = len(prefix_words)
-        end_idx = len(prefix_words) + len(ref_words)
-
-        word_times = full_word_times[start_idx:end_idx]
-        while len(word_times) < len(ref_words):
-            word_times.append({"_start": None, "_end": None})
-
+        # ----------------------------------------------------------------
+        # 1. Resolve exact locations for each ref_word
+        # ----------------------------------------------------------------
         existing_locs: list[Optional[str]] = [w.get("location") for w in seg.words] if seg.words else []
 
         if not any(existing_locs):
@@ -347,8 +335,8 @@ def run_ctc_alignment(
 
             prefix_locs = []
             if seg.matched_ref not in ALL_SPECIAL_REFS and seg.matched_text:
-                _BASMALA_TEXT = SPECIAL_TEXT["Basmala"]
-                _ISTIATHA_TEXT = SPECIAL_TEXT["Isti'adha"]
+                _BASMALA_TEXT = SPECIAL_TEXT.get("Basmala", "بسم الله الرحمن الرحيم")
+                _ISTIATHA_TEXT = SPECIAL_TEXT.get("Isti'adha", "اعوذ بالله من الشيطان الرجيم")
                 _COMBINED_TEXT = _ISTIATHA_TEXT + " ۝ " + _BASMALA_TEXT
                 if seg.matched_text.startswith(_COMBINED_TEXT):
                     prefix_locs = [f"0:0:{k+1}" for k in range(len(_COMBINED_TEXT.split()))]
@@ -413,6 +401,62 @@ def run_ctc_alignment(
         while len(existing_locs) < len(ref_words):
             existing_locs.append(None)
 
+        # ----------------------------------------------------------------
+        # 2. Extract canonical phoneme token IDs using loc_to_refword
+        # ----------------------------------------------------------------
+        ref_word_token_ids = []
+        ref_token_counts = []
+
+        for w_idx, w_text in enumerate(ref_words):
+            loc = existing_locs[w_idx] if w_idx < len(existing_locs) else None
+            ref_word_obj = loc_to_refword.get(loc) if loc else None
+
+            if ref_word_obj and hasattr(ref_word_obj, "phonemes") and ref_word_obj.phonemes:
+                ph_tokens = ref_word_obj.phonemes
+            else:
+                ph_tokens = tokenize_phoneme_string(w_text, vocab_set)
+
+            ids = [token2id[tok] for tok in ph_tokens if tok in token2id]
+            if not ids:
+                ids = [0]
+            ref_word_token_ids.extend(ids)
+            ref_token_counts.append(len(ids))
+
+        prefix_token_ids = []
+        prefix_token_counts = []
+        for pw in prefix_words:
+            ids = _tokenize_word(pw, vocab_set, token2id)
+            prefix_token_ids.extend(ids)
+            prefix_token_counts.append(len(ids))
+
+        suffix_token_ids = []
+        suffix_token_counts = []
+        for sw in suffix_words:
+            ids = _tokenize_word(sw, vocab_set, token2id)
+            suffix_token_ids.extend(ids)
+            suffix_token_counts.append(len(ids))
+
+        full_token_ids = prefix_token_ids + ref_word_token_ids + suffix_token_ids
+        full_word_token_counts = prefix_token_counts + ref_token_counts + suffix_token_counts
+
+        if not full_token_ids:
+            continue
+
+        try:
+            alignments, scores = _forced_align_chunk(logprobs_np, full_token_ids)
+        except Exception:
+            continue
+
+        full_word_times = _frames_to_word_times(
+            alignments, scores, full_token_ids, full_word_token_counts, chunk_start_sec, seg.start_time, vocab=_vocab
+        )
+        start_idx = len(prefix_words)
+        end_idx = len(prefix_words) + len(ref_words)
+
+        word_times = full_word_times[start_idx:end_idx]
+        while len(word_times) < len(ref_words):
+            word_times.append({"_start": None, "_end": None})
+
         new_words = []
         mapped_asr_words = []
         for j, (word, wt) in enumerate(zip(ref_words, word_times)):
@@ -427,6 +471,9 @@ def run_ctc_alignment(
             s, e = wt.get("_start"), wt.get("_end")
             entry["start"] = round(s, 4) if s is not None else None
             entry["end"] = round(e, 4) if e is not None else None
+            ph = wt.get("_phonemes")
+            if ph:
+                entry["phonemes"] = ph
             new_words.append(entry)
             mapped_asr_words.append(asr_word_mapping.get(j))
 
@@ -445,6 +492,11 @@ def run_ctc_alignment(
                         word["start"] = round(max(0.0, word["start"] - prefix_duration), 4)
                     if word.get("end") is not None:
                         word["end"] = round(max(0.0, word["end"] - prefix_duration), 4)
+                    for ph_item in word.get("phonemes", []):
+                        if ph_item.get("start") is not None:
+                            ph_item["start"] = round(max(0.0, ph_item["start"] - prefix_duration), 4)
+                        if ph_item.get("end") is not None:
+                            ph_item["end"] = round(max(0.0, ph_item["end"] - prefix_duration), 4)
         seg._asr_word_gaps = [None]
         seg._acoustic_word_gaps = [None]
         for previous_asr_word, current_asr_word in zip(

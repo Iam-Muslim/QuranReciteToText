@@ -74,7 +74,7 @@ def split_segments_at_ayah_boundaries(
     # Set to 0.08s: the reference project's neural Waqf VAD fires on pauses as
     # short as ~100ms.  CTC timestamp jitter is typically < 40ms, so 80ms is a
     # safe floor that honours genuine ayah boundaries while ignoring jitter.
-    MIN_SPLIT_GAP_S = 0.08
+    MIN_SPLIT_GAP_S = 0.04
 
     from qua_sdk.domain import SPECIAL_NAMES as ALL_SPECIAL_REFS
     result: list[SegmentInfo] = []
@@ -265,6 +265,15 @@ def split_segments_at_ayah_boundaries(
                     entry["start"] = round(max(0.0, entry["start"] - offset), 4)
                 if entry.get("end") is not None:
                     entry["end"]   = round(max(0.0, entry["end"]   - offset), 4)
+                if "phonemes" in entry:
+                    entry["phonemes"] = [
+                        {
+                            **p,
+                            "start": round(max(0.0, p["start"] - offset), 4) if p.get("start") is not None else None,
+                            "end": round(max(0.0, p["end"] - offset), 4) if p.get("end") is not None else None,
+                        }
+                        for p in entry["phonemes"]
+                    ]
                 sub_words.append(entry)
 
             # Determine if this sub-segment owns a repetition group.
