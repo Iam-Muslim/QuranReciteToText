@@ -147,7 +147,6 @@ def _trim_head_overlap(current: SegmentInfo, nxt: SegmentInfo) -> SegmentInfo | 
             ]
         adjusted_words.append(entry)
 
-    print(f"[DEDUP] Trimmed head overlap '{first_nxt_loc}' from nxt segment: {nxt.matched_ref!r} -> {new_ref!r}")
     return SegmentInfo(
         start_time=new_start,
         end_time=nxt.end_time,
@@ -275,7 +274,6 @@ def _transfer_leading_conjunction(current: SegmentInfo, nxt: SegmentInfo) -> tup
             words=new_nxt_words,
             _original_alignment_idx=nxt._original_alignment_idx,
         )
-        print(f"[DEDUP] Transferred leading particle '{last_word_text}' from seg end to nxt seg start.")
         return new_curr, new_nxt
 
     return None
@@ -295,7 +293,6 @@ def dedup_vad_overlaps(segments: list[SegmentInfo]) -> list[SegmentInfo]:
         _SPECIALS = set()
 
     result: list[SegmentInfo] = []
-    n_removed = 0
     current = segments[0]
 
     for nxt in segments[1:]:
@@ -330,13 +327,9 @@ def dedup_vad_overlaps(segments: list[SegmentInfo]) -> list[SegmentInfo]:
             if nxt_is_subset and not nxt_genuine and not curr_genuine:
                 new_end = max(current.end_time, nxt.end_time)
                 current = _extend_end(current, new_end)
-                n_removed += 1
-                print(f"[DEDUP] Overlap artifact dropped: ref={nxt_ref!r} ⊂ {curr_ref!r}")
                 continue
 
             if curr_is_subset and not curr_genuine and not nxt_genuine:
-                n_removed += 1
-                print(f"[DEDUP] Overlap artifact dropped (reversed): ref={curr_ref!r} ⊂ {nxt_ref!r}")
                 current = nxt
                 continue
 
@@ -344,20 +337,12 @@ def dedup_vad_overlaps(segments: list[SegmentInfo]) -> list[SegmentInfo]:
         if _trailing_fragment(current, nxt):
             new_end = max(current.end_time, nxt.end_time)
             current = _extend_end(current, new_end)
-            n_removed += 1
-            print(f"[DEDUP] Trailing fragment dropped: ref={nxt_ref!r} (already in {curr_ref!r})")
             continue
 
         result.append(current)
         current = nxt
 
     result.append(current)
-
-    if n_removed:
-        print(f"[DEDUP] Removed {n_removed} VAD-artifact segment(s).")
-    else:
-        print("[DEDUP] Cleaned segment boundaries.")
-
     return result
 
 
@@ -410,12 +395,8 @@ def merge_continuous_vad_splits(segments: list[SegmentInfo]) -> list[SegmentInfo
             n_start_time = nxt.start_time + (first_word.get("start", 0.0) if first_word else 0.0)
             
             gap = n_start_time - c_end_time
-            if '17:56' in curr_ref or '17:56' in nxt_ref:
-                print(f"[DEBUG 17:56] curr_ref={curr_ref} nxt_ref={nxt_ref} gap={gap} c_end={c_end_time} n_start={n_start_time}")
-                
             if gap < MIN_SPLIT_GAP_S:
                 current = _merge_two_segments(current, nxt)
-                print(f"[DEDUP] Fused continuous false VAD split in same ayah: {current.matched_ref}")
                 continue
                 
         result.append(current)

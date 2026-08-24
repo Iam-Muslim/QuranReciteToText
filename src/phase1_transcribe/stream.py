@@ -38,6 +38,8 @@ def run_asr_cpu(
         except Exception:
             audio_dur = 0.0
 
+        print("[*] Loading audio...")
+
         import warnings
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -45,10 +47,12 @@ def run_asr_cpu(
     else:
         audio_pcm = audio_input.astype(np.float32)
         audio_dur = len(audio_pcm) / sample_rate
+        print("[*] Loading in-memory audio...")
 
     model = ZipformerONNX.get_instance(device="cpu")
 
     # Step 1: Detect non-silent speech chunks using non-neural gentle engine
+    print("[*] Detecting speech segments and Waqf silences...")
     expected_chunks = max(1, int(audio_dur / 25.0))
     chunk_ms_list = detect_non_silent_chunks(
         audio_pcm,
@@ -99,12 +103,31 @@ def run_asr_cpu(
         preroll_samples_list.append(int((preroll_ms / 1000.0) * sample_rate))
         postroll_samples_list.append(int((postroll_ms / 1000.0) * sample_rate))
 
-    sys.stdout.write("\rTranscribing:   0.0%")
-    sys.stdout.flush()
+    import threading
+    progress_lock = threading.Lock()
+    completed_count = 0
+    total_tasks = 0
+
+    def on_task_complete(fut):
+        nonlocal completed_count
+        with progress_lock:
+            completed_count += 1
+            pct = min(100.0, (completed_count / max(1, total_tasks)) * 100.0)
+            sys.stdout.write(f"\rTranscribing: {pct:5.1f}%")
+            sys.stdout.flush()
+            if progress_callback:
+                try:
+                    progress_callback(pct, f"Transcribing audio: {pct:.1f}%")
+                except Exception:
+                    pass
 
     def transcribe_chunk_task(chunk_audio, start_sec, idx):
         text, phoneme_timestamps, logprobs = model.transcribe(chunk_audio, orig_sr=sample_rate, safe_lufs=True)
         return (text, phoneme_timestamps, logprobs, start_sec, idx)
+
+    print(f"[*] Transcribing {n_chunks} speech chunks across {max_workers} CPU workers...")
+    sys.stdout.write("\rTranscribing:   0.0%")
+    sys.stdout.flush()
 
     for idx, (start_ms, end_ms) in enumerate(chunk_ms_list):
         preroll = preroll_samples_list[idx]
@@ -132,6 +155,7 @@ def run_asr_cpu(
                 intro_audio = chunk_audio[:split_sample]
                 if len(intro_audio) > 0:
                     fut_intro = executor.submit(transcribe_chunk_task, intro_audio, actual_start_sec, idx)
+                    fut_intro.add_done_callback(on_task_complete)
                     futures.append(fut_intro)
                 recite_start_sec = split_sample / sample_rate
                 chunk_audio = chunk_audio[split_sample:]
@@ -139,19 +163,13 @@ def run_asr_cpu(
 
         if len(chunk_audio) > 0:
             fut = executor.submit(transcribe_chunk_task, chunk_audio, actual_start_sec, idx)
+            fut.add_done_callback(on_task_complete)
             futures.append(fut)
+
+    total_tasks = len(futures)
 
     for i, fut in enumerate(futures):
         text, phoneme_timestamps, logprobs, start_sec, idx = fut.result()
-
-        pct = min(100.0, ((i + 1) / max(1, len(futures))) * 100.0)
-        sys.stdout.write(f"\rTranscribing: {pct:5.1f}%")
-        sys.stdout.flush()
-        if progress_callback:
-            try:
-                progress_callback(pct, f"Transcribing audio: {pct:.1f}%")
-            except Exception:
-                pass
 
         raw_transcriptions.append({
             "chunk": idx + 1,
