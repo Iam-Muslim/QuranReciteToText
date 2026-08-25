@@ -69,6 +69,98 @@ def tokenize_phoneme_string(s: str, vocab_set: set[str] | None = None) -> list[s
     return res
 
 
+def build_tajweed_sub_costs() -> dict[tuple[str, str], float]:
+    """Builds pairwise substitution costs for Tajweed and phonetic variations.
+
+    Assigns low penalties (0.10 - 0.20) to equivalent acoustic realizations
+    (Madd lengths, Ghunnah/Ikhfa/Iqlab, Qalqalah, Shaddah geminations, Hamza carriers)
+    to prevent excessive Levenshtein distance penalties in qua_sdk.
+    """
+    pairs: dict[tuple[str, str], float] = {}
+
+    def add_group(group: list[str], cost: float):
+        for i in range(len(group)):
+            for j in range(i + 1, len(group)):
+                pairs[(group[i], group[j])] = cost
+                pairs[(group[j], group[i])] = cost
+
+    def add_pairs(a_list: list[str], b_list: list[str], cost: float):
+        for a in a_list:
+            for b in b_list:
+                pairs[(a, b)] = cost
+                pairs[(b, a)] = cost
+
+    # Madd length variations (Alif, Waw, Yaa)
+    add_group(["ا", "اا", "اااا", "ااااا", "اااااا", "ااۜ"], 0.10)
+    add_group(["ۦ", "ۦۦ", "ۦۦۦۦ", "ۦۦۦۦۦ", "ۦۦۦۦۦۦ", "ي", "يي", "ييي", "ييييي"], 0.10)
+    add_group(["ۥ", "ۥۥ", "ۥۥۥۥ", "ۥۥۥۥۥ", "ۥۥۥۥۥۥ", "و", "وو", "ووو"], 0.10)
+
+    # Ikhfa / Iqlab / Ghunnah
+    add_pairs(["ںںں", "ں", "نؙ", "نۜ"], ["نَ", "نِ", "نُ", "ن", "ننن", "ننننَ", "ننننِ", "ننننُ"], 0.15)
+    add_pairs(["۾۾۾", "۾"], ["مَ", "مِ", "مُ", "م", "ممم", "ممممَ", "ممممِ", "ممممُ"], 0.15)
+    add_pairs(["ممم", "ممممَ", "ممممِ", "ممممُ"], ["مَ", "مِ", "مُ", "م"], 0.15)
+    add_pairs(["ننن", "ننننَ", "ننننِ", "ننننُ"], ["نَ", "نِ", "نُ", "ن"], 0.15)
+
+    # Qalqalah vs plain consonants
+    add_pairs(["بڇ", "ببڇ"], ["ب", "بَ", "بِ", "بُ", "ببَ"], 0.10)
+    add_pairs(["جڇ", "ججڇ"], ["ج", "جَ", "جِ", "جُ", "ججَ"], 0.10)
+    add_pairs(["دڇ", "ددڇ"], ["د", "دَ", "دِ", "دُ", "ددَ"], 0.10)
+    add_pairs(["طڇ"], ["ط", "طَ", "طِ", "طُ", "ططَ"], 0.10)
+    add_pairs(["قڇ", "ققڇ"], ["ق", "قَ", "قِ", "قُ", "ققَ"], 0.10)
+
+    # Shaddah / Gemination vs single
+    add_pairs(["ببَ", "ببُ", "ببِ"], ["بَ", "بُ", "بِ", "ب"], 0.15)
+    add_pairs(["تتَ", "تتُ", "تتِ"], ["تَ", "تُ", "تِ", "ت"], 0.15)
+    add_pairs(["ثثَ", "ثثُ", "ثثِ"], ["ثَ", "ثُ", "ثِ", "ث"], 0.15)
+    add_pairs(["ججَ", "ججُ", "ججِ"], ["جَ", "جُ", "جِ", "ج"], 0.15)
+    add_pairs(["ححَ", "ححِ", "حح"], ["حَ", "حِ", "حُ", "ح"], 0.15)
+    add_pairs(["خخَ", "خخِ"], ["خَ", "خِ", "خُ", "خ"], 0.15)
+    add_pairs(["ددَ", "ددُ", "ددِ"], ["دَ", "دُ", "دِ", "د"], 0.15)
+    add_pairs(["ذذَ", "ذذُ", "ذذِ"], ["ذَ", "ذُ", "ذِ", "ذ"], 0.15)
+    add_pairs(["ررَ", "ررُ", "ررِ", "رر"], ["رَ", "رُ", "رِ", "ر"], 0.15)
+    add_pairs(["ززَ", "ززُ", "ززِ"], ["زَ", "زُ", "زِ", "ز"], 0.15)
+    add_pairs(["سسَ", "سسُ", "سسِ", "سس"], ["سَ", "سُ", "سِ", "س"], 0.15)
+    add_pairs(["ششَ", "ششُ", "ششِ"], ["شَ", "شُ", "شِ", "ش"], 0.15)
+    add_pairs(["صصَ", "صصُ", "صصِ"], ["صَ", "صُ", "صِ", "ص"], 0.15)
+    add_pairs(["ضضَ", "ضضُ", "ضضِ"], ["ضَ", "ضُ", "ضِ", "ض"], 0.15)
+    add_pairs(["ططَ", "ططُ", "ططِ"], ["طَ", "طُ", "طِ", "ط"], 0.15)
+    add_pairs(["ظظَ", "ظظُ", "ظظِ"], ["ظَ", "ظُ", "ظِ", "ظ"], 0.15)
+    add_pairs(["ععَ", "ععُ", "ععِ"], ["عَ", "عُ", "عِ", "ع"], 0.15)
+    add_pairs(["ففَ", "ففُ", "ففِ", "فف"], ["فَ", "فُ", "فِ", "ف"], 0.15)
+    add_pairs(["ققَ", "ققُ", "ققِ"], ["قَ", "قُ", "قِ", "ق"], 0.15)
+    add_pairs(["ككَ", "ككُ", "ككِ", "كك"], ["كَ", "كُ", "كِ", "ك"], 0.15)
+    add_pairs(["للَ", "للُ", "للِ", "لل", "لۜ"], ["لَ", "لُ", "لِ", "ل"], 0.15)
+    add_pairs(["ههَ", "ههُ", "ههِ"], ["هَ", "هُ", "هِ", "ه"], 0.15)
+    add_pairs(["ووَ", "ووُ", "ووِ"], ["وَ", "وُ", "وِ", "و"], 0.15)
+    add_pairs(["ييَ", "ييُ", "ييِ"], ["يَ", "يُ", "يِ", "ي"], 0.15)
+
+    # Acoustic Consonant Confusion Matrix (from ReciteQuran Acoustic Cost Engine)
+    # ت <-> ط
+    add_pairs(["تَ", "تُ", "تِ", "ت", "تتَ", "تتُ", "تتِ"], ["طَ", "طُ", "طِ", "ط", "ططَ", "ططُ", "ططِ", "طڇ"], 0.25)
+    # ج <-> ز
+    add_pairs(["جَ", "جُ", "جِ", "ج", "جڇ", "ججَ"], ["زَ", "زُ", "زِ", "ز", "ززَ"], 0.25)
+    # خ <-> غ
+    add_pairs(["خَ", "خُ", "خِ", "خ", "خخَ"], ["غَ", "غُ", "غِ", "غ"], 0.25)
+    # د <-> ض
+    add_pairs(["دَ", "دُ", "دِ", "د", "دڇ", "ددَ", "ددڇ"], ["ضَ", "ضُ", "ضِ", "ض", "ضضَ"], 0.25)
+    # ذ <-> ز and ذ <-> ظ
+    add_pairs(["ذَ", "ذُ", "ذِ", "ذ", "ذذَ"], ["زَ", "زُ", "زِ", "ز", "ززَ", "ظَ", "ظُ", "ظِ", "ظ", "ظظَ"], 0.25)
+    # س <-> ص
+    add_pairs(["سَ", "سُ", "سِ", "س", "سسَ", "سس"], ["صَ", "صُ", "صِ", "ص", "صصَ"], 0.25)
+    # ق <-> ك
+    add_pairs(["قَ", "قُ", "قِ", "ق", "قڇ", "ققَ", "ققڇ"], ["كَ", "كُ", "كِ", "ك", "ككَ"], 0.25)
+
+    # Hamza carriers & special marks
+    add_pairs(["ءَ", "ءُ", "ءِ", "ء", "ٲ"], ["ا", "و", "ي"], 0.20)
+    add_pairs(["ر۪"], ["رِ", "رَ"], 0.15)
+    add_pairs(["لۜ"], ["ل", "لَ"], 0.10)
+    add_pairs(["نۜ"], ["ن", "نَ"], 0.10)
+    add_pairs(["ااۜ"], ["اا", "ا"], 0.10)
+
+    return pairs
+
+
+
 @lru_cache(maxsize=1)
 def get_arabic_resources() -> MatchingResources:
     """Builds and caches MatchingResources (Phoneme N-Gram index & Quran references).
@@ -148,7 +240,7 @@ def get_arabic_resources() -> MatchingResources:
         total_ngrams=total_ngrams,
     )
 
-    sub_table = SubCostTable(mode="arabic", default=1.0, pairs={})
+    sub_table = SubCostTable(mode="arabic", default=1.0, pairs=build_tajweed_sub_costs())
 
     basmala_tokens = tokenize_phoneme_string("بِسمِللَااهِررَحمَاانِررَحِۦۦۦۦم", vocab_set)
     istiadha_tokens = tokenize_phoneme_string("ءَعُۥۥذُبِللَااهِمِنَششَيطَاانِرَّجِۦۦۦۦم", vocab_set)

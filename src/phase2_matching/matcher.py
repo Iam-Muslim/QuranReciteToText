@@ -473,12 +473,91 @@ def _prepare_multi_chapter_units(
     stage_metrics["asr_words"] = unit_asr_words
     stage_metrics["logprobs"] = unit_logprobs
     stage_metrics["multi_chapter"] = True
-    return (
-        Regions(regions=unit_regions, audio_duration_s=regions.audio_duration_s),
-        Emissions(tokens=unit_tokens),
-        stage_metrics,
-        unit_labels,
-    )
+def _bridge_inter_chunk_gaps(
+    match_results: list,
+    word_indices: list,
+    resources,
+    start_surah: int,
+    unit_labels: list | None = None
+) -> list:
+    """Bridges 1-word boundary gaps between adjacent chunks caused by VAD cutoffs."""
+    if not match_results or not word_indices or len(match_results) != len(word_indices):
+        return match_results
+
+    n = len(match_results)
+    for i in range(n - 1):
+        res_curr = match_results[i]
+        res_next = match_results[i + 1]
+        w_curr = word_indices[i]
+        w_next = word_indices[i + 1]
+
+        if not w_curr or not w_next:
+            continue
+
+        surah_curr = unit_labels[i][0] if unit_labels and i < len(unit_labels) else start_surah
+        surah_next = unit_labels[i + 1][0] if unit_labels and i + 1 < len(unit_labels) else start_surah
+
+        if surah_curr <= 0 or surah_curr != surah_next or surah_curr not in resources.chapter_refs:
+            continue
+
+        chapter_ref = resources.chapter_refs[surah_curr]
+        prev_end = w_curr[1]
+        next_start = w_next[0]
+
+        # Single word gap between consecutive chunks
+        if next_start == prev_end + 2:
+            gap_idx = prev_end + 1
+            if 0 <= gap_idx < len(chapter_ref.words):
+                gap_word = chapter_ref.words[gap_idx]
+                prev_w = chapter_ref.words[prev_end] if 0 <= prev_end < len(chapter_ref.words) else None
+                next_w = chapter_ref.words[next_start] if 0 <= next_start < len(chapter_ref.words) else None
+
+                # If the gap word belongs to the previous chunk's ayah, bridge into chunk i
+                if prev_w and gap_word.ayah == prev_w.ayah:
+                    if len(res_curr) == 4:
+                        m_text, m_score, m_ref, m_wraps = res_curr
+                    else:
+                        m_text, m_score, m_ref = res_curr[:3]
+                        m_wraps = None
+                    if m_ref and ":" in m_ref:
+                        ref_from = m_ref.split("-")[0]
+                        ref_to = f"{gap_word.surah}:{gap_word.ayah}:{gap_word.word_num}"
+                        new_ref = f"{ref_from}-{ref_to}"
+                        new_text = f"{m_text} {gap_word.text}" if m_text else gap_word.text
+                        match_results[i] = (new_text, m_score, new_ref, m_wraps) if len(res_curr) == 4 else (new_text, m_score, new_ref)
+                        word_indices[i] = (w_curr[0], gap_idx)
+
+                # Otherwise if it belongs to the next chunk's ayah, bridge into chunk i+1
+                elif next_w and gap_word.ayah == next_w.ayah:
+                    if len(res_next) == 4:
+                        m_text, m_score, m_ref, m_wraps = res_next
+                    else:
+                        m_text, m_score, m_ref = res_next[:3]
+                        m_wraps = None
+                    if m_ref and ":" in m_ref:
+                        ref_parts = m_ref.split("-")
+                        ref_to = ref_parts[1] if len(ref_parts) > 1 else ref_parts[0]
+                        ref_from = f"{gap_word.surah}:{gap_word.ayah}:{gap_word.word_num}"
+                        new_ref = f"{ref_from}-{ref_to}"
+                        new_text = f"{gap_word.text} {m_text}" if m_text else gap_word.text
+                        match_results[i + 1] = (new_text, m_score, new_ref, m_wraps) if len(res_next) == 4 else (new_text, m_score, new_ref)
+                        word_indices[i + 1] = (gap_idx, w_next[1])
+                else:
+                    # Default: append to previous chunk
+                    if len(res_curr) == 4:
+                        m_text, m_score, m_ref, m_wraps = res_curr
+                    else:
+                        m_text, m_score, m_ref = res_curr[:3]
+                        m_wraps = None
+                    if m_ref and ":" in m_ref:
+                        ref_from = m_ref.split("-")[0]
+                        ref_to = f"{gap_word.surah}:{gap_word.ayah}:{gap_word.word_num}"
+                        new_ref = f"{ref_from}-{ref_to}"
+                        new_text = f"{m_text} {gap_word.text}" if m_text else gap_word.text
+                        match_results[i] = (new_text, m_score, new_ref, m_wraps) if len(res_curr) == 4 else (new_text, m_score, new_ref)
+                        word_indices[i] = (w_curr[0], gap_idx)
+
+    return match_results
 
 
 def _run_post_asr_pipeline(
@@ -559,13 +638,16 @@ def _run_post_asr_pipeline(
                 params=params,
                 resources=resources,
             )
-            match_results = sdk_result.results
+            match_results = list(sdk_result.results)
+            word_indices = list(sdk_result.word_indices)
             match_metrics = sdk_result.metrics
             gap_events = sdk_result.events
+            unit_labels = None
         else:
             regions, emissions, stage_metrics, unit_labels = prepared
             transcribed_tokens = emissions.tokens
             match_results = []
+            word_indices = []
             match_metrics: dict[str, int | float] = defaultdict(int)
             gap_events = []
             start_surah = unit_labels[0][0]
@@ -575,6 +657,7 @@ def _run_post_asr_pipeline(
                 unit_surah, fallback_ayah = unit_labels[unit_index]
                 if unit_surah <= 0:
                     match_results.append(("", 0.0, "", None))
+                    word_indices.append(None)
                     unit_index += 1
                     continue
                 group_end = unit_index + 1
@@ -601,11 +684,17 @@ def _run_post_asr_pipeline(
                     resources=resources,
                 )
                 match_results.extend(unit_result.results)
+                word_indices.extend(unit_result.word_indices)
                 gap_events.extend(unit_result.events)
                 for key, value in unit_result.metrics.items():
                     if isinstance(value, (int, float)):
                         match_metrics[key] += value
                 unit_index = group_end
+
+        # Bridge 1-word boundary gaps caused by audio silence cuts between chunks
+        match_results = _bridge_inter_chunk_gaps(
+            match_results, word_indices, resources, start_surah, unit_labels
+        )
 
     except Exception as e:
         user_message = getattr(e, "user_message", None)
