@@ -5,6 +5,7 @@
 
 An automated, high-performance, lightweight CPU pipeline for transcribing and forced-aligning Quranic recitations with the exact Medina Mushaf text. It produces **frame-perfect, millisecond-accurate timestamps at the segment, word, and individual letter/Tajweed phoneme level** using the **Zipformer-v3 Arabic Tajweed Phoneme CTC model**.
 
+<img width="1379" height="869" alt="1787559568-409220-image" src="https://github.com/user-attachments/assets/ae615cf9-9d1b-493a-a706-f845c1a2fc56" />
 
 ##  Quick Start
 
