@@ -12,6 +12,9 @@ from qua_sdk.components.matching.runtimes.runtime import find_anchor_by_voting
 from src.phase2_matching.normalize import get_arabic_resources, normalize_arabic
 from src.core import sdk_adapt
 
+# Fallback anchor window (retry in _run_post_asr_pipeline if initial 5-segment search fails).
+WIDE_ANCHOR_SEGMENTS = 30
+
 
 def _chapter_scores(tokens, ngram_index) -> dict[int, float]:
     """Returns weighted n-gram votes grouped by chapter."""
@@ -523,6 +526,20 @@ def _run_post_asr_pipeline(
             start_surah, start_ayah = find_anchor_by_voting(quran_tokens, resources.ngram_index, params.anchor)
             if start_surah <= 0:
                 start_surah, start_ayah = find_anchor_by_voting(transcribed_tokens, resources.ngram_index, params.anchor)
+            if start_surah <= 0:
+                # AnchorParams.segments defaults to 5, so the vote only ever sees the
+                # first five chunks. When a recording opens with an announcement, a long
+                # isti'adha/basmala, or garbled chunks, none of those five carry a matchable
+                # n-gram and the whole file is abandoned even though the recitation right after
+                # them is clean. Retry once over a wider window (30 segments) before giving up.
+                wide = params.anchor.model_copy(update={"segments": WIDE_ANCHOR_SEGMENTS})
+                start_surah, start_ayah = find_anchor_by_voting(
+                    quran_tokens, resources.ngram_index, wide
+                )
+                if start_surah <= 0:
+                    start_surah, start_ayah = find_anchor_by_voting(
+                        transcribed_tokens, resources.ngram_index, wide
+                    )
                 if start_surah <= 0:
                     raise ValueError("Could not anchor to any chapter — no n-gram matches found")
 
