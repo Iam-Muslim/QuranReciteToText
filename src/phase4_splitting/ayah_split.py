@@ -147,11 +147,12 @@ def split_segments_at_ayah_boundaries(
                 elif (
                     has_waqf
                     and waqf_gap is not None
-                    and waqf_gap >= max(0.4, min_word_gap_s)
+                    and waqf_gap >= max(0.24, min_word_gap_s * 0.5)
                 ):
-                    # FastConformer timestamps advance in 80ms frames, so 400ms
-                    # safely represents the upstream model's nominal 0.5s waqf gap.
+                    # Zipformer encoder frames advance in 40ms steps (25 Hz),
+                    # so 240ms (6 frames) reliably captures natural Waqf pauses.
                     groups.append(_new_group(key, "waqf", w))
+
                 else:
                     groups[-1]["words"].append(w)
             else:

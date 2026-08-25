@@ -32,6 +32,7 @@ def _chapter_scores(tokens, ngram_index) -> dict[int, float]:
 
 def _chapter_start_ayah(tokens, surah: int, resources, fallback: int) -> int:
     """Returns the best matching ayah inside a known chapter."""
+    from src.phase2_matching.normalize import normalize_phoneme_to_core
     scores: dict[int, float] = defaultdict(float)
     ngram_index = resources.ngram_index
     ngram_size = ngram_index.ngram_size
@@ -43,13 +44,13 @@ def _chapter_start_ayah(tokens, surah: int, resources, fallback: int) -> int:
         for candidate_surah, ayah in ngram_index.ngram_positions[ngram]:
             if candidate_surah == surah:
                 scores[ayah] += 1.0 / count
-    query = "".join(tokens).strip()
+    query = "".join(normalize_phoneme_to_core(t) for t in tokens).strip()
     ayah_tokens: dict[int, list[str]] = defaultdict(list)
     for word in resources.chapter_refs[surah].words:
         ayah_tokens[word.ayah].extend(word.phonemes)
     similarities = {
         ayah: SequenceMatcher(
-            None, query, "".join(reference), autojunk=False
+            None, query, "".join(normalize_phoneme_to_core(p) for p in reference), autojunk=False
         ).find_longest_match().size / max(1, len(query))
         for ayah, reference in ayah_tokens.items()
     }
@@ -60,8 +61,9 @@ def _chapter_start_ayah(tokens, surah: int, resources, fallback: int) -> int:
 
 def _chapter_similarity(tokens, chapter_ref) -> float:
     """Returns the longest normalized character match ratio for one chapter."""
-    query = "".join(tokens).strip()
-    reference = "".join(phoneme for word in chapter_ref.words for phoneme in word.phonemes)
+    from src.phase2_matching.normalize import normalize_phoneme_to_core
+    query = "".join(normalize_phoneme_to_core(t) for t in tokens).strip()
+    reference = "".join(normalize_phoneme_to_core(phoneme) for word in chapter_ref.words for phoneme in word.phonemes)
     if not query or not reference:
         return 0.0
     match = SequenceMatcher(None, query, reference, autojunk=False).find_longest_match()
@@ -80,17 +82,19 @@ def _tokens_from_words(words: list[dict]) -> list[str]:
 
 def _chapter_word_index(text: str, chapter_ref) -> int | None:
     """Returns the closest canonical chapter word index for one ASR word."""
-    query = "".join(_tokens_from_words([{"word": text}])).strip()
+    from src.phase2_matching.normalize import normalize_phoneme_to_core
+    query = "".join(normalize_phoneme_to_core(t) for t in _tokens_from_words([{"word": text}])).strip()
     if not query:
         return None
     matches = [
         SequenceMatcher(
-            None, query, "".join(word.phonemes).strip(), autojunk=False
+            None, query, "".join(normalize_phoneme_to_core(p) for p in word.phonemes).strip(), autojunk=False
         ).ratio()
         for word in chapter_ref.words
     ]
     best_index = max(range(len(matches)), key=matches.__getitem__)
     return best_index if matches[best_index] >= 0.5 else None
+
 
 
 def _slice_logprobs(logprobs, chunk_start_s: float, start_s: float, end_s: float):
@@ -480,7 +484,7 @@ def _bridge_inter_chunk_gaps(
     start_surah: int,
     unit_labels: list | None = None
 ) -> list:
-    """Bridges 1-word boundary gaps between adjacent chunks caused by VAD cutoffs."""
+    """Bridges 1 to 2-word boundary gaps between adjacent chunks caused by VAD cutoffs."""
     if not match_results or not word_indices or len(match_results) != len(word_indices):
         return match_results
 
@@ -504,60 +508,69 @@ def _bridge_inter_chunk_gaps(
         prev_end = w_curr[1]
         next_start = w_next[0]
 
-        # Single word gap between consecutive chunks
-        if next_start == prev_end + 2:
-            gap_idx = prev_end + 1
-            if 0 <= gap_idx < len(chapter_ref.words):
-                gap_word = chapter_ref.words[gap_idx]
+        # 1 to 2 word gap between consecutive chunks
+        gap_size = next_start - prev_end - 1
+        if 1 <= gap_size <= 2:
+            gap_indices = list(range(prev_end + 1, next_start))
+            if all(0 <= g < len(chapter_ref.words) for g in gap_indices):
                 prev_w = chapter_ref.words[prev_end] if 0 <= prev_end < len(chapter_ref.words) else None
                 next_w = chapter_ref.words[next_start] if 0 <= next_start < len(chapter_ref.words) else None
 
-                # If the gap word belongs to the previous chunk's ayah, bridge into chunk i
-                if prev_w and gap_word.ayah == prev_w.ayah:
-                    if len(res_curr) == 4:
-                        m_text, m_score, m_ref, m_wraps = res_curr
-                    else:
-                        m_text, m_score, m_ref = res_curr[:3]
-                        m_wraps = None
-                    if m_ref and ":" in m_ref:
-                        ref_from = m_ref.split("-")[0]
-                        ref_to = f"{gap_word.surah}:{gap_word.ayah}:{gap_word.word_num}"
-                        new_ref = f"{ref_from}-{ref_to}"
-                        new_text = f"{m_text} {gap_word.text}" if m_text else gap_word.text
-                        match_results[i] = (new_text, m_score, new_ref, m_wraps) if len(res_curr) == 4 else (new_text, m_score, new_ref)
-                        word_indices[i] = (w_curr[0], gap_idx)
+                for gap_idx in gap_indices:
+                    gap_word = chapter_ref.words[gap_idx]
+                    # If the gap word belongs to the previous chunk's ayah, bridge into chunk i
+                    if prev_w and gap_word.ayah == prev_w.ayah:
+                        if len(res_curr) == 4:
+                            m_text, m_score, m_ref, m_wraps = res_curr
+                        else:
+                            m_text, m_score, m_ref = res_curr[:3]
+                            m_wraps = None
+                        if m_ref and ":" in m_ref:
+                            ref_from = m_ref.split("-")[0]
+                            ref_to = f"{gap_word.surah}:{gap_word.ayah}:{gap_word.word_num}"
+                            new_ref = f"{ref_from}-{ref_to}"
+                            new_text = f"{m_text} {gap_word.text}" if m_text else gap_word.text
+                            res_curr = (new_text, m_score, new_ref, m_wraps) if len(res_curr) == 4 else (new_text, m_score, new_ref)
+                            match_results[i] = res_curr
+                            w_curr = (w_curr[0], gap_idx)
+                            word_indices[i] = w_curr
 
-                # Otherwise if it belongs to the next chunk's ayah, bridge into chunk i+1
-                elif next_w and gap_word.ayah == next_w.ayah:
-                    if len(res_next) == 4:
-                        m_text, m_score, m_ref, m_wraps = res_next
+                    # Otherwise bridge into chunk i+1
+                    elif next_w and gap_word.ayah == next_w.ayah:
+                        if len(res_next) == 4:
+                            m_text, m_score, m_ref, m_wraps = res_next
+                        else:
+                            m_text, m_score, m_ref = res_next[:3]
+                            m_wraps = None
+                        if m_ref and ":" in m_ref:
+                            ref_parts = m_ref.split("-")
+                            ref_to = ref_parts[1] if len(ref_parts) > 1 else ref_parts[0]
+                            ref_from = f"{gap_word.surah}:{gap_word.ayah}:{gap_word.word_num}"
+                            new_ref = f"{ref_from}-{ref_to}"
+                            new_text = f"{gap_word.text} {m_text}" if m_text else gap_word.text
+                            res_next = (new_text, m_score, new_ref, m_wraps) if len(res_next) == 4 else (new_text, m_score, new_ref)
+                            match_results[i + 1] = res_next
+                            w_next = (gap_idx, w_next[1])
+                            word_indices[i + 1] = w_next
                     else:
-                        m_text, m_score, m_ref = res_next[:3]
-                        m_wraps = None
-                    if m_ref and ":" in m_ref:
-                        ref_parts = m_ref.split("-")
-                        ref_to = ref_parts[1] if len(ref_parts) > 1 else ref_parts[0]
-                        ref_from = f"{gap_word.surah}:{gap_word.ayah}:{gap_word.word_num}"
-                        new_ref = f"{ref_from}-{ref_to}"
-                        new_text = f"{gap_word.text} {m_text}" if m_text else gap_word.text
-                        match_results[i + 1] = (new_text, m_score, new_ref, m_wraps) if len(res_next) == 4 else (new_text, m_score, new_ref)
-                        word_indices[i + 1] = (gap_idx, w_next[1])
-                else:
-                    # Default: append to previous chunk
-                    if len(res_curr) == 4:
-                        m_text, m_score, m_ref, m_wraps = res_curr
-                    else:
-                        m_text, m_score, m_ref = res_curr[:3]
-                        m_wraps = None
-                    if m_ref and ":" in m_ref:
-                        ref_from = m_ref.split("-")[0]
-                        ref_to = f"{gap_word.surah}:{gap_word.ayah}:{gap_word.word_num}"
-                        new_ref = f"{ref_from}-{ref_to}"
-                        new_text = f"{m_text} {gap_word.text}" if m_text else gap_word.text
-                        match_results[i] = (new_text, m_score, new_ref, m_wraps) if len(res_curr) == 4 else (new_text, m_score, new_ref)
-                        word_indices[i] = (w_curr[0], gap_idx)
+                        # Default: append to previous chunk
+                        if len(res_curr) == 4:
+                            m_text, m_score, m_ref, m_wraps = res_curr
+                        else:
+                            m_text, m_score, m_ref = res_curr[:3]
+                            m_wraps = None
+                        if m_ref and ":" in m_ref:
+                            ref_from = m_ref.split("-")[0]
+                            ref_to = f"{gap_word.surah}:{gap_word.ayah}:{gap_word.word_num}"
+                            new_ref = f"{ref_from}-{ref_to}"
+                            new_text = f"{m_text} {gap_word.text}" if m_text else gap_word.text
+                            res_curr = (new_text, m_score, new_ref, m_wraps) if len(res_curr) == 4 else (new_text, m_score, new_ref)
+                            match_results[i] = res_curr
+                            w_curr = (w_curr[0], gap_idx)
+                            word_indices[i] = w_curr
 
     return match_results
+
 
 
 def _run_post_asr_pipeline(
@@ -616,11 +629,27 @@ def _run_post_asr_pipeline(
                     quran_tokens, resources.ngram_index, wide
                 )
                 if start_surah <= 0:
+                    # Tier 3 fallback: Resilient collapsed 4-gram anchor index (Madd & Tajweed length invariant)
+                    from src.phase2_matching.normalize import get_collapsed_ngram_index, normalize_phoneme_to_core
+                    collapsed_index = get_collapsed_ngram_index()
+                    collapsed_tokens = [
+                        [normalize_phoneme_to_core(p) for p in chunk if normalize_phoneme_to_core(p)]
+                        for chunk in quran_tokens
+                    ]
                     start_surah, start_ayah = find_anchor_by_voting(
-                        transcribed_tokens, resources.ngram_index, wide
+                        collapsed_tokens, collapsed_index, wide
                     )
+                    if start_surah <= 0:
+                        all_collapsed_tokens = [
+                            [normalize_phoneme_to_core(p) for p in chunk if normalize_phoneme_to_core(p)]
+                            for chunk in transcribed_tokens
+                        ]
+                        start_surah, start_ayah = find_anchor_by_voting(
+                            all_collapsed_tokens, collapsed_index, wide
+                        )
                 if start_surah <= 0:
                     raise ValueError("Could not anchor to any chapter — no n-gram matches found")
+
 
             chapter_ref = resources.chapter_refs[start_surah]
             start_pointer = 0

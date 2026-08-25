@@ -252,6 +252,7 @@ def _frames_to_word_times(
         rel_we = max(0.0, abs_we - seg_start_time)
 
         phonemes_list = []
+        token_confs = []
         for k in range(tok_offset, tok_offset + count):
             ps_f = token_starts_f[k]
             pe_f = token_ends_f[k]
@@ -263,16 +264,34 @@ def _frames_to_word_times(
             p_rel_we = max(0.0, p_abs_we - seg_start_time)
             tok_id = token_ids[k]
             tok_str = vocab[tok_id] if vocab and tok_id < len(vocab) else ""
+
+            # Compute acoustic confidence from CTC frame log-probabilities
+            act_f = active_frames[k]
+            if len(act_f) > 0:
+                p_logp = float(np.mean(scores[act_f]))
+                p_conf = float(np.clip(np.exp(p_logp), 0.05, 0.99))
+            else:
+                p_conf = 0.50
+            token_confs.append(p_conf)
+
             phonemes_list.append({
                 "phoneme": tok_str,
                 "start": round(p_rel_ws, 4),
                 "end": round(p_rel_we, 4),
+                "confidence": round(p_conf, 2),
             })
 
-        word_times.append({"_start": rel_ws, "_end": rel_we, "_phonemes": phonemes_list})
+        w_conf = float(np.mean(token_confs)) if token_confs else 0.80
+        word_times.append({
+            "_start": rel_ws,
+            "_end": rel_we,
+            "_confidence": round(w_conf, 2),
+            "_phonemes": phonemes_list,
+        })
         tok_offset += count
 
     return word_times
+
 
 
 def run_ctc_alignment(
@@ -471,11 +490,15 @@ def run_ctc_alignment(
             s, e = wt.get("_start"), wt.get("_end")
             entry["start"] = round(s, 4) if s is not None else None
             entry["end"] = round(e, 4) if e is not None else None
+            conf = wt.get("_confidence")
+            if conf is not None:
+                entry["confidence"] = round(conf, 2)
             ph = wt.get("_phonemes")
             if ph:
                 entry["phonemes"] = ph
             new_words.append(entry)
             mapped_asr_words.append(asr_word_mapping.get(j))
+
 
         seg.words = new_words
         if stage_metrics.get("multi_chapter") and new_words:

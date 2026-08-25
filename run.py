@@ -28,15 +28,18 @@ def ensure_dependencies():
         import sherpa_onnx
         import qua_sdk
     except ImportError as e:
+        vendor_whl = _app_path / "vendor" / "qua_sdk-0.5.9-py3-none-any.whl"
         req_path = _app_path / "requirements.txt"
-        if req_path.exists():
-            try:
-                subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", str(req_path)])
-                os.execv(sys.executable, [sys.executable] + sys.argv)
-            except Exception as ex:
-                sys.exit(1)
-        else:
+        try:
+            if vendor_whl.exists():
+                subprocess.check_call([sys.executable, "-m", "pip", "install", str(vendor_whl)])
+            if req_path.exists():
+                subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", str(req_path)], cwd=str(_app_path))
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+        except Exception as ex:
+            print(f"[!] Error installing dependencies: {ex}", file=sys.stderr)
             sys.exit(1)
+
 
 
 def preload_caches():

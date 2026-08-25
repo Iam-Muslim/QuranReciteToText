@@ -161,6 +161,68 @@ def build_tajweed_sub_costs() -> dict[tuple[str, str], float]:
 
 
 
+def normalize_phoneme_to_core(tok: str) -> str:
+    """Collapses a Tajweed phoneme token into its base phonetic consonant/vowel root."""
+    if not tok:
+        return ""
+    # Madds
+    if tok in ("اا", "اااا", "ااااا", "اااااا", "ااۜ"):
+        return "ا"
+    if tok in ("ۦ", "ۦۦ", "ۦۦۦۦ", "ۦۦۦۦۦ", "ۦۦۦۦۦۦ", "ي", "يي", "ييي", "ييييي", "يِ", "ييِ", "ييَ", "ييُ"):
+        return "ي"
+    if tok in ("ۥ", "ۥۥ", "ۥۥۥۥ", "ۥۥۥۥۥ", "ۥۥۥۥۥۥ", "و", "وو", "ووو", "وُ", "ووُ", "ووَ", "ووِ"):
+        return "و"
+    # Nasals & Ghunnah
+    if tok in ("ں", "ںںں", "نؙ", "نۜ", "ننن", "ننننَ", "ننننُ", "ننننِ"):
+        return "ن"
+    if tok in ("۾", "۾۾۾", "ممم", "ممممَ", "ممممُ", "ممممِ"):
+        return "م"
+    # Qalqalah strip ڇ
+    if "ڇ" in tok:
+        tok = tok.replace("ڇ", "")
+    # Hamza normalize
+    if tok in ("ءَ", "ءُ", "ءِ", "ء", "ٲ"):
+        return "ء"
+    # Imalah
+    if tok == "ر۪":
+        return "ر"
+    # Strip diacritics & shaddah repetition: 'ببَ' -> 'ب', 'تَ' -> 'ت'
+    base = re.sub(r'[\u064B-\u065F\u0670\u06D6-\u06E9\u06EA-\u06ED]', '', tok)
+    if len(base) >= 2 and base[0] == base[1]:
+        return base[0]
+    return base if base else tok
+
+
+@lru_cache(maxsize=1)
+def get_collapsed_ngram_index() -> PhonemeNgramIndex:
+    """Builds a secondary 4-gram anchor index over collapsed core phonemes."""
+    resources = get_arabic_resources()
+    collapsed_ngram_positions = defaultdict(list)
+    total_collapsed_ngrams = 0
+    COLLAPSED_NGRAM_SIZE = 4
+
+    for surah, ref in resources.chapter_refs.items():
+        verse_tokens = defaultdict(list)
+        for w in ref.words:
+            core_toks = [normalize_phoneme_to_core(p) for p in w.phonemes if normalize_phoneme_to_core(p)]
+            verse_tokens[w.ayah].extend(core_toks)
+
+        for ayah, tokens in verse_tokens.items():
+            if len(tokens) < COLLAPSED_NGRAM_SIZE:
+                continue
+            for i in range(len(tokens) - COLLAPSED_NGRAM_SIZE + 1):
+                ng = tuple(tokens[i:i + COLLAPSED_NGRAM_SIZE])
+                collapsed_ngram_positions[ng].append((surah, ayah))
+                total_collapsed_ngrams += 1
+
+    return PhonemeNgramIndex(
+        ngram_positions=dict(collapsed_ngram_positions),
+        ngram_counts={ng: len(pos) for ng, pos in collapsed_ngram_positions.items()},
+        ngram_size=COLLAPSED_NGRAM_SIZE,
+        total_ngrams=total_collapsed_ngrams,
+    )
+
+
 @lru_cache(maxsize=1)
 def get_arabic_resources() -> MatchingResources:
     """Builds and caches MatchingResources (Phoneme N-Gram index & Quran references).
@@ -243,8 +305,8 @@ def get_arabic_resources() -> MatchingResources:
     sub_table = SubCostTable(mode="arabic", default=1.0, pairs=build_tajweed_sub_costs())
 
     basmala_tokens = tokenize_phoneme_string("بِسمِللَااهِررَحمَاانِررَحِۦۦۦۦم", vocab_set)
-    istiadha_tokens = tokenize_phoneme_string("ءَعُۥۥذُبِللَااهِمِنَششَيطَاانِرَّجِۦۦۦۦم", vocab_set)
-    tahmeed_tokens = tokenize_phoneme_string("سَمِعَللَااهُلِمَندَ", vocab_set)
+    istiadha_tokens = tokenize_phoneme_string("ءَعُۥۥذُبِللَااهِمِنَششَيطَاانِررَجِۦۦۦۦم", vocab_set)
+    tahmeed_tokens = tokenize_phoneme_string("سَمِعَللَااهُلِمَنحَمِدَه", vocab_set)
     combined_tokens = istiadha_tokens + basmala_tokens
 
     templates = SpecialTemplates(
@@ -264,3 +326,4 @@ def get_arabic_resources() -> MatchingResources:
         sub_table=sub_table,
         templates=templates,
     )
+
