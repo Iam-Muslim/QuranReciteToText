@@ -18,6 +18,51 @@ from src.phase2_matching.normalize import normalize_arabic
 from src.phase1_transcribe.fastconformer import FastConformerONNX
 from src.phase1_transcribe.silence import detect_acoustic_silences, detect_non_silent_chunks
 
+# The FastConformer ONNX export (both the q8 and mixed variants) silently
+# collapses to blank/empty output once its input passes ~11.0-11.4s (~1100
+# frames) -- empirically verified, not a quantization artifact, present in
+# both released models. Neither Rule 1 of _detect_non_silent_fast (single
+# pass for any file <=180s) nor the >38s merge/split logic in silence.py
+# account for this, so a long silence-free chunk -- routine for a Hadr-style
+# or fast reciter -- gets fed whole and returns almost nothing. Every chunk
+# handed to fc.transcribe() is therefore re-split here, safely under that
+# ceiling, regardless of what earlier VAD stages decided.
+_MAX_MODEL_CHUNK_S = 10.5
+
+
+def _split_into_safe_windows(chunk_audio, sample_rate, max_dur_s=_MAX_MODEL_CHUNK_S):
+    """Recursively splits audio at its quietest point until every piece is <= max_dur_s.
+
+    Returns a list of (sub_audio, offset_sec) pairs, offset relative to chunk_audio's start.
+    """
+    max_samples = int(max_dur_s * sample_rate)
+    if len(chunk_audio) <= max_samples:
+        return [(chunk_audio, 0.0)]
+
+    frame_len = int(0.10 * sample_rate)   # 100ms frame
+    hop_len = int(0.05 * sample_rate)     # 50ms hop
+    # Search the middle 80% so we never split right at an edge (which would
+    # just recurse on an ~unchanged oversized piece).
+    search_start = int(len(chunk_audio) * 0.1)
+    search_end = len(chunk_audio) - int(len(chunk_audio) * 0.1)
+
+    min_rms = float('inf')
+    split_sample = -1
+    for f_start in range(search_start, max(search_start + 1, search_end - frame_len), hop_len):
+        frame = chunk_audio[f_start:f_start + frame_len]
+        rms = float(np.sqrt(np.mean(np.square(frame))))
+        if rms < min_rms:
+            min_rms = rms
+            split_sample = f_start + frame_len // 2
+
+    if split_sample <= 0 or split_sample >= len(chunk_audio):
+        split_sample = len(chunk_audio) // 2  # degenerate fallback: pure midpoint
+
+    left = _split_into_safe_windows(chunk_audio[:split_sample], sample_rate, max_dur_s)
+    right = _split_into_safe_windows(chunk_audio[split_sample:], sample_rate, max_dur_s)
+    right = [(a, off + split_sample / sample_rate) for a, off in right]
+    return left + right
+
 
 def run_asr_cpu(
     audio_input,
@@ -142,8 +187,10 @@ def run_asr_cpu(
             if split_sample > 0 and min_rms < chunk_mean_rms * 0.10:
                 # Submit intro as its own tiny chunk (will fail matching — expected)
                 intro_audio = chunk_audio[:split_sample]
-                if len(intro_audio) > 0:
-                    fut_intro = executor.submit(transcribe_chunk_task, intro_audio, actual_start_sec, idx)
+                for sub_audio, sub_offset_sec in _split_into_safe_windows(intro_audio, sample_rate):
+                    if len(sub_audio) == 0:
+                        continue
+                    fut_intro = executor.submit(transcribe_chunk_task, sub_audio, actual_start_sec + sub_offset_sec, idx)
                     futures.append(fut_intro)
                 # Main recitation chunk starts after the split
                 recite_start_sec = split_sample / sample_rate
@@ -151,8 +198,11 @@ def run_asr_cpu(
                 actual_start_sec = recite_start_sec
 
         if len(chunk_audio) > 0:
-            fut = executor.submit(transcribe_chunk_task, chunk_audio, actual_start_sec, idx)
-            futures.append(fut)
+            for sub_audio, sub_offset_sec in _split_into_safe_windows(chunk_audio, sample_rate):
+                if len(sub_audio) == 0:
+                    continue
+                fut = executor.submit(transcribe_chunk_task, sub_audio, actual_start_sec + sub_offset_sec, idx)
+                futures.append(fut)
 
     for i, fut in enumerate(futures):
         text, word_timestamps, logprobs, start_sec, idx = fut.result()
