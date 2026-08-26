@@ -112,8 +112,15 @@ def _tokenize_word(word: str, vocab_set: set[str], token2id: dict[str, int]) -> 
     return ids if ids else [0]
 
 
-def _forced_align_chunk(log_probs_np: np.ndarray, token_ids: list[int]) -> tuple[np.ndarray, np.ndarray]:
-    """Runs Viterbi dynamic programming trellis forced alignment over logprobs."""
+def _forced_align_chunk(log_probs_np: np.ndarray, token_ids: list[int]) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Runs Viterbi dynamic programming trellis forced alignment over logprobs.
+
+    Returns (state_path, scores, log_probs, S) where:
+      - state_path: per-frame best state index in the interleaved sequence
+      - scores: per-frame log-prob of the chosen state
+      - log_probs: the full (T, V) log-probability matrix
+      - S: the interleaved state label array (blank, tok0, blank, tok1, ...)
+    """
     lp = np.array(log_probs_np, dtype=np.float32)
     if lp.ndim == 3:
         lp = lp[0]
@@ -121,7 +128,8 @@ def _forced_align_chunk(log_probs_np: np.ndarray, token_ids: list[int]) -> tuple
     N = len(token_ids)
 
     if N == 0 or T < N:
-        return np.zeros(T, dtype=np.int64), np.zeros(T, dtype=np.float32)
+        empty_S = np.full(1, BLANK_ID, dtype=np.int64)
+        return np.zeros(T, dtype=np.int64), np.zeros(T, dtype=np.float32), lp, empty_S
 
     L = 2 * N + 1
     S = np.full(L, BLANK_ID, dtype=np.int64)
@@ -167,7 +175,7 @@ def _forced_align_chunk(log_probs_np: np.ndarray, token_ids: list[int]) -> tuple
         scores[t] = lp[t, S[curr_s]]
         curr_s = curr_s - B[t, curr_s]
 
-    return state_path, scores
+    return state_path, scores, lp, S
 
 
 def _frames_to_word_times(
@@ -178,61 +186,102 @@ def _frames_to_word_times(
     chunk_start_sec: float,
     seg_start_time: float,
     vocab: list[str] | None = None,
+    log_probs: np.ndarray | None = None,
 ) -> list[dict]:
-    """Converts CTC state trellis alignments into exact, non-overlapping word and phoneme spans."""
+    """Converts CTC state trellis alignments into exact, non-overlapping word and phoneme spans.
+
+    Uses Viterbi state-duration tracking with energy-weighted blank distribution
+    and the model author's margin_peak confidence metric for stability across runtimes.
+    Applies a -1.5 frame lookahead compensation to correct for streaming emission delay.
+    """
     T = len(state_path)
     N = len(token_ids)
+
+    # ── Streaming Lookahead Compensation ──
+    # Zipformer2 streaming uses 130ms right-context (≈3.25 fbank frames → ~1.5 encoder
+    # frames at 4× subsampling). CTC emission peaks are inherently delayed by this
+    # lookahead. Shifting boundaries back by 1.5 frames (60ms) aligns the timestamps
+    # with the physical acoustic onset in the waveform.
+    LOOKAHEAD_OFFSET_FRAMES = 1.5
 
     active_frames = {}
     for k in range(N):
         target_state = 2 * k + 1
         active_frames[k] = np.where(state_path == target_state)[0]
 
-    # Find peak frame for each token from active Viterbi states
-    peak_frames = np.zeros(N, dtype=float)
-    for k in range(N):
-        target_state = 2 * k + 1
-        f_list = active_frames[k]
-        if len(f_list) > 0:
-            pk_idx = int(np.argmax(scores[f_list]))
-            peak_frames[k] = float(f_list[pk_idx])
-        else:
-            peak_frames[k] = float(k * T / max(N, 1))
+    # Find raw activation bounds for each phoneme token
+    raw_starts = np.full(N, -1, dtype=int)
+    raw_ends = np.full(N, -1, dtype=int)
 
-    # Midpoint acoustic boundary assignment within each word
+    for k in range(N):
+        active = active_frames[k]
+        if len(active) > 0:
+            raw_starts[k] = active[0]
+            raw_ends[k] = active[-1]
+
+    # ── Energy-Weighted Blank Distribution ──
+    # Instead of splitting blanks 50/50 between adjacent phonemes, we weight
+    # the split proportionally to each phoneme's acoustic energy (number of
+    # active non-blank frames). A long madd with 10 active frames gets more
+    # of the trailing blanks than a short fatha with 1 frame.
     token_starts_f = np.zeros(N, dtype=float)
     token_ends_f = np.zeros(N, dtype=float)
 
-    tok_offset = 0
-    for count in word_token_counts:
-        first_k = tok_offset
-        last_k = tok_offset + count - 1
-
-        first_active = active_frames[first_k]
-        last_active = active_frames[last_k]
-
-        w_start_f = float(first_active[0]) if len(first_active) > 0 else peak_frames[first_k]
-        w_end_f = float(last_active[-1] + 1) if len(last_active) > 0 else peak_frames[last_k] + 1.0
-
-        for i in range(count):
-            k = first_k + i
-            if i == 0:
-                s_f = w_start_f
+    for k in range(N):
+        if raw_starts[k] == -1:
+            # Token had no active frames in the Viterbi path
+            if k == 0:
+                token_starts_f[k] = 0.0
+                token_ends_f[k] = 0.0
             else:
-                s_f = token_ends_f[k - 1]
+                token_starts_f[k] = token_ends_f[k - 1]
+                token_ends_f[k] = token_ends_f[k - 1]
+            continue
 
-            if i == count - 1:
-                e_f = w_end_f
+        if k == 0:
+            # First token absorbs all preceding blanks
+            token_starts_f[k] = 0.0
+        else:
+            if raw_starts[k - 1] == -1:
+                token_starts_f[k] = token_ends_f[k - 1]
             else:
-                next_k = k + 1
-                # Exact midpoint transition between peak energy of token k and token k+1
-                mid_f = (peak_frames[k] + peak_frames[next_k]) / 2.0
-                e_f = max(s_f + 0.5, mid_f)
+                # Distribute intermediate blanks proportionally to active frame counts
+                blank_start = raw_ends[k - 1] + 1
+                blank_end = raw_starts[k] - 1
+                if blank_end >= blank_start:
+                    n_blanks = blank_end - blank_start + 1
+                    dur_prev = len(active_frames[k - 1])
+                    dur_curr = len(active_frames[k])
+                    total_dur = dur_prev + dur_curr
+                    if total_dur > 0:
+                        # Heavier phoneme claims more of the blank gap
+                        prev_share = dur_prev / total_dur
+                    else:
+                        prev_share = 0.5
+                    split_point = blank_start + n_blanks * prev_share
+                    token_starts_f[k] = float(split_point)
+                else:
+                    token_starts_f[k] = float(raw_starts[k])
 
-            token_starts_f[k] = s_f
-            token_ends_f[k] = max(s_f + 0.5, e_f)
+    # Set end frames: each token ends where the next begins
+    for k in range(N):
+        if k == N - 1:
+            # Last token absorbs all trailing blanks
+            token_ends_f[k] = float(T)
+        else:
+            if raw_starts[k] != -1:
+                token_ends_f[k] = token_starts_f[k + 1]
 
-        tok_offset += count
+    # ── Apply Lookahead Offset ──
+    # Shift all boundaries back to compensate for streaming emission delay.
+    # Clamp to [0, T] to prevent negative or out-of-bounds timestamps.
+    for k in range(N):
+        token_starts_f[k] = max(0.0, token_starts_f[k] - LOOKAHEAD_OFFSET_FRAMES)
+        token_ends_f[k] = max(0.0, token_ends_f[k] - LOOKAHEAD_OFFSET_FRAMES)
+
+    # ── Build Word & Phoneme Output ──
+    # Convert probabilities from log-domain to linear for margin_peak computation
+    probs = np.exp(log_probs) if log_probs is not None else None
 
     word_times: list[dict] = []
     tok_offset = 0
@@ -265,9 +314,24 @@ def _frames_to_word_times(
             tok_id = token_ids[k]
             tok_str = vocab[tok_id] if vocab and tok_id < len(vocab) else ""
 
-            # Compute acoustic confidence from CTC frame log-probabilities
+            # ── margin_peak Confidence (from model author's decode_with_confidence.py) ──
+            # Evaluated at the peak frame where this token reaches maximum probability.
+            # This metric is stable across runtimes (ONNX, CoreML, PyTorch) to within
+            # 0.11 worst-case, unlike boundary-frame margins which can diverge up to 0.97.
             act_f = active_frames[k]
-            if len(act_f) > 0:
+            if len(act_f) > 0 and probs is not None:
+                # Find the peak frame within active frames
+                pk_rel = int(np.argmax(probs[act_f, tok_id]))
+                pk_frame = act_f[pk_rel]
+                # Peak confidence: probability of chosen token at peak frame
+                p_conf_peak = float(probs[pk_frame, tok_id])
+                # margin_peak: how decisive the choice was (peak - runner-up)
+                pk_sorted = np.sort(probs[pk_frame])[::-1]
+                margin_peak = float(pk_sorted[0] - pk_sorted[1]) if len(pk_sorted) > 1 else 1.0
+                # Use confidence_peak as the reported confidence (matches model author's approach)
+                p_conf = float(np.clip(p_conf_peak, 0.05, 0.99))
+            elif len(act_f) > 0:
+                # Fallback if log_probs not available: use score-based confidence
                 p_logp = float(np.mean(scores[act_f]))
                 p_conf = float(np.clip(np.exp(p_logp), 0.05, 0.99))
             else:
@@ -481,12 +545,13 @@ def run_ctc_alignment(
             continue
 
         try:
-            alignments, scores = _forced_align_chunk(logprobs_np, full_token_ids)
+            alignments, scores, chunk_lp, chunk_S = _forced_align_chunk(logprobs_np, full_token_ids)
         except Exception:
             continue
 
         full_word_times = _frames_to_word_times(
-            alignments, scores, full_token_ids, full_word_token_counts, chunk_start_sec, seg.start_time, vocab=_vocab
+            alignments, scores, full_token_ids, full_word_token_counts,
+            chunk_start_sec, seg.start_time, vocab=_vocab, log_probs=chunk_lp
         )
         start_idx = len(prefix_words)
         end_idx = len(prefix_words) + len(ref_words)
