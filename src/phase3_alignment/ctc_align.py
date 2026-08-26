@@ -12,8 +12,6 @@ BLANK_ID = 250
 FRAME_RATE = 25.0  # 40ms per frame
 FRAME_STEP = 1.0 / FRAME_RATE
 
-_DIAC_RE = re.compile(r'[\u0610-\u061a\u064b-\u065f\u0670\u06d6-\u06dc\u06df-\u06e4\u06e7\u06e8\u06ea-\u06ed]')
-
 
 @lru_cache(maxsize=1)
 def get_loc_to_refword() -> dict[str, object]:
@@ -80,10 +78,6 @@ def _map_asr_words_to_reference(
                 mapping[ref_index] = asr_words[asr_index]
 
     return mapping, missing
-
-
-def _strip_diacritics(text: str) -> str:
-    return _DIAC_RE.sub('', text)
 
 
 def _load_vocab_and_mappings(tokens_path: str) -> tuple[list[str], dict[str, int]]:

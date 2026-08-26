@@ -175,3 +175,54 @@ def fuse_adjacent_same_ayah_segments(segments: list[SegmentInfo]) -> list[Segmen
     if n_fused > 0:
         print(f"[SAME_AYAH_FUSE] Fused {n_fused} adjacent same-ayah segments.")
     return merged
+
+
+def _merge_two_segments(seg1: SegmentInfo, seg2: SegmentInfo) -> SegmentInfo:
+    """Merge two consecutive segments into a single unified segment."""
+    words1 = seg1.words or []
+    words2 = seg2.words or []
+
+    merged_words = list(words1)
+
+    offset = seg2.start_time - seg1.start_time
+    for w in words2:
+        entry = dict(w)
+        if entry.get("start") is not None:
+            entry["start"] = round(entry["start"] + offset, 4)
+        if entry.get("end") is not None:
+            entry["end"] = round(entry["end"] + offset, 4)
+        if "phonemes" in entry:
+            entry["phonemes"] = [
+                {
+                    **p,
+                    "start": round(p["start"] + offset, 4) if p.get("start") is not None else None,
+                    "end": round(p["end"] + offset, 4) if p.get("end") is not None else None,
+                }
+                for p in entry["phonemes"]
+            ]
+        merged_words.append(entry)
+
+    locs = [w.get("location") for w in merged_words if w.get("location") and not w.get("location", "").startswith("0:0:")]
+    new_ref = locs[0] if locs and locs[0] == locs[-1] else f"{locs[0]}-{locs[-1]}" if locs else seg1.matched_ref
+
+    new_text = " ".join(w.get("word", "") for w in merged_words if not w.get("is_missing"))
+
+    has_rep = seg1.has_repeated_words or seg2.has_repeated_words
+    wrap_ranges = seg1.wrap_word_ranges or seg2.wrap_word_ranges
+
+    return SegmentInfo(
+        start_time=seg1.start_time,
+        end_time=seg2.end_time,
+        transcribed_text=seg1.transcribed_text,
+        matched_text=new_text,
+        matched_ref=new_ref,
+        match_score=min(seg1.match_score, seg2.match_score),
+        error=seg1.error or seg2.error,
+        has_missing_words=seg1.has_missing_words or seg2.has_missing_words,
+        has_repeated_words=has_rep,
+        wrap_word_ranges=wrap_ranges,
+        repeated_ranges=seg1.repeated_ranges,
+        repeated_text=seg1.repeated_text,
+        words=merged_words,
+        _original_alignment_idx=seg1._original_alignment_idx,
+    )

@@ -1,12 +1,9 @@
 """Adapters between qua_sdk schemas and application data structures."""
 
 from __future__ import annotations
-import numpy as np
-from qua_sdk.schemas import Alignment, Emissions, Region, Regions, Timings
-from src.core.auto_merge import stamp_auto_merge_group, waqf_sakt_consumed_by_target
+from qua_sdk.schemas import Alignment, Emissions, Regions
+from src.phase4_splitting.auto_merge import stamp_auto_merge_group, waqf_sakt_consumed_by_target
 from src.core.segment_types import ProfilingData, SegmentInfo, compute_reading_sequence
-
-SAMPLE_RATE = 16_000
 
 
 def alignment_to_segment_infos(
@@ -71,49 +68,13 @@ def derive_repetition(matched_ref: str, wrap_ranges) -> tuple[list | None, list 
     return rep_ranges, rep_text
 
 
-def timings_to_words(timings: Timings, segment_infos: list[SegmentInfo]) -> None:
-    """Attaches SDK word timings onto SegmentInfo.words in-place."""
-    by_id = {seg._original_alignment_idx - 1: seg for seg in segment_infos if seg._original_alignment_idx is not None}
-
-    for st in timings.segments:
-        seg = by_id.get(st.segment_id)
-        if seg is None or st.words is None:
-            continue
-        words = []
-        for w in st.words:
-            entry = {"location": w.location, "start": w.start_s, "end": w.end_s}
-            if w.letters:
-                entry["letters"] = [{"char": ch, "start": s, "end": e} for ch, s, e in w.letters]
-            if w.line_idx is not None:
-                entry["line_idx"] = w.line_idx
-            words.append(entry)
-        seg.words = words
-
-
-def regions_to_state(regions: Regions) -> tuple[np.ndarray | None, bool | None]:
-    """Regions -> (sample-int ndarray, is_complete)."""
-    if regions.raw is None:
-        return None, regions.is_complete
-    raw = np.array(
-        [[round(r.start_s * SAMPLE_RATE), round(r.end_s * SAMPLE_RATE)] for r in regions.raw],
-        dtype=np.int64,
-    ).reshape(-1, 2)
-    return raw, regions.is_complete
-
-
 def intervals_from_regions(regions: Regions) -> list[tuple[float, float]]:
     """Regions -> list of (start_s, end_s) tuples."""
     return [(r.start_s, r.end_s) for r in regions.regions]
 
 
 def metrics_to_profiling(stages: dict, profiling: ProfilingData) -> None:
-    """Populates ProfilingData from per-stage SDK metrics."""
-    seg = _metrics(stages.get("segmentation"))
-    if seg:
-        profiling.vad_model_load_time = seg.get("model_load_s", 0.0)
-        profiling.vad_model_move_time = seg.get("model_move_s", 0.0)
-        profiling.vad_inference_time = seg.get("inference_s", 0.0)
-
+    """Populates ProfilingData from per-stage metrics."""
     rec = _metrics(stages.get("recognition"))
     if rec:
         profiling.asr_sorting_time = rec.get("sorting_s", 0.0)

@@ -9,7 +9,7 @@ from qua_sdk.schemas import Region, Regions, Emissions, Alignment, AlignedSegmen
 from qua_sdk.components.matching.runtimes.wraparound_params import WraparoundDpParams
 from qua_sdk.components.matching.runtimes.sequencer import run_matching_sequence
 from qua_sdk.components.matching.runtimes.runtime import find_anchor_by_voting
-from src.phase2_matching.normalize import get_arabic_resources, normalize_arabic
+from src.phase2_matching.normalize import get_arabic_resources, normalize_arabic, normalize_phoneme_to_core
 from src.core import sdk_adapt
 
 # Fallback anchor window (retry in _run_post_asr_pipeline if initial 5-segment search fails).
@@ -32,7 +32,6 @@ def _chapter_scores(tokens, ngram_index) -> dict[int, float]:
 
 def _chapter_start_ayah(tokens, surah: int, resources, fallback: int) -> int:
     """Returns the best matching ayah inside a known chapter."""
-    from src.phase2_matching.normalize import normalize_phoneme_to_core
     scores: dict[int, float] = defaultdict(float)
     ngram_index = resources.ngram_index
     ngram_size = ngram_index.ngram_size
@@ -61,7 +60,6 @@ def _chapter_start_ayah(tokens, surah: int, resources, fallback: int) -> int:
 
 def _chapter_similarity(tokens, chapter_ref) -> float:
     """Returns the longest normalized character match ratio for one chapter."""
-    from src.phase2_matching.normalize import normalize_phoneme_to_core
     query = "".join(normalize_phoneme_to_core(t) for t in tokens).strip()
     reference = "".join(normalize_phoneme_to_core(phoneme) for word in chapter_ref.words for phoneme in word.phonemes)
     if not query or not reference:
@@ -82,7 +80,6 @@ def _tokens_from_words(words: list[dict]) -> list[str]:
 
 def _chapter_word_index(text: str, chapter_ref) -> int | None:
     """Returns the closest canonical chapter word index for one ASR word."""
-    from src.phase2_matching.normalize import normalize_phoneme_to_core
     query = "".join(normalize_phoneme_to_core(t) for t in _tokens_from_words([{"word": text}])).strip()
     if not query:
         return None
@@ -169,41 +166,37 @@ def _prepare_multi_chapter_units(
             _score, _gap, chunk_index, word_index = max(candidates)
             split_points[chunk_index].append((word_index, current_surah, next_surah))
 
-    import os
-    fast_mode = os.environ.get("FAST_MATCHING") == "1"
-
     refinement_candidates = []
-    if not fast_mode:
-        for chunk_index, ((surah, _ayah), entry) in enumerate(zip(anchors, asr_words_list)):
-            if surah <= 0:
+    for chunk_index, ((surah, _ayah), entry) in enumerate(zip(anchors, asr_words_list)):
+        if surah <= 0:
+            continue
+        words = entry[0] if isinstance(entry, tuple) else entry
+        covered_ranges = []
+        for current_index in range(1, len(words or [])):
+            gap = words[current_index]["start"] - words[current_index - 1]["end"]
+            if gap < 0.5:
                 continue
-            words = entry[0] if isinstance(entry, tuple) else entry
-            covered_ranges = []
-            for current_index in range(1, len(words or [])):
-                gap = words[current_index]["start"] - words[current_index - 1]["end"]
-                if gap < 0.5:
-                    continue
-                current_text = words[current_index].get("phoneme", words[current_index].get("word", "")).strip()
-                previous_indices = [
-                    previous_index
-                    for previous_index in range(max(0, current_index - 12), current_index - 1)
-                    if words[previous_index].get("phoneme", words[previous_index].get("word", "")).strip() == current_text
-                    and words[current_index]["start"] - words[previous_index]["start"] <= 15.0
-                ]
-                if previous_indices:
-                    start_index = previous_indices[-1]
-                    refinement_candidates.append((
-                        chunk_index, start_index, current_index, surah, "repetition"
-                    ))
-                    covered_ranges.append((start_index, current_index))
-            for word_index, word in enumerate(words or []):
-                if word["end"] - word["start"] < 2.0 or any(
-                    start <= word_index < end for start, end in covered_ranges
-                ):
-                    continue
+            current_text = words[current_index].get("phoneme", words[current_index].get("word", "")).strip()
+            previous_indices = [
+                previous_index
+                for previous_index in range(max(0, current_index - 12), current_index - 1)
+                if words[previous_index].get("phoneme", words[previous_index].get("word", "")).strip() == current_text
+                and words[current_index]["start"] - words[previous_index]["start"] <= 15.0
+            ]
+            if previous_indices:
+                start_index = previous_indices[-1]
                 refinement_candidates.append((
-                    chunk_index, word_index, word_index + 1, surah, "collapsed"
+                    chunk_index, start_index, current_index, surah, "repetition"
                 ))
+                covered_ranges.append((start_index, current_index))
+        for word_index, word in enumerate(words or []):
+            if word["end"] - word["start"] < 2.0 or any(
+                start <= word_index < end for start, end in covered_ranges
+            ):
+                continue
+            refinement_candidates.append((
+                chunk_index, word_index, word_index + 1, surah, "collapsed"
+            ))
 
     audio_pcm = None
     model = None
@@ -295,12 +288,11 @@ def _prepare_multi_chapter_units(
     timestamped_words.sort()
 
     recovery_gaps = []
-    if not fast_mode:
-        for previous, current in zip(timestamped_words, timestamped_words[1:]):
-            gap_start = previous[3]["end"]
-            gap_end = current[3]["start"]
-            if gap_end - gap_start >= 2.5:
-                recovery_gaps.append((gap_start, gap_end, previous, current))
+    for previous, current in zip(timestamped_words, timestamped_words[1:]):
+        gap_start = previous[3]["end"]
+        gap_end = current[3]["start"]
+        if gap_end - gap_start >= 2.5:
+            recovery_gaps.append((gap_start, gap_end, previous, current))
 
     if recovery_gaps:
         if model is None:
@@ -489,7 +481,7 @@ def _bridge_inter_chunk_gaps(
     start_surah: int,
     unit_labels: list | None = None
 ) -> list:
-    """Bridges 1 to 2-word boundary gaps between adjacent chunks caused by VAD cutoffs."""
+    """Bridges 1 to 2-word boundary gaps between adjacent chunks."""
     if not match_results or not word_indices or len(match_results) != len(word_indices):
         return match_results
 

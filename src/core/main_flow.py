@@ -76,7 +76,7 @@ def process_audio(
             profiling.resample_time = time.time() - resample_start
             sample_rate = 16000
 
-    # Phase 1: VAD & ASR Transcription
+    # Phase 1: Continuous ASR Transcription
     try:
         regions, emissions, stage_metrics, asr_time, audio_pcm = run_asr_cpu(
             audio,
@@ -118,30 +118,16 @@ def process_audio(
         import traceback
         traceback.print_exc()
 
-    # Split fused specials (Isti'adha+Basmala) using CTC word timestamps.
-    from src.phase4_splitting.fused_split import _split_fused_segments
-    segments = _split_fused_segments(segments)
-
-    # Split multi-ayah audio chunks into per-ayah segments using CTC word
-    # timestamps. Munajjam PR #65's adaptive silence engine naturally produces
-    # 1-to-1 Ayah chunks for high-precision alignment.
-    # All metadata (repetitions, wrap_word_ranges, error) is preserved.
-    from src.phase4_splitting.ayah_split import split_segments_at_ayah_boundaries
+    # Split fused specials (Isti'adha+Basmala) and multi-ayah chunks using CTC word timestamps.
+    from src.phase4_splitting.ayah_split import split_fused_segments, split_segments_at_ayah_boundaries
+    segments = split_fused_segments(segments)
     segments = split_segments_at_ayah_boundaries(
         segments,
         split_all_ayahs=True,
     )
 
-    # Eliminate fake-repeat / trailing-fragment segments caused by VAD chunk
-    # audio overlap or edge-cuts.  Runs AFTER ayah_split so the dedup sees
-    # clean per-ayah segments and can correctly identify:
-    #   1. Overlap artifacts  (nxt.start < current.end, ref is subset)
-    #   2. Trailing fragments (gap ≈ 0, 1-2 words already in previous seg)
-    # Genuine reciter repetitions (wrap_word_ranges set) are never removed.
-    from src.core.dedup_segments import dedup_vad_overlaps, _merge_two_segments
-    segments = dedup_vad_overlaps(segments)
-
     if stage_metrics.get("multi_chapter"):
+        from src.phase4_splitting.auto_merge import _merge_two_segments
         # Rejoin a one-word recovery fragment without consuming the following repeat.
         merged_segments = []
         segment_index = 0
@@ -176,7 +162,7 @@ def process_audio(
 
     # Fuse adjacent segments belonging to the SAME Ayah when the reciter
     # recited continuously without a long pause (e.g. 17:56:1-9 + 17:56:10-13 -> 17:56:1-13).
-    from src.core.auto_merge import fuse_adjacent_same_ayah_segments
+    from src.phase4_splitting.auto_merge import fuse_adjacent_same_ayah_segments
     segments = fuse_adjacent_same_ayah_segments(segments)
 
     # Stamp segment numbers.
@@ -184,13 +170,13 @@ def process_audio(
         seg.segment_number = i + 1
 
     # Recompute has_missing_words flags from word coverage (single authority).
-    from src.core.missing_words import recompute_missing_words
+    from src.phase4_splitting.missing_words import recompute_missing_words
     recompute_missing_words(segments)
 
     # Optional: extend word end-timestamps into trailing silence.
     # Both smooth and inject mutate seg.words in-place before serialization.
     # Controlled by ENABLE_WORD_SMOOTHING in config.py.
-    from src.phase4_splitting.word_smoothing import smooth_word_timestamps
+    from src.phase4_splitting.ayah_split import smooth_word_timestamps
     smooth_word_timestamps(
         segments,
         audio_data=audio,
@@ -217,13 +203,13 @@ def process_audio(
     # Optional: inject missing (unrecited) words into the words array.
     # Runs before serialization so injected words appear in the output JSON.
     # Controlled by ENABLE_MISSING_WORD_INJECTION in config.py.
-    from src.core.missing_words import inject_missing_words
+    from src.phase4_splitting.missing_words import inject_missing_words
     inject_missing_words(segments)
 
     profiling.total_time = time.time() - pipeline_start
 
     # Build the core JSON payload (words always included).
-    from src.phase4_splitting.export import build_segment_export
+    from src.core.segment_types import build_segment_export
     payload = build_segment_export(segments, include_words=True)
 
     if return_profiling:

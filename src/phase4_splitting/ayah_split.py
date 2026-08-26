@@ -12,7 +12,9 @@ Repetition handling:
 """
 
 from __future__ import annotations
+import math
 from typing import Any
+import numpy as np
 from src.core.segment_types import SegmentInfo
 
 
@@ -71,9 +73,7 @@ def split_segments_at_ayah_boundaries(
     # Minimum silence gap (seconds) between the end of the last word of one
     # ayah group and the start of the first word of the next to justify a split.
     # Below this threshold the groups are merged back (reciter read continuously).
-    # Set to 0.08s: the reference project's neural Waqf VAD fires on pauses as
-    # short as ~100ms.  CTC timestamp jitter is typically < 40ms, so 80ms is a
-    # safe floor that honours genuine ayah boundaries while ignoring jitter.
+    # CTC timestamp jitter is typically < 40ms, so 40ms is a safe floor.
     MIN_SPLIT_GAP_S = 0.04
 
     from qua_sdk.domain import SPECIAL_NAMES as ALL_SPECIAL_REFS
@@ -315,3 +315,404 @@ def split_segments_at_ayah_boundaries(
             result.append(sub_seg)
 
     return result
+
+
+def split_fused_segments(segments: list[SegmentInfo]) -> list[SegmentInfo]:
+    """Splits combined or fused special segments (Isti'adha/Basmala) using word timestamps."""
+    from qua_sdk.domain import SPECIAL_TEXT, SPECIAL_NAMES as ALL_SPECIAL_REFS
+
+    _BASMALA_TEXT = SPECIAL_TEXT["Basmala"]
+    _ISTIATHA_TEXT = SPECIAL_TEXT["Isti'adha"]
+    _COMBINED_TEXT = _ISTIATHA_TEXT + " ۝ " + _BASMALA_TEXT
+
+    _ISTIATHA_WORD_COUNT = len(_ISTIATHA_TEXT.split())
+    _BASMALA_WORD_COUNT = len(_BASMALA_TEXT.split())
+
+    split_indices = []
+    for idx, seg in enumerate(segments):
+        if seg.matched_ref == "Isti'adha+Basmala":
+            split_indices.append((idx, "combined", "Isti'adha+Basmala", None))
+        elif seg.matched_ref and seg.matched_ref not in ALL_SPECIAL_REFS and seg.matched_text:
+            if seg.matched_text.startswith(_COMBINED_TEXT):
+                split_indices.append((idx, "fused_combined", f"Isti'adha+Basmala+{seg.matched_ref}", seg.matched_ref))
+            elif seg.matched_text.startswith(_ISTIATHA_TEXT):
+                split_indices.append((idx, "fused_istiatha", f"Isti'adha+{seg.matched_ref}", seg.matched_ref))
+            elif seg.matched_text.startswith(_BASMALA_TEXT):
+                split_indices.append((idx, "fused_basmala", f"Basmala+{seg.matched_ref}", seg.matched_ref))
+
+    if not split_indices:
+        return segments
+
+    new_segments = []
+    split_set = {idx for idx, _, _, _ in split_indices}
+    split_map = {idx: (i, case, mfa_ref, verse_ref) for i, (idx, case, mfa_ref, verse_ref) in enumerate(split_indices)}
+
+    for idx, seg in enumerate(segments):
+        if idx not in split_set:
+            new_segments.append(seg)
+            continue
+
+        batch_i, case, mfa_ref, verse_ref = split_map[idx]
+        words = seg.words
+
+        if words is None:
+            if case == "combined":
+                mid_time = (seg.start_time + seg.end_time) / 2.0
+                new_segments.append(SegmentInfo(
+                    start_time=seg.start_time, end_time=mid_time,
+                    transcribed_text="", matched_text=_ISTIATHA_TEXT,
+                    matched_ref="Isti'adha", match_score=seg.match_score,
+                ))
+                new_segments.append(SegmentInfo(
+                    start_time=mid_time, end_time=seg.end_time,
+                    transcribed_text="", matched_text=_BASMALA_TEXT,
+                    matched_ref="Basmala", match_score=seg.match_score,
+                ))
+            else:
+                new_segments.append(seg)
+            continue
+
+        seg_start = seg.start_time
+
+        if case == "combined":
+            istiatha_end = None
+            for w in words:
+                if w.get("location", "") == f"0:0:{_ISTIATHA_WORD_COUNT}":
+                    istiatha_end = seg_start + w["end"]
+                    break
+            if istiatha_end is None:
+                istiatha_end = (seg.start_time + seg.end_time) / 2.0
+
+            new_segments.append(SegmentInfo(
+                start_time=seg.start_time, end_time=istiatha_end,
+                transcribed_text="", matched_text=_ISTIATHA_TEXT,
+                matched_ref="Isti'adha", match_score=seg.match_score,
+            ))
+            new_segments.append(SegmentInfo(
+                start_time=istiatha_end, end_time=seg.end_time,
+                transcribed_text="", matched_text=_BASMALA_TEXT,
+                matched_ref="Basmala", match_score=seg.match_score,
+            ))
+
+        elif case == "fused_combined":
+            istiatha_end = None
+            basmala_end = None
+            basmala_last_loc = f"0:0:{_ISTIATHA_WORD_COUNT + _BASMALA_WORD_COUNT}"
+
+            for w in words:
+                loc = w.get("location", "")
+                if loc == f"0:0:{_ISTIATHA_WORD_COUNT}":
+                    istiatha_end = seg_start + w["end"]
+                if loc == basmala_last_loc:
+                    basmala_end = seg_start + w["end"]
+
+            if istiatha_end is None:
+                istiatha_end = seg.start_time + (seg.end_time - seg.start_time) / 3.0
+            if basmala_end is None:
+                basmala_end = seg.start_time + 2 * (seg.end_time - seg.start_time) / 3.0
+
+            verse_text = seg.matched_text
+            if verse_text.startswith(_COMBINED_TEXT):
+                verse_text = verse_text[len(_COMBINED_TEXT):].lstrip()
+
+            new_segments.append(SegmentInfo(
+                start_time=seg.start_time, end_time=istiatha_end,
+                transcribed_text="", matched_text=_ISTIATHA_TEXT,
+                matched_ref="Isti'adha", match_score=seg.match_score,
+            ))
+            new_segments.append(SegmentInfo(
+                start_time=istiatha_end, end_time=basmala_end,
+                transcribed_text="", matched_text=_BASMALA_TEXT,
+                matched_ref="Basmala", match_score=seg.match_score,
+            ))
+            new_segments.append(SegmentInfo(
+                start_time=basmala_end, end_time=seg.end_time,
+                transcribed_text=seg.transcribed_text, matched_text=verse_text,
+                matched_ref=verse_ref, match_score=seg.match_score,
+                error=seg.error, has_missing_words=seg.has_missing_words,
+                _original_alignment_idx=seg._original_alignment_idx,
+            ))
+
+        elif case == "fused_istiatha":
+            istiatha_end = None
+            for w in words:
+                if w.get("location", "") == f"0:0:{_ISTIATHA_WORD_COUNT}":
+                    istiatha_end = seg_start + w["end"]
+                    break
+            if istiatha_end is None:
+                new_segments.append(seg)
+                continue
+
+            verse_text = seg.matched_text
+            if verse_text.startswith(_ISTIATHA_TEXT):
+                verse_text = verse_text[len(_ISTIATHA_TEXT):].lstrip()
+
+            new_segments.append(SegmentInfo(
+                start_time=seg.start_time, end_time=istiatha_end,
+                transcribed_text="", matched_text=_ISTIATHA_TEXT,
+                matched_ref="Isti'adha", match_score=seg.match_score,
+            ))
+            new_segments.append(SegmentInfo(
+                start_time=istiatha_end, end_time=seg.end_time,
+                transcribed_text=seg.transcribed_text, matched_text=verse_text,
+                matched_ref=verse_ref, match_score=seg.match_score,
+                error=seg.error, has_missing_words=seg.has_missing_words,
+                _original_alignment_idx=seg._original_alignment_idx,
+            ))
+
+        elif case == "fused_basmala":
+            basmala_end = None
+            for w in words:
+                if w.get("location", "") == f"0:0:{_BASMALA_WORD_COUNT}":
+                    basmala_end = seg_start + w["end"]
+                    break
+            if basmala_end is None:
+                new_segments.append(seg)
+                continue
+
+            verse_text = seg.matched_text
+            if verse_text.startswith(_BASMALA_TEXT):
+                verse_text = verse_text[len(_BASMALA_TEXT):].lstrip()
+
+            verse_words, basmala_words = None, None
+            verse_asr_gaps, verse_acoustic_gaps = None, None
+            verse_start = basmala_end
+            if seg.words:
+                split_rel = basmala_end - seg.start_time
+                b_list, v_list = [], []
+                v_asr_gaps, v_acoustic_gaps = [], []
+                for word_index, w in enumerate(seg.words):
+                    w_copy = dict(w)
+                    loc = w_copy.get("location", "")
+                    if loc.startswith("0:0:"):
+                        b_list.append(w_copy)
+                    else:
+                        if w_copy.get("start") is not None:
+                            w_copy["start"] = max(0.0, round(w_copy["start"] - split_rel, 4))
+                        if w_copy.get("end") is not None:
+                            w_copy["end"] = max(0.0, round(w_copy["end"] - split_rel, 4))
+                        if "phonemes" in w_copy:
+                            w_copy["phonemes"] = [
+                                {
+                                    **p,
+                                    "start": max(0.0, round(p["start"] - split_rel, 4)) if p.get("start") is not None else None,
+                                    "end": max(0.0, round(p["end"] - split_rel, 4)) if p.get("end") is not None else None,
+                                }
+                                for p in w_copy["phonemes"]
+                            ]
+                        v_list.append(w_copy)
+                        v_asr_gaps.append(
+                            seg._asr_word_gaps[word_index]
+                            if seg._asr_word_gaps and word_index < len(seg._asr_word_gaps)
+                            else None
+                        )
+                        v_acoustic_gaps.append(
+                            seg._acoustic_word_gaps[word_index]
+                            if seg._acoustic_word_gaps
+                            and word_index < len(seg._acoustic_word_gaps)
+                            else None
+                        )
+
+                verse_offset = v_list[0].get("start") if v_list else None
+                if verse_offset is not None and verse_offset > 0:
+                    verse_start += verse_offset
+                    for word in v_list:
+                        if word.get("start") is not None:
+                            word["start"] = max(0.0, round(word["start"] - verse_offset, 4))
+                        if word.get("end") is not None:
+                            word["end"] = max(0.0, round(word["end"] - verse_offset, 4))
+                basmala_words = b_list or None
+                verse_words = v_list or None
+                verse_asr_gaps = ([None] + v_asr_gaps[1:]) if v_asr_gaps else None
+                verse_acoustic_gaps = (
+                    [None] + v_acoustic_gaps[1:] if v_acoustic_gaps else None
+                )
+
+            new_segments.append(SegmentInfo(
+                start_time=seg.start_time, end_time=basmala_end,
+                transcribed_text="", matched_text=_BASMALA_TEXT,
+                matched_ref="Basmala", match_score=seg.match_score,
+                words=basmala_words,
+            ))
+            new_segments.append(SegmentInfo(
+                start_time=verse_start, end_time=seg.end_time,
+                transcribed_text=seg.transcribed_text, matched_text=verse_text,
+                matched_ref=verse_ref, match_score=seg.match_score,
+                error=seg.error, has_missing_words=seg.has_missing_words,
+                words=verse_words,
+                _original_alignment_idx=seg._original_alignment_idx,
+                _asr_word_gaps=verse_asr_gaps,
+                _acoustic_word_gaps=verse_acoustic_gaps,
+            ))
+
+    return new_segments
+
+
+def _find_sustained_silence(
+    audio: np.ndarray,
+    sample_rate: int,
+    start_s: float,
+    end_s: float,
+    min_silence_s: float,
+    threshold_db: float,
+    max_start_s: float | None = None,
+) -> tuple[float, float] | None:
+    """Returns the longest sustained low-energy interval inside a time range."""
+    frame_s = 0.05
+    hop_s = 0.01
+    frame_samples = max(1, int(frame_s * sample_rate))
+    hop_samples = max(1, int(hop_s * sample_rate))
+    start_sample = max(0, int(start_s * sample_rate))
+    end_sample = min(len(audio), int(end_s * sample_rate))
+    chunk = audio[start_sample:end_sample]
+    if len(chunk) < frame_samples:
+        return None
+
+    quiet = []
+    for position in range(0, len(chunk) - frame_samples + 1, hop_samples):
+        frame = chunk[position:position + frame_samples]
+        rms = float(np.sqrt(np.mean(np.square(frame))))
+        quiet.append(20.0 * math.log10(max(rms, 1e-8)) <= threshold_db)
+
+    best = None
+    run_start = None
+    for index, is_quiet in enumerate(quiet + [False]):
+        if is_quiet and run_start is None:
+            run_start = index
+        elif not is_quiet and run_start is not None:
+            silence_start = start_s + run_start * hop_s
+            silence_end = start_s + (index - 1) * hop_s + frame_s
+            if (
+                silence_end - silence_start >= min_silence_s
+                and (max_start_s is None or silence_start <= max_start_s)
+                and (best is None or silence_end - silence_start > best[1] - best[0])
+            ):
+                best = (silence_start, silence_end)
+            run_start = None
+    return best
+
+
+def smooth_word_timestamps(
+    segments: list[SegmentInfo],
+    max_stretch_s: float | None = None,
+    audio_data=None,
+    sample_rate: int = 16000,
+    min_silence_ms: int = 200,
+    pad_ms: int = 100,
+    bridge_unsplit_gaps: bool = False,
+) -> None:
+    """Extends final word timestamps to acoustic speech boundaries in-place."""
+    if not segments:
+        return
+
+    try:
+        from config import ENABLE_WORD_SMOOTHING, WORD_SMOOTHING_MAX_STRETCH_S
+    except ImportError:
+        ENABLE_WORD_SMOOTHING = True
+        WORD_SMOOTHING_MAX_STRETCH_S = 1.0
+
+    if not ENABLE_WORD_SMOOTHING:
+        return
+
+    if max_stretch_s is None:
+        max_stretch_s = WORD_SMOOTHING_MAX_STRETCH_S
+
+    if audio_data is not None:
+        import librosa
+
+        if isinstance(audio_data, str):
+            audio, _ = librosa.load(audio_data, sr=sample_rate, mono=True)
+        else:
+            audio = np.asarray(audio_data, dtype=np.float32)
+
+        if len(audio) > 0:
+            rms = librosa.feature.rms(y=audio, frame_length=1024, hop_length=512)[0]
+            rms_db = 20.0 * np.log10(np.maximum(rms, 1e-8))
+            silence_threshold_db = float(
+                np.clip(np.percentile(rms_db, 75) - 15.0, -45.0, -30.0)
+            )
+            min_silence_s = min_silence_ms / 1000.0
+            boundary_pad_s = max(pad_ms / 1000.0, min(0.2, min_silence_s))
+            audio_duration_s = len(audio) / sample_rate
+            start_updates: list[float | None] = [None] * len(segments)
+            end_updates: list[float | None] = [None] * len(segments)
+
+            for index, seg in enumerate(segments):
+                if not seg.words:
+                    continue
+                last_end = seg.words[-1].get("end")
+                if last_end is None:
+                    continue
+                last_word_end = seg.start_time + last_end
+
+                next_word_start = None
+                if index + 1 < len(segments) and segments[index + 1].words:
+                    next_seg = segments[index + 1]
+                    first_start = next_seg.words[0].get("start")
+                    if first_start is not None:
+                        next_word_start = next_seg.start_time + first_start
+
+                search_end = min(
+                    audio_duration_s,
+                    (next_word_start if next_word_start is not None else last_word_end + max_stretch_s)
+                    + 0.35,
+                )
+                silence = _find_sustained_silence(
+                    audio,
+                    sample_rate,
+                    last_word_end,
+                    search_end,
+                    min_silence_s,
+                    silence_threshold_db,
+                    max_start_s=(next_word_start + 0.1) if next_word_start is not None else None,
+                )
+                if silence is None:
+                    if (
+                        bridge_unsplit_gaps
+                        and next_word_start is not None
+                        and next_word_start - last_word_end <= 3.0
+                    ):
+                        end_updates[index] = max(
+                            last_word_end,
+                            next_word_start - 0.001,
+                        )
+                    continue
+
+                silence_start, silence_end = silence
+                if next_word_start is None:
+                    end_updates[index] = min(silence_start + boundary_pad_s, audio_duration_s)
+                    continue
+
+                midpoint = (silence_start + silence_end) / 2.0
+                end_updates[index] = min(silence_start + boundary_pad_s, midpoint)
+                start_updates[index + 1] = max(silence_end - boundary_pad_s, midpoint)
+
+            for index, seg in enumerate(segments):
+                if start_updates[index] is not None:
+                    seg.start_time = round(start_updates[index], 3)
+                if end_updates[index] is not None:
+                    seg.end_time = round(end_updates[index], 3)
+
+    for seg in segments:
+        if not seg.words or seg.start_time is None or seg.end_time is None:
+            continue
+
+        num_words = len(seg.words)
+
+        for i in range(num_words):
+            w = seg.words[i]
+            orig_end = w.get("end")
+            if orig_end is None:
+                continue
+
+            if i + 1 < num_words:
+                next_start = seg.words[i + 1].get("start")
+                next_bound_rel = next_start if next_start is not None else orig_end + max_stretch_s
+            else:
+                next_bound_rel = max(orig_end, seg.end_time - seg.start_time)
+
+            stretched_end = min(orig_end + max_stretch_s, next_bound_rel)
+            new_end = max(orig_end, stretched_end)
+            w["end"] = round(new_end, 4)
+
+

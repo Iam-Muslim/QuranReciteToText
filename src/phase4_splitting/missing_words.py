@@ -1,34 +1,7 @@
 """Missing Words Computation & Injection using QUA SDK output & Quran Index."""
 
-import json
-from pathlib import Path
 from src.core.segment_types import SegmentInfo
 from src.core.quran_index import get_quran_index, parse_location_key
-
-_verse_word_counts_cache = None
-
-
-def _load_verse_word_counts() -> dict[int, dict[int, int]]:
-    """Loads and caches verse word counts from surah_info.json."""
-    global _verse_word_counts_cache
-    if _verse_word_counts_cache is not None:
-        return _verse_word_counts_cache
-
-    app_path = Path(__file__).parent.parent.parent.resolve()
-    surah_info_path = app_path / "data" / "surah_info.json"
-
-    with open(surah_info_path, 'r', encoding='utf-8') as f:
-        surah_info = json.load(f)
-
-    _verse_word_counts_cache = {}
-    for surah_num, data in surah_info.items():
-        surah_int = int(surah_num)
-        _verse_word_counts_cache[surah_int] = {
-            v.get('verse'): v.get('num_words', 0)
-            for v in data.get('verses', []) if v.get('verse')
-        }
-
-    return _verse_word_counts_cache
 
 
 def extract_missing_word_refs(segments: list[SegmentInfo]) -> list[str]:

@@ -1,11 +1,10 @@
-"""ASR Runtime — Continuous streaming acoustic inference on CPU using Zipformer2 Arabic Phoneme model."""
-
 import time
 import subprocess
 import json
-import numpy as np
 import os
 import sys
+import warnings
+import numpy as np
 import librosa
 
 from qua_sdk.schemas import Region, Regions, Emissions
@@ -55,10 +54,8 @@ def run_asr_cpu(
         except Exception:
             audio_dur = 0.0
 
-        import sys
         sys.stdout.write("\rPreparing audio...")
         sys.stdout.flush()
-        import warnings
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             # Use ffmpeg directly for 10x faster loading instead of librosa
@@ -77,7 +74,6 @@ def run_asr_cpu(
     else:
         audio_pcm = audio_input.astype(np.float32)
         audio_dur = len(audio_pcm) / sample_rate
-        import sys
         sys.stdout.write("\rPreparing audio...")
         sys.stdout.flush()
 
@@ -86,7 +82,6 @@ def run_asr_cpu(
 
     model = ZipformerONNX.get_instance(device="cpu")
 
-    import sys
     sys.stdout.write(f"\rPreparing audio ({audio_dur:.2f}s)...".ljust(60))
     sys.stdout.flush()
     t_asr_start = time.time()
