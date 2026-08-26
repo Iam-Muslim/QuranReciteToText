@@ -81,4 +81,3 @@ Double-click or open ui/viewer.html
 
 * **Original Concept**:  by [Hetchy's Quranic Universal Aligner](https://huggingface.co/spaces/hetchyy/quranic-universal-aligner).
 **Model**: [Zipformer Arabic Tajweed Phoneme CTC Model](https://github.com/Iam-Muslim/QuranReciteToText/releases).
-* **Silence Segmentation**: [Munajjam PR #65 Adaptive Silence Engine](https://github.com/Itqan-community/Munajjam/pull/65).
