@@ -375,33 +375,22 @@ def run_ctc_alignment(
     if not logprobs_list:
         return
 
-    # Build a time-based index for logprobs to avoid 1-to-1 mismatch issues
-    time_to_index = {}
-    for idx, lp_entry in enumerate(logprobs_list):
-        if isinstance(lp_entry, tuple):
-            _, start_sec = lp_entry
-        else:
-            start_sec = 0.0
-        time_to_index[round(start_sec, 2)] = idx
-
     for seg in segments:
         matched_text = seg.matched_text or ""
         transcribed_text = seg.transcribed_text or ""
         if not matched_text.strip():
             continue
 
-        seg_time = round(seg.start_time, 2)
-        if seg_time not in time_to_index:
-            # Fallback: find closest within 0.1s
-            if not time_to_index:
-                continue
-            closest_time = min(time_to_index.keys(), key=lambda k: abs(k - seg_time))
-            if abs(closest_time - seg_time) < 0.1:
-                idx = time_to_index[closest_time]
-            else:
-                continue
-        else:
-            idx = time_to_index[seg_time]
+        # Find the best matching chunk from logprobs_list based on start time
+        best_idx = 0
+        min_dist = float("inf")
+        for i, lp_entry in enumerate(logprobs_list):
+            chunk_start = lp_entry[1] if isinstance(lp_entry, tuple) else 0.0
+            dist = abs(chunk_start - seg.start_time)
+            if dist < min_dist:
+                min_dist = dist
+                best_idx = i
+        idx = best_idx
 
         logprobs_entry = logprobs_list[idx]
         if isinstance(logprobs_entry, tuple):
