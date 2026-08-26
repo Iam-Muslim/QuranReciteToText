@@ -55,7 +55,9 @@ def run_asr_cpu(
         except Exception:
             audio_dur = 0.0
 
-        print("[*] Loading audio...")
+        import sys
+        sys.stdout.write("\rPreparing audio...")
+        sys.stdout.flush()
         import warnings
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -75,14 +77,18 @@ def run_asr_cpu(
     else:
         audio_pcm = audio_input.astype(np.float32)
         audio_dur = len(audio_pcm) / sample_rate
-        print("[*] Loading in-memory audio...")
+        import sys
+        sys.stdout.write("\rPreparing audio...")
+        sys.stdout.flush()
 
     if audio_dur == 0.0 and len(audio_pcm) > 0:
         audio_dur = len(audio_pcm) / sample_rate
 
     model = ZipformerONNX.get_instance(device="cpu")
 
-    print(f"[*] Transcribing continuous audio stream ({audio_dur:.2f}s) with Zipformer-v3...")
+    import sys
+    sys.stdout.write(f"\rPreparing audio ({audio_dur:.2f}s)...".ljust(60))
+    sys.stdout.flush()
     t_asr_start = time.time()
 
     text, phoneme_timestamps, logprobs = model.transcribe(
@@ -90,9 +96,6 @@ def run_asr_cpu(
         orig_sr=sample_rate,
         safe_lufs=True,
     )
-
-    asr_time = time.time() - t_asr_start
-    print(f"[*] ASR completed in {asr_time:.2f}s ({audio_dur / max(0.01, asr_time):.1f}x real-time)")
 
     if phoneme_timestamps:
         for p in phoneme_timestamps:
@@ -122,11 +125,13 @@ def run_asr_cpu(
         logprobs_list = []
         raw_transcriptions = []
 
+        pad_s = kwargs.get("pad_ms", 300) / 1000.0
+
         for s_i, e_i in zip(splits[:-1], splits[1:]):
             sub_pts = phoneme_timestamps[s_i:e_i]
             sub_toks = [p["phoneme"] for p in sub_pts]
-            u_start = float(sub_pts[0]["start"])
-            u_end = float(sub_pts[-1]["end"])
+            u_start = max(0.0, float(sub_pts[0]["start"]) - pad_s)
+            u_end = min(audio_dur, float(sub_pts[-1]["end"]) + pad_s)
 
             regions_list.append(Region(start_s=round(u_start, 3), end_s=round(u_end, 3)))
             tokens.append(sub_toks)
@@ -172,4 +177,6 @@ def run_asr_cpu(
         "logprobs": logprobs_list,
         "silence_intervals": [],
     }
+    
+    asr_time = time.time() - t_asr_start
     return (regions, emissions, stage_metrics, asr_time, audio_pcm)

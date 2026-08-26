@@ -147,8 +147,6 @@ class ZipformerONNX:
                 pass
 
         norm_time = time.time()
-        if should_normalize:
-            print(f"[*] Audio normalization completed in {norm_time - init_start:.2f}s", flush=True)
 
         peak = np.max(np.abs(clean_audio)) if len(clean_audio) > 0 else 0.0
         if peak > 1.0:
@@ -156,7 +154,6 @@ class ZipformerONNX:
 
         feats = self._extract_fbank(clean_audio)
         fbank_time = time.time()
-        print(f"[*] Feature extraction (Fbank) completed in {fbank_time - norm_time:.2f}s", flush=True)
 
         if len(feats) == 0:
             return "", [], np.empty((0, len(self.vocab)), dtype=np.float32)
@@ -198,7 +195,7 @@ class ZipformerONNX:
                 percent = (pos / num_frames) * 100
                 elapsed = max(0.1, time.time() - start_time)
                 speed = (pos / 100.0) / elapsed
-                msg = f"\r[*] Transcribing... {percent:.1f}% | Speed: {speed:.1f}x"
+                msg = f"\rTranscribing ({len(clean_audio)/SAMPLE_RATE:.1f}s)... {percent:.1f}% | Speed: {speed:.1f}x"
                 sys.stdout.write(msg.ljust(60))
                 sys.stdout.flush()
                 last_print_pos = pos
