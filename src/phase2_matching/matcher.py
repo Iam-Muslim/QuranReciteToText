@@ -610,9 +610,13 @@ def _run_post_asr_pipeline(
             max_transition_edit_distance=params.specials.max_transition_edit_distance,
         )
 
-        prepared = _prepare_multi_chapter_units(
-            audio, sample_rate, regions, emissions, stage_metrics, resources, params
-        )
+        import os
+        if os.environ.get("FAST_MATCHING") == "1":
+            prepared = None
+        else:
+            prepared = _prepare_multi_chapter_units(
+                audio, sample_rate, regions, emissions, stage_metrics, resources, params
+            )
         if prepared is None:
             quran_tokens = transcribed_tokens[first_quran_idx:] if first_quran_idx < len(transcribed_tokens) else transcribed_tokens
             start_surah, start_ayah = find_anchor_by_voting(quran_tokens, resources.ngram_index, params.anchor)

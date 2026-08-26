@@ -83,6 +83,7 @@ def main():
         total_cores = multiprocessing.cpu_count()
         num_cores = max(2, total_cores // 2)
         os.environ["ASR_CHUNK_WORKERS"] = str(num_cores)
+        os.environ["FAST_MATCHING"] = "1"
     else:
         num_cores = 2
         os.environ["ASR_CHUNK_WORKERS"] = "1"

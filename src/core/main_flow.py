@@ -76,15 +76,21 @@ def process_audio(
             profiling.resample_time = time.time() - resample_start
             sample_rate = 16000
 
-    (regions, emissions, stage_metrics, asr_time) = run_asr_cpu(
-        audio,
-        sample_rate,
-        model_name=model_name,
-        profile_name=profile_name,
-        progress_callback=progress_callback,
-        min_silence_ms=min_silence_ms,
-        pad_ms=pad_ms,
-    )
+    # Phase 1: VAD & ASR Transcription
+    try:
+        regions, emissions, stage_metrics, asr_time, audio_pcm = run_asr_cpu(
+            audio,
+            sample_rate,
+            model_name=model_name,
+            profile_name=profile_name,
+            progress_callback=progress_callback,
+            min_silence_ms=min_silence_ms,
+            pad_ms=pad_ms,
+        )
+    except Exception as e:
+        profiling.total_time = time.time() - pipeline_start
+        return ([], profiling) if return_profiling else []
+
     sdk_adapt.metrics_to_profiling(stage_metrics, profiling)
     intervals = sdk_adapt.intervals_from_regions(regions)
 
@@ -97,7 +103,7 @@ def process_audio(
     profiling.asr_time = asr_time
 
     json_output, segments = _run_post_asr_pipeline(
-        audio, sample_rate, intervals,
+        audio_pcm, sample_rate, intervals,
         model_name, profiling, pipeline_start,
         regions=regions, emissions=emissions, stage_metrics=stage_metrics
     )

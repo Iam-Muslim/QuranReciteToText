@@ -172,4 +172,4 @@ def run_asr_cpu(
         "logprobs": logprobs_list,
         "silence_intervals": [],
     }
-    return (regions, emissions, stage_metrics, asr_time)
+    return (regions, emissions, stage_metrics, asr_time, audio_pcm)

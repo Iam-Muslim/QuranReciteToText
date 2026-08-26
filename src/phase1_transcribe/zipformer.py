@@ -131,6 +131,9 @@ class ZipformerONNX:
         if safe_lufs and rms < 1e-3:
             should_normalize = False
 
+        import time
+        init_start = time.time()
+        
         if should_normalize:
             try:
                 import warnings
@@ -143,11 +146,18 @@ class ZipformerONNX:
             except Exception:
                 pass
 
+        norm_time = time.time()
+        if should_normalize:
+            print(f"[*] Audio normalization completed in {norm_time - init_start:.2f}s", flush=True)
+
         peak = np.max(np.abs(clean_audio)) if len(clean_audio) > 0 else 0.0
         if peak > 1.0:
             clean_audio = clean_audio / peak
 
         feats = self._extract_fbank(clean_audio)
+        fbank_time = time.time()
+        print(f"[*] Feature extraction (Fbank) completed in {fbank_time - norm_time:.2f}s", flush=True)
+
         if len(feats) == 0:
             return "", [], np.empty((0, len(self.vocab)), dtype=np.float32)
 
@@ -159,13 +169,13 @@ class ZipformerONNX:
 
         states = self._create_initial_states()
         num_frames = len(padded_feats)
+        
         all_chunk_logprobs = []
-
         pos = 0
         input_names = [inp.name for inp in self.session.get_inputs()]
         
         last_print_pos = 0
-        import time
+        import sys
         start_time = time.time()
 
         while pos + T_LEN <= num_frames:
@@ -182,17 +192,17 @@ class ZipformerONNX:
                 states[name] = outputs[out_idx]
 
             pos += CHUNK_LEN
-
-            # Log progress every ~2500 frames (25 seconds of audio)
-            if pos - last_print_pos >= 2500:
+            
+            # Safe, short progress bar that won't trigger terminal word-wrap flooding
+            if pos - last_print_pos >= 2000:
                 percent = (pos / num_frames) * 100
-                elapsed = time.time() - start_time
-                speed = (pos / 100.0) / max(0.1, elapsed)
-                print(f"[*] Transcribing... {percent:.1f}% ({pos/100.0:.1f}s / {num_frames/100.0:.1f}s) | Speed: {speed:.1f}x      ", end="\r", flush=True)
+                elapsed = max(0.1, time.time() - start_time)
+                speed = (pos / 100.0) / elapsed
+                msg = f"\r[*] Transcribing... {percent:.1f}% | Speed: {speed:.1f}x"
+                sys.stdout.write(msg.ljust(60))
+                sys.stdout.flush()
                 last_print_pos = pos
 
-        print(" " * 80, end="\r")  # Clear the line when done
-        
         if not all_chunk_logprobs:
             return "", [], np.empty((0, len(self.vocab)), dtype=np.float32)
 
