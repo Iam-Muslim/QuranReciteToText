@@ -47,7 +47,8 @@ class ZipformerONNX:
             print("[*] Zipformer ONNX model downloaded successfully.")
 
         sess_opts = ort.SessionOptions()
-        sess_opts.intra_op_num_threads = 2
+        num_threads = int(os.environ.get("ONNX_NUM_THREADS", "2"))
+        sess_opts.intra_op_num_threads = num_threads
         sess_opts.inter_op_num_threads = 2
 
         self.session = ort.InferenceSession(
@@ -132,10 +133,13 @@ class ZipformerONNX:
 
         if should_normalize:
             try:
-                meter = pyln.Meter(SAMPLE_RATE)
-                loudness = meter.integrated_loudness(clean_audio)
-                if np.isfinite(loudness) and loudness < 0:
-                    clean_audio = pyln.normalize.loudness(clean_audio, loudness, -23.0)
+                import warnings
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    meter = pyln.Meter(SAMPLE_RATE)
+                    loudness = meter.integrated_loudness(clean_audio)
+                    if np.isfinite(loudness) and loudness < 0:
+                        clean_audio = pyln.normalize.loudness(clean_audio, loudness, -23.0)
             except Exception:
                 pass
 
@@ -159,10 +163,11 @@ class ZipformerONNX:
 
         pos = 0
         input_names = [inp.name for inp in self.session.get_inputs()]
-        last_print_pos = -9999
+        
+        last_print_pos = 0
         import time
         start_time = time.time()
-        
+
         while pos + T_LEN <= num_frames:
             chunk = padded_feats[pos:pos + T_LEN][None, :].astype(np.float32)
             states['x'] = chunk
@@ -177,17 +182,17 @@ class ZipformerONNX:
                 states[name] = outputs[out_idx]
 
             pos += CHUNK_LEN
-            
-            # Print progress every ~1000 frames (10 seconds of audio)
-            if pos - last_print_pos > 1000:
+
+            # Log progress every ~2500 frames (25 seconds of audio)
+            if pos - last_print_pos >= 2500:
                 percent = (pos / num_frames) * 100
                 elapsed = time.time() - start_time
-                speed = (pos / 100.0) / max(0.1, elapsed)  # audio seconds per real second
-                print(f"[*] Transcribing... {percent:.1f}% ({pos/100.0:.1f}s / {num_frames/100.0:.1f}s) | Speed: {speed:.1f}x", end="\r", flush=True)
+                speed = (pos / 100.0) / max(0.1, elapsed)
+                print(f"[*] Transcribing... {percent:.1f}% ({pos/100.0:.1f}s / {num_frames/100.0:.1f}s) | Speed: {speed:.1f}x      ", end="\r", flush=True)
                 last_print_pos = pos
 
-        print(" " * 80, end="\r")  # clear progress line
-
+        print(" " * 80, end="\r")  # Clear the line when done
+        
         if not all_chunk_logprobs:
             return "", [], np.empty((0, len(self.vocab)), dtype=np.float32)
 

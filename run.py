@@ -76,17 +76,29 @@ def main():
     args = parser.parse_args()
 
     if args.workers is not None:
-        os.environ["ASR_CHUNK_WORKERS"] = str(args.workers)
+        num_cores = args.workers
+        os.environ["ASR_CHUNK_WORKERS"] = str(num_cores)
     elif args.fast:
-        os.environ["ASR_CHUNK_WORKERS"] = "4"
+        import multiprocessing
+        total_cores = multiprocessing.cpu_count()
+        num_cores = max(2, total_cores // 2)
+        os.environ["ASR_CHUNK_WORKERS"] = str(num_cores)
     else:
+        num_cores = 2
         os.environ["ASR_CHUNK_WORKERS"] = "1"
+        
+    os.environ["OMP_NUM_THREADS"] = str(num_cores)
+    os.environ["MKL_NUM_THREADS"] = str(num_cores)
+    os.environ["OPENBLAS_NUM_THREADS"] = str(num_cores)
+    os.environ["ONNX_NUM_THREADS"] = str(num_cores)
 
     if not os.path.exists(args.audio):
         print(f"Error: Input audio file not found at {args.audio}")
         sys.exit(1)
 
-    preload_caches()
+    import threading
+    cache_thread = threading.Thread(target=preload_caches, daemon=True)
+    cache_thread.start()
 
     from src.core.main_flow import process_audio
 
