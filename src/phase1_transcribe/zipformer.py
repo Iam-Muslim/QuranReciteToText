@@ -159,6 +159,10 @@ class ZipformerONNX:
 
         pos = 0
         input_names = [inp.name for inp in self.session.get_inputs()]
+        last_print_pos = -9999
+        import time
+        start_time = time.time()
+        
         while pos + T_LEN <= num_frames:
             chunk = padded_feats[pos:pos + T_LEN][None, :].astype(np.float32)
             states['x'] = chunk
@@ -173,6 +177,16 @@ class ZipformerONNX:
                 states[name] = outputs[out_idx]
 
             pos += CHUNK_LEN
+            
+            # Print progress every ~1000 frames (10 seconds of audio)
+            if pos - last_print_pos > 1000:
+                percent = (pos / num_frames) * 100
+                elapsed = time.time() - start_time
+                speed = (pos / 100.0) / max(0.1, elapsed)  # audio seconds per real second
+                print(f"[*] Transcribing... {percent:.1f}% ({pos/100.0:.1f}s / {num_frames/100.0:.1f}s) | Speed: {speed:.1f}x", end="\r", flush=True)
+                last_print_pos = pos
+
+        print(" " * 80, end="\r")  # clear progress line
 
         if not all_chunk_logprobs:
             return "", [], np.empty((0, len(self.vocab)), dtype=np.float32)

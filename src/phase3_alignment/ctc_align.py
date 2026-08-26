@@ -311,16 +311,35 @@ def run_ctc_alignment(
     if not logprobs_list:
         return
 
-    n = min(len(segments), len(logprobs_list))
+    # Build a time-based index for logprobs to avoid 1-to-1 mismatch issues
+    time_to_index = {}
+    for idx, lp_entry in enumerate(logprobs_list):
+        if isinstance(lp_entry, tuple):
+            _, start_sec = lp_entry
+        else:
+            start_sec = 0.0
+        time_to_index[round(start_sec, 2)] = idx
 
-    for i in range(n):
-        seg = segments[i]
+    for seg in segments:
         matched_text = seg.matched_text or ""
         transcribed_text = seg.transcribed_text or ""
         if not matched_text.strip():
             continue
 
-        logprobs_entry = logprobs_list[i]
+        seg_time = round(seg.start_time, 2)
+        if seg_time not in time_to_index:
+            # Fallback: find closest within 0.1s
+            if not time_to_index:
+                continue
+            closest_time = min(time_to_index.keys(), key=lambda k: abs(k - seg_time))
+            if abs(closest_time - seg_time) < 0.1:
+                idx = time_to_index[closest_time]
+            else:
+                continue
+        else:
+            idx = time_to_index[seg_time]
+
+        logprobs_entry = logprobs_list[idx]
         if isinstance(logprobs_entry, tuple):
             logprobs_np, chunk_start_sec = logprobs_entry
         else:
@@ -331,7 +350,7 @@ def run_ctc_alignment(
 
         prefix_words, suffix_words = _find_unmatched_affixes(transcribed_text, matched_text)
         ref_words = matched_text.split()
-        asr_words_entry = asr_words_list[i] if i < len(asr_words_list) else None
+        asr_words_entry = asr_words_list[idx] if idx < len(asr_words_list) else None
         asr_words = asr_words_entry[0] if isinstance(asr_words_entry, tuple) else asr_words_entry
         asr_word_mapping, missing_word_indices = _map_asr_words_to_reference(
             asr_words or [], ref_words
