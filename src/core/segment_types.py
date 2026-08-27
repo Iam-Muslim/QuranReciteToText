@@ -37,17 +37,6 @@ class SegmentInfo:
     segment_number: int = 0
     words: Optional[list] = None
     _original_alignment_idx: Optional[int] = None
-    _asr_word_gaps: Optional[list] = None
-    _acoustic_word_gaps: Optional[list] = None
-    _preserve_split_before: bool = False
-    split_group_id: Optional[str] = None
-    merge_group_id: Optional[str] = None
-    merge_members: Optional[list] = None
-    partial_merge_leftover: Optional[str] = None
-    duplicated: bool = False
-    duplicate_kind: Optional[str] = None
-    duplicate_context: Optional[str] = None
-    duplicated_by_segment: Optional[int] = None
 
     def to_json_dict(self, include_words: bool = False, include_letters: bool = False) -> dict:
         """Serializes segment to canonical JSON structure."""
@@ -89,23 +78,6 @@ class SegmentInfo:
             else:
                 d["words"] = [{k: v for k, v in w.items() if k != "letters"} for w in self.words]
 
-        if self.split_group_id:
-            d["split_group_id"] = self.split_group_id
-        if self.merge_group_id:
-            d["merge_group_id"] = self.merge_group_id
-        if self.merge_members:
-            d["merge_members"] = self.merge_members
-        if self.partial_merge_leftover:
-            d["partial_merge_leftover"] = self.partial_merge_leftover
-        if self.duplicated:
-            d["duplicated"] = True
-        if self.duplicate_kind is not None:
-            d["duplicate_kind"] = self.duplicate_kind
-        if self.duplicate_context is not None:
-            d["duplicate_context"] = self.duplicate_context
-        if self.duplicated_by_segment is not None:
-            d["duplicated_by_segment"] = self.duplicated_by_segment
-
         return d
 
 
@@ -113,8 +85,6 @@ PUBLIC_SEGMENT_KEYS = {
     "segment", "time_from", "time_to", "ref_from", "ref_to",
     "matched_text", "confidence", "has_missing_words", "has_repeated_words",
     "special_type", "error", "wrap_word_ranges", "repeated_ranges", "repeated_text",
-    "split_group_id", "duplicated", "duplicate_kind", "duplicate_context",
-    "duplicated_by_segment",
 }
 
 

@@ -274,9 +274,6 @@ def _frames_to_word_times(
         token_ends_f[k] = max(0.0, token_ends_f[k] - LOOKAHEAD_OFFSET_FRAMES)
 
     # ── Build Word & Phoneme Output ──
-    # Convert probabilities from log-domain to linear for margin_peak computation
-    probs = np.exp(log_probs) if log_probs is not None else None
-
     word_times: list[dict] = []
     tok_offset = 0
 
@@ -308,24 +305,14 @@ def _frames_to_word_times(
             tok_id = token_ids[k]
             tok_str = vocab[tok_id] if vocab and tok_id < len(vocab) else ""
 
-            # ── margin_peak Confidence (from model author's decode_with_confidence.py) ──
-            # Evaluated at the peak frame where this token reaches maximum probability.
-            # This metric is stable across runtimes (ONNX, CoreML, PyTorch) to within
-            # 0.11 worst-case, unlike boundary-frame margins which can diverge up to 0.97.
+            # ── margin_peak Confidence ──
             act_f = active_frames[k]
-            if len(act_f) > 0 and probs is not None:
-                # Find the peak frame within active frames
-                pk_rel = int(np.argmax(probs[act_f, tok_id]))
+            if len(act_f) > 0 and log_probs is not None:
+                pk_rel = int(np.argmax(log_probs[act_f, tok_id]))
                 pk_frame = act_f[pk_rel]
-                # Peak confidence: probability of chosen token at peak frame
-                p_conf_peak = float(probs[pk_frame, tok_id])
-                # margin_peak: how decisive the choice was (peak - runner-up)
-                pk_sorted = np.sort(probs[pk_frame])[::-1]
-                margin_peak = float(pk_sorted[0] - pk_sorted[1]) if len(pk_sorted) > 1 else 1.0
-                # Use confidence_peak as the reported confidence (matches model author's approach)
+                p_conf_peak = float(np.exp(log_probs[pk_frame, tok_id]))
                 p_conf = float(np.clip(p_conf_peak, 0.05, 0.99))
             elif len(act_f) > 0:
-                # Fallback if log_probs not available: use score-based confidence
                 p_logp = float(np.mean(scores[act_f]))
                 p_conf = float(np.clip(np.exp(p_logp), 0.05, 0.99))
             else:
@@ -587,28 +574,3 @@ def run_ctc_alignment(
                             ph_item["start"] = round(max(0.0, ph_item["start"] - prefix_duration), 4)
                         if ph_item.get("end") is not None:
                             ph_item["end"] = round(max(0.0, ph_item["end"] - prefix_duration), 4)
-        seg._asr_word_gaps = [None]
-        seg._acoustic_word_gaps = [None]
-        for previous_asr_word, current_asr_word in zip(
-            mapped_asr_words, mapped_asr_words[1:]
-        ):
-            if previous_asr_word and current_asr_word:
-                previous_end = previous_asr_word["end"]
-                current_start = current_asr_word["start"]
-                seg._asr_word_gaps.append(max(0.0, current_start - previous_end))
-                seg._acoustic_word_gaps.append(
-                    max(
-                        (
-                            max(
-                                0.0,
-                                min(current_start, silence_end)
-                                - max(previous_end, silence_start),
-                            )
-                            for silence_start, silence_end in silence_intervals
-                        ),
-                        default=0.0,
-                    )
-                )
-            else:
-                seg._asr_word_gaps.append(None)
-                seg._acoustic_word_gaps.append(None)

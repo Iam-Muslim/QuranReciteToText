@@ -5,27 +5,7 @@ from src.core.quran_index import get_quran_index, parse_location_key
 
 
 def extract_missing_word_refs(segments: list[SegmentInfo]) -> list[str]:
-    """Extracts all missing word location references ('surah:ayah:word') for the audio.
-
-    Uses QUA SDK gap_events if attached to segments; otherwise derives missing
-    references using quran_index canonical word sequence.
-    """
-    # 1. Check for QUA SDK gap events attached to segments
-    gap_events = None
-    for seg in segments:
-        if getattr(seg, "_gap_events", None):
-            gap_events = seg._gap_events
-            break
-
-    missing_refs = []
-    if gap_events:
-        for ev in gap_events:
-            if ev.get("event") == "gap" and "missing_word_refs" in ev:
-                missing_refs.extend(ev["missing_word_refs"])
-        if missing_refs:
-            return missing_refs
-
-    # 2. Derive missing references using Quran Index canonical sequence
+    """Extracts all missing word location references ('surah:ayah:word') for the audio using QuranIndex."""
     qi = get_quran_index()
     recited_locations = set()
     for seg in segments:
@@ -43,7 +23,7 @@ def extract_missing_word_refs(segments: list[SegmentInfo]) -> list[str]:
         return []
 
     min_idx, max_idx = min(matched_indices), max(matched_indices)
-
+    missing_refs: list[str] = []
     for gi in range(min_idx, max_idx + 1):
         w_info = qi.words[gi]
         loc = f"{w_info.surah}:{w_info.ayah}:{w_info.word}"

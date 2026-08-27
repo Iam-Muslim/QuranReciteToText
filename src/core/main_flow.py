@@ -102,7 +102,7 @@ def process_audio(
 
     profiling.asr_time = asr_time
 
-    json_output, segments = _run_post_asr_pipeline(
+    segments = _run_post_asr_pipeline(
         audio_pcm, sample_rate, intervals,
         model_name, profiling, pipeline_start,
         regions=regions, emissions=emissions, stage_metrics=stage_metrics

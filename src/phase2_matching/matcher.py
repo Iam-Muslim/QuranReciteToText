@@ -474,99 +474,7 @@ def _prepare_multi_chapter_units(
     stage_metrics["asr_words"] = unit_asr_words
     stage_metrics["logprobs"] = unit_logprobs
     stage_metrics["multi_chapter"] = True
-def _bridge_inter_chunk_gaps(
-    match_results: list,
-    word_indices: list,
-    resources,
-    start_surah: int,
-    unit_labels: list | None = None
-) -> list:
-    """Bridges 1 to 2-word boundary gaps between adjacent chunks."""
-    if not match_results or not word_indices or len(match_results) != len(word_indices):
-        return match_results
 
-    n = len(match_results)
-    for i in range(n - 1):
-        res_curr = match_results[i]
-        res_next = match_results[i + 1]
-        w_curr = word_indices[i]
-        w_next = word_indices[i + 1]
-
-        if not w_curr or not w_next:
-            continue
-
-        surah_curr = unit_labels[i][0] if unit_labels and i < len(unit_labels) else start_surah
-        surah_next = unit_labels[i + 1][0] if unit_labels and i + 1 < len(unit_labels) else start_surah
-
-        if surah_curr <= 0 or surah_curr != surah_next or surah_curr not in resources.chapter_refs:
-            continue
-
-        chapter_ref = resources.chapter_refs[surah_curr]
-        prev_end = w_curr[1]
-        next_start = w_next[0]
-
-        # 1 to 2 word gap between consecutive chunks
-        gap_size = next_start - prev_end - 1
-        if 1 <= gap_size <= 2:
-            gap_indices = list(range(prev_end + 1, next_start))
-            if all(0 <= g < len(chapter_ref.words) for g in gap_indices):
-                prev_w = chapter_ref.words[prev_end] if 0 <= prev_end < len(chapter_ref.words) else None
-                next_w = chapter_ref.words[next_start] if 0 <= next_start < len(chapter_ref.words) else None
-
-                for gap_idx in gap_indices:
-                    gap_word = chapter_ref.words[gap_idx]
-                    # If the gap word belongs to the previous chunk's ayah, bridge into chunk i
-                    if prev_w and gap_word.ayah == prev_w.ayah:
-                        if len(res_curr) == 4:
-                            m_text, m_score, m_ref, m_wraps = res_curr
-                        else:
-                            m_text, m_score, m_ref = res_curr[:3]
-                            m_wraps = None
-                        if m_ref and ":" in m_ref:
-                            ref_from = m_ref.split("-")[0]
-                            ref_to = f"{gap_word.surah}:{gap_word.ayah}:{gap_word.word_num}"
-                            new_ref = f"{ref_from}-{ref_to}"
-                            new_text = f"{m_text} {gap_word.text}" if m_text else gap_word.text
-                            res_curr = (new_text, m_score, new_ref, m_wraps) if len(res_curr) == 4 else (new_text, m_score, new_ref)
-                            match_results[i] = res_curr
-                            w_curr = (w_curr[0], gap_idx)
-                            word_indices[i] = w_curr
-
-                    # Otherwise bridge into chunk i+1
-                    elif next_w and gap_word.ayah == next_w.ayah:
-                        if len(res_next) == 4:
-                            m_text, m_score, m_ref, m_wraps = res_next
-                        else:
-                            m_text, m_score, m_ref = res_next[:3]
-                            m_wraps = None
-                        if m_ref and ":" in m_ref:
-                            ref_parts = m_ref.split("-")
-                            ref_to = ref_parts[1] if len(ref_parts) > 1 else ref_parts[0]
-                            ref_from = f"{gap_word.surah}:{gap_word.ayah}:{gap_word.word_num}"
-                            new_ref = f"{ref_from}-{ref_to}"
-                            new_text = f"{gap_word.text} {m_text}" if m_text else gap_word.text
-                            res_next = (new_text, m_score, new_ref, m_wraps) if len(res_next) == 4 else (new_text, m_score, new_ref)
-                            match_results[i + 1] = res_next
-                            w_next = (gap_idx, w_next[1])
-                            word_indices[i + 1] = w_next
-                    else:
-                        # Default: append to previous chunk
-                        if len(res_curr) == 4:
-                            m_text, m_score, m_ref, m_wraps = res_curr
-                        else:
-                            m_text, m_score, m_ref = res_curr[:3]
-                            m_wraps = None
-                        if m_ref and ":" in m_ref:
-                            ref_from = m_ref.split("-")[0]
-                            ref_to = f"{gap_word.surah}:{gap_word.ayah}:{gap_word.word_num}"
-                            new_ref = f"{ref_from}-{ref_to}"
-                            new_text = f"{m_text} {gap_word.text}" if m_text else gap_word.text
-                            res_curr = (new_text, m_score, new_ref, m_wraps) if len(res_curr) == 4 else (new_text, m_score, new_ref)
-                            match_results[i] = res_curr
-                            w_curr = (w_curr[0], gap_idx)
-                            word_indices[i] = w_curr
-
-    return match_results
 
 
 
@@ -717,11 +625,6 @@ def _run_post_asr_pipeline(
                         match_metrics[key] += value
                 unit_index = group_end
 
-        # Bridge 1-word boundary gaps caused by audio silence cuts between chunks
-        match_results = _bridge_inter_chunk_gaps(
-            match_results, word_indices, resources, start_surah, unit_labels
-        )
-
     except Exception as e:
         user_message = getattr(e, "user_message", None)
         if user_message:
@@ -794,12 +697,8 @@ def _run_post_asr_pipeline(
     # Do NOT overwrite it — the wrap_ranges are the single source of truth.
     segments = sdk_adapt.alignment_to_segment_infos(alignment, emissions, regions)
 
-    gap_events = [e for e in gap_events if isinstance(e, dict) and e.get("event") == "gap"]
-    for seg_info in segments:
-        seg_info._gap_events = gap_events
-
     profiling.segments_attempted = len(segments)
     profiling.segments_passed = sum(1 for s in segments if s.match_score > 0.0)
     profiling.total_time = time.time() - pipeline_start
 
-    return None, segments
+    return segments
