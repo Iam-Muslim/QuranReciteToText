@@ -149,6 +149,55 @@
             background: rgba(15, 21, 35, 0.95);
         }
 
+        .ayah-badges-group {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+
+        .badge-flag {
+            font-size: 0.75rem;
+            font-weight: 600;
+            padding: 0.2rem 0.55rem;
+            border-radius: 6px;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+        }
+
+        .badge-repetition {
+            color: #38bdf8;
+            background: rgba(56, 189, 248, 0.12);
+            border: 1px solid rgba(56, 189, 248, 0.25);
+        }
+
+        .badge-missing {
+            color: #f87171;
+            background: rgba(248, 113, 113, 0.12);
+            border: 1px solid rgba(248, 113, 113, 0.25);
+        }
+
+        .review-gap-pill {
+            font-size: 0.72rem;
+            font-weight: 500;
+            color: #fbbf24;
+            background: rgba(251, 191, 36, 0.1);
+            border: 1px dashed rgba(251, 191, 36, 0.35);
+            padding: 0.15rem 0.5rem;
+            border-radius: 6px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            transition: all 0.2s ease;
+        }
+
+        .review-gap-pill:hover {
+            background: rgba(251, 191, 36, 0.2);
+            transform: translateY(-1px);
+        }
+
         .ayah-header {
             display: flex;
             align-items: center;
@@ -156,6 +205,8 @@
             margin-bottom: 1.25rem;
             padding-bottom: 0.75rem;
             border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+            gap: 1rem;
+            flex-wrap: wrap;
         }
 
         .ayah-badge {
@@ -174,7 +225,6 @@
             direction: ltr;
         }
 
-        /* --- Words Flow --- */
         .ayah-words-flow {
             display: flex;
             flex-wrap: wrap;
@@ -196,10 +246,6 @@
             position: relative;
         }
 
-        .quran-word:hover {
-            background: rgba(255, 255, 255, 0.04);
-        }
-
         .word-text {
             font-family: var(--font-quran);
             font-size: 1.95rem;
@@ -215,10 +261,9 @@
             transform: scale(1.04);
         }
 
-        /* --- Discreet Phoneme Cluster Underneath --- */
         .phoneme-row {
             display: flex;
-            flex-direction: row; /* Right to Left natural matching */
+            flex-direction: row;
             align-items: center;
             gap: 2px;
             background: rgba(0, 0, 0, 0.45);
@@ -248,252 +293,206 @@
             color: #030712;
             background: var(--accent-emerald-light);
             font-weight: 700;
+            text-shadow: none;
             box-shadow: 0 0 8px var(--accent-emerald-glow);
-            transform: scale(1.15);
         }
 
-        /* --- Minimal Floating Capsule Player (with integrated Import Tools) --- */
-        .player-floating-capsule {
+        .player-capsule-wrapper {
             position: fixed;
-            bottom: 24px;
-            left: 50%;
-            transform: translateX(-50%);
-            width: min(880px, calc(100% - 32px));
+            bottom: 1.75rem;
+            left: 0;
+            right: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            pointer-events: none;
+            padding: 0 1rem;
+        }
+
+        .player-capsule {
+            pointer-events: auto;
             background: var(--bg-glass);
-            backdrop-filter: blur(28px);
-            -webkit-backdrop-filter: blur(28px);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 20px;
-            padding: 0.75rem 1.25rem;
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid var(--border-subtle);
+            border-radius: 9999px;
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.05);
+            padding: 0.55rem 0.85rem;
             display: flex;
             align-items: center;
-            gap: 0.9rem;
-            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.65);
-            z-index: 50;
+            gap: 0.85rem;
+            max-width: 900px;
+            width: 100%;
         }
 
-        .import-btn-icon {
-            width: 36px;
-            height: 36px;
+        .capsule-btn {
             background: var(--bg-pill);
             border: 1px solid var(--border-subtle);
-            border-radius: 10px;
             color: var(--text-secondary);
-            font-size: 0.9rem;
-            display: flex;
+            height: 38px;
+            padding: 0 1rem;
+            border-radius: 9999px;
+            font-size: 0.82rem;
+            font-weight: 500;
+            display: inline-flex;
             align-items: center;
-            justify-content: center;
+            gap: 0.45rem;
             cursor: pointer;
             transition: all 0.2s ease;
-            flex-shrink: 0;
-        }
-
-        .import-btn-icon:hover {
-            background: var(--bg-pill-hover);
-            color: #fff;
-            border-color: rgba(255, 255, 255, 0.2);
-            transform: translateY(-1px);
-        }
-
-        .import-btn-icon.ready {
-            background: rgba(16, 185, 129, 0.12);
-            color: var(--accent-emerald-light);
-            border-color: rgba(16, 185, 129, 0.3);
-        }
-
-        .play-toggle-btn {
-            width: 42px;
-            height: 42px;
-            background: linear-gradient(135deg, var(--accent-gold), #966f19);
-            border: none;
-            border-radius: 50%;
-            color: #05080f;
-            font-size: 1rem;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
-            transition: all 0.2s ease;
-            box-shadow: 0 4px 14px var(--accent-gold-glow);
-            flex-shrink: 0;
-        }
-
-        .play-toggle-btn:hover {
-            transform: scale(1.06);
-            filter: brightness(1.1);
-        }
-
-        .play-toggle-btn:active {
-            transform: scale(0.96);
-        }
-
-        .track-center-group {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            gap: 0.35rem;
-            min-width: 0;
-        }
-
-        .track-meta-row {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            font-size: 0.75rem;
-        }
-
-        .current-active-info {
-            color: var(--accent-gold-light);
-            font-weight: 600;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            overflow: hidden;
-            text-overflow: ellipsis;
             white-space: nowrap;
         }
 
-        .current-sound-badge {
+        .capsule-btn:hover {
+            background: var(--bg-pill-hover);
+            color: var(--text-primary);
+            border-color: rgba(255, 255, 255, 0.15);
+        }
+
+        .capsule-btn.ready {
+            border-color: rgba(16, 185, 129, 0.4);
             color: var(--accent-emerald-light);
-            background: rgba(16, 185, 129, 0.12);
-            padding: 0.1rem 0.4rem;
-            border-radius: 4px;
-            font-family: var(--font-quran);
-            font-size: 0.8rem;
+            background: rgba(16, 185, 129, 0.08);
         }
 
-        .time-display {
-            color: var(--text-muted);
-            font-variant-numeric: tabular-nums;
-            direction: ltr;
-            flex-shrink: 0;
-        }
-
-        /* --- Scrub Track --- */
-        .scrub-container {
-            width: 100%;
-            height: 6px;
-            background: rgba(255, 255, 255, 0.08);
-            border-radius: 3px;
-            position: relative;
+        .play-btn-circle {
+            width: 42px;
+            height: 42px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--accent-gold), #b89628);
+            color: #06080e;
+            border: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.05rem;
             cursor: pointer;
-            overflow: hidden;
-        }
-
-        .scrub-fill {
-            position: absolute;
-            top: 0;
-            right: 0; /* RTL fill */
-            height: 100%;
-            width: 0%;
-            background: linear-gradient(90deg, var(--accent-emerald), var(--accent-gold));
-            border-radius: 3px;
-            transition: width 0.05s linear;
-        }
-
-        .speed-dropdown {
-            background: var(--bg-pill);
-            border: 1px solid var(--border-subtle);
-            color: var(--text-secondary);
-            font-family: var(--font-ui);
-            font-size: 0.8rem;
-            font-weight: 500;
-            padding: 0.4rem 0.5rem;
-            border-radius: 8px;
-            cursor: pointer;
-            outline: none;
+            box-shadow: 0 4px 16px var(--accent-gold-glow);
             transition: all 0.2s ease;
             flex-shrink: 0;
         }
 
-        .speed-dropdown:hover {
-            background: var(--bg-pill-hover);
-            color: #fff;
+        .play-btn-circle:hover {
+            transform: scale(1.05);
+            box-shadow: 0 6px 20px rgba(212, 175, 55, 0.45);
         }
 
-        .hidden {
-            display: none !important;
+        .capsule-timeline {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+            min-width: 140px;
         }
+
+        .timeline-meta {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            font-variant-numeric: tabular-nums;
+        }
+
+        .ayah-label-ref {
+            color: var(--accent-gold-light);
+            font-weight: 600;
+            font-size: 0.8rem;
+        }
+
+        .scrub-bar-container {
+            width: 100%;
+            height: 5px;
+            background: rgba(255, 255, 255, 0.08);
+            border-radius: 9999px;
+            cursor: pointer;
+            position: relative;
+            overflow: hidden;
+            transition: height 0.15s;
+        }
+
+        .scrub-bar-container:hover {
+            height: 7px;
+        }
+
+        .scrub-fill {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, var(--accent-gold), var(--accent-emerald));
+            border-radius: 9999px;
+            transition: width 0.05s linear;
+        }
+
+        .sound-badge {
+            font-family: var(--font-quran);
+            background: rgba(16, 185, 129, 0.15);
+            color: var(--accent-emerald-light);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            border-radius: 8px;
+            padding: 0.1rem 0.55rem;
+            font-size: 1rem;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+
+        .capsule-select {
+            background: var(--bg-pill);
+            border: 1px solid var(--border-subtle);
+            color: var(--text-secondary);
+            padding: 0.35rem 0.6rem;
+            border-radius: 9999px;
+            font-size: 0.78rem;
+            cursor: pointer;
+            outline: none;
+        }
+
+        .hidden { display: none !important; }
     </style>
 </head>
 <body>
 
-    <!-- Main Quran Reading Canvas -->
     <main id="mainContent">
-        <div class="quran-container" id="quranContainer">
-            
-            <!-- Empty State / Drop Target -->
+        <div class="quran-container">
             <div class="empty-dropzone" id="emptyDropzone">
-                <div class="dropzone-icon"><i class="fas fa-cloud-arrow-up"></i></div>
-                <div class="dropzone-title">قم بسحب وإفلات الملفات هنا</div>
-                <div class="dropzone-subtitle">
-                    اسحب ملف التوقيت (JSON) وملف التلاوة الصوتي (MP3/WAV) لبدء التلاوة الفورية
-                </div>
+                <div class="dropzone-icon"><i class="fas fa-quran"></i></div>
+                <div class="dropzone-title">عرض وتتبع التلاوة المباركة</div>
+                <div class="dropzone-subtitle">قم برفع ملف التوقيت (output.json) وملف الصوت (audio.mp3) لبدء المزامنة</div>
             </div>
-
-            <!-- Ayah Blocks List -->
-            <div id="ayahBlocksList"></div>
+            <div id="ayahBlocksList" style="display: flex; flex-direction: column; gap: 2rem;"></div>
         </div>
     </main>
 
-    <!-- Sleek Floating Capsule Player (with integrated file loading) -->
-    <div class="player-floating-capsule">
-        <input type="file" id="jsonInput" accept=".json" class="hidden">
-        <input type="file" id="audioInput" accept="audio/*" class="hidden">
-
-        <!-- Import JSON Button -->
-        <button class="import-btn-icon" id="btnUploadJson" title="تحميل ملف التوقيت JSON">
-            <i class="fas fa-file-code"></i>
-        </button>
-
-        <!-- Import Audio Button -->
-        <button class="import-btn-icon" id="btnUploadAudio" title="تحميل ملف الصوت MP3">
-            <i class="fas fa-file-audio"></i>
-        </button>
-
-        <!-- Play / Pause Button -->
-        <button class="play-toggle-btn" id="btnPlayPause" title="تشغيل / إيقاف (مسافة)">
-            <i class="fas fa-play" id="playIcon"></i>
-        </button>
-
-        <!-- Scrub & Meta -->
-        <div class="track-center-group">
-            <div class="track-meta-row">
-                <div class="current-active-info">
-                    <span id="labelAyahRef">—</span>
-                    <span class="current-sound-badge hidden" id="badgeSound"></span>
+    <div class="player-capsule-wrapper">
+        <div class="player-capsule">
+            <button class="capsule-btn" id="btnUploadJson"><i class="fas fa-file-code"></i> <span>JSON</span></button>
+            <input type="file" id="jsonInput" accept=".json" class="hidden">
+            <button class="capsule-btn" id="btnUploadAudio"><i class="fas fa-volume-up"></i> <span>Audio</span></button>
+            <input type="file" id="audioInput" accept="audio/*" class="hidden">
+            <button class="play-btn-circle" id="btnPlayPause"><i class="fas fa-play" id="playIcon"></i></button>
+            <div class="sound-badge hidden" id="badgeSound"></div>
+            <div class="capsule-timeline">
+                <div class="timeline-meta">
+                    <span class="ayah-label-ref" id="labelAyahRef">---</span>
+                    <div><span id="timeElapsed">00:00</span> / <span id="timeTotal">00:00</span></div>
                 </div>
-                <div class="time-display">
-                    <span id="timeElapsed">00:00</span> / <span id="timeTotal">00:00</span>
-                </div>
+                <div class="scrub-bar-container" id="scrubContainer"><div class="scrub-fill" id="scrubFill"></div></div>
             </div>
-
-            <div class="scrub-container" id="scrubContainer">
-                <div class="scrub-fill" id="scrubFill"></div>
-            </div>
+            <select class="capsule-select" id="selectSpeed">
+                <option value="0.75">0.75x</option><option value="1.0" selected>1.0x</option>
+                <option value="1.25">1.25x</option><option value="1.5">1.5x</option>
+            </select>
         </div>
-
-        <!-- Playback Speed -->
-        <select id="selectSpeed" class="speed-dropdown" title="سرعة التلاوة">
-            <option value="0.75">0.75x</option>
-            <option value="1.0" selected>1.0x</option>
-            <option value="1.25">1.25x</option>
-            <option value="1.5">1.5x</option>
-        </select>
     </div>
-
-    <!-- Hidden Core Audio Engine -->
-    <audio id="audioEngine" preload="auto"></audio>
 
     <script>
         class QuranViewer {
             constructor() {
-                this.audio = document.getElementById('audioEngine');
+                this.audio = new Audio();
                 this.segments = [];
-                this.words = [];
-                this.phonemes = [];
+                this.canonicalWords = [];
+                this.timeOccurrences = [];
+                this.phonemeOccurrences = [];
                 this.animFrame = null;
-
                 this.initElements();
                 this.bindEvents();
             }
@@ -503,11 +502,7 @@
                 this.audioInput = document.getElementById('audioInput');
                 this.btnUploadJson = document.getElementById('btnUploadJson');
                 this.btnUploadAudio = document.getElementById('btnUploadAudio');
-
-                this.emptyDropzone = document.getElementById('emptyDropzone');
                 this.ayahBlocksList = document.getElementById('ayahBlocksList');
-                this.mainContent = document.getElementById('mainContent');
-
                 this.btnPlayPause = document.getElementById('btnPlayPause');
                 this.playIcon = document.getElementById('playIcon');
                 this.labelAyahRef = document.getElementById('labelAyahRef');
@@ -516,322 +511,159 @@
                 this.timeTotal = document.getElementById('timeTotal');
                 this.scrubContainer = document.getElementById('scrubContainer');
                 this.scrubFill = document.getElementById('scrubFill');
-                this.selectSpeed = document.getElementById('selectSpeed');
             }
 
             bindEvents() {
-                // Upload Buttons in Bottom Capsule
                 this.btnUploadJson.addEventListener('click', () => this.jsonInput.click());
                 this.btnUploadAudio.addEventListener('click', () => this.audioInput.click());
-
                 this.jsonInput.addEventListener('change', (e) => this.handleJsonFile(e.target.files[0]));
                 this.audioInput.addEventListener('change', (e) => this.handleAudioFile(e.target.files[0]));
-
-                // Drag and Drop
-                window.addEventListener('dragover', (e) => {
-                    e.preventDefault();
-                    this.emptyDropzone.classList.add('dragover');
-                });
-                window.addEventListener('dragleave', (e) => {
-                    if (e.clientX === 0 && e.clientY === 0) {
-                        this.emptyDropzone.classList.remove('dragover');
-                    }
-                });
-                window.addEventListener('drop', (e) => {
-                    e.preventDefault();
-                    this.emptyDropzone.classList.remove('dragover');
-                    Array.from(e.dataTransfer.files).forEach(file => {
-                        if (file.name.endsWith('.json')) this.handleJsonFile(file);
-                        else if (file.type.startsWith('audio/') || file.name.match(/\.(mp3|wav|ogg|m4a)$/i)) this.handleAudioFile(file);
-                    });
-                });
-
-                // Play / Pause
                 this.btnPlayPause.addEventListener('click', () => this.togglePlay());
-
-                // Scrub Bar
                 this.scrubContainer.addEventListener('click', (e) => {
                     if (!this.audio.duration) return;
                     const rect = this.scrubContainer.getBoundingClientRect();
-                    // RTL seek: right is 0, left is 100%
-                    const clickX = e.clientX - rect.left;
-                    const ratio = 1 - (clickX / rect.width);
+                    const ratio = 1 - ((e.clientX - rect.left) / rect.width);
                     this.audio.currentTime = Math.max(0, Math.min(this.audio.duration, ratio * this.audio.duration));
                 });
-
-                // Playback Speed
-                this.selectSpeed.addEventListener('change', (e) => {
-                    this.audio.playbackRate = parseFloat(e.target.value);
-                });
-
-                // Audio Events
-                this.audio.addEventListener('play', () => {
-                    this.playIcon.className = 'fas fa-pause';
-                    this.startSync();
-                });
-                this.audio.addEventListener('pause', () => {
-                    this.playIcon.className = 'fas fa-play';
-                    this.stopSync();
-                });
-                this.audio.addEventListener('loadedmetadata', () => {
-                    this.timeTotal.textContent = this.formatTime(this.audio.duration);
-                });
-
-                // Keyboard Shortcuts
-                window.addEventListener('keydown', (e) => {
-                    if (e.code === 'Space') {
-                        e.preventDefault();
-                        this.togglePlay();
-                    } else if (e.code === 'ArrowRight') {
-                        e.preventDefault();
-                        this.audio.currentTime = Math.max(0, this.audio.currentTime - 3);
-                    } else if (e.code === 'ArrowLeft') {
-                        e.preventDefault();
-                        this.audio.currentTime = Math.min(this.audio.duration || 0, this.audio.currentTime + 3);
-                    }
-                });
+                this.audio.addEventListener('play', () => { this.playIcon.className = 'fas fa-pause'; this.startSync(); });
+                this.audio.addEventListener('pause', () => { this.playIcon.className = 'fas fa-play'; this.stopSync(); });
+                this.audio.addEventListener('loadedmetadata', () => this.timeTotal.textContent = this.formatTime(this.audio.duration));
             }
 
             handleJsonFile(file) {
-                if (!file) return;
                 const reader = new FileReader();
-                reader.onload = (e) => {
-                    try {
-                        const data = JSON.parse(e.target.result);
-                        this.loadData(data);
-                        this.btnUploadJson.classList.add('ready');
-                        this.btnUploadJson.title = `ملف التوقيت: ${file.name}`;
-                    } catch (err) {
-                        alert('خطأ في قراءة ملف JSON: ' + err.message);
-                    }
-                };
-                reader.readAsText(file, 'utf-8');
+                reader.onload = (e) => { this.loadData(JSON.parse(e.target.result)); this.btnUploadJson.classList.add('ready'); };
+                reader.readAsText(file);
             }
 
             handleAudioFile(file) {
-                if (!file) return;
                 this.audio.src = URL.createObjectURL(file);
                 this.btnUploadAudio.classList.add('ready');
-                this.btnUploadAudio.title = `ملف الصوت: ${file.name}`;
             }
 
             loadData(data) {
-                this.segments = (data.segments || []).filter(s => s.matched_text && s.matched_text.trim());
-                this.words = [];
-                this.phonemes = [];
-
+                this.segments = (data.segments || []).filter(s => s.matched_text);
+                this.canonicalWords = [];
+                this.timeOccurrences = [];
+                this.phonemeOccurrences = [];
                 this.segments.forEach((seg, sIdx) => {
-                    const segStart = seg.time_from || 0.0;
-                    (seg.words || []).forEach((w, wIdx) => {
-                        const wordId = `w_${sIdx}_${wIdx}`;
-                        const absStart = w.start !== null ? segStart + w.start : null;
-                        const absEnd = w.end !== null ? segStart + w.end : null;
+                    const segStart = seg.time_from || 0;
+                    const wordMap = new Map();
+                    const wordsList = seg.words || [];
 
-                        const wordObj = {
-                            id: wordId,
-                            text: w.word,
-                            location: w.location,
-                            start: absStart,
-                            end: absEnd,
-                            segmentIndex: sIdx,
-                            phonemes: []
-                        };
-
-                        if (w.phonemes && Array.isArray(w.phonemes)) {
-                            w.phonemes.forEach((p, pIdx) => {
-                                const phObj = {
-                                    id: `p_${sIdx}_${wIdx}_${pIdx}`,
-                                    phoneme: p.phoneme,
-                                    start: p.start !== null ? segStart + p.start : null,
-                                    end: p.end !== null ? segStart + p.end : null,
-                                    wordId: wordId,
-                                    segmentIndex: sIdx
-                                };
-                                wordObj.phonemes.push(phObj);
-                                this.phonemes.push(phObj);
+                    // Extract acoustic review gaps (>= 1.0s)
+                    const gaps = [];
+                    for (let i = 0; i < wordsList.length - 1; i++) {
+                        const currEnd = wordsList[i].end !== null ? segStart + wordsList[i].end : null;
+                        const nextStart = wordsList[i + 1].start !== null ? segStart + wordsList[i + 1].start : null;
+                        if (currEnd !== null && nextStart !== null && (nextStart - currEnd) >= 1.0) {
+                            gaps.push({
+                                start: currEnd,
+                                end: nextStart,
+                                duration: (nextStart - currEnd).toFixed(1)
                             });
                         }
-                        this.words.push(wordObj);
+                    }
+                    seg._reviewGaps = gaps;
+
+                    wordsList.forEach((w, wIdx) => {
+                        const loc = w.location || `loc_${wIdx}`;
+                        const absStart = w.start !== null ? segStart + w.start : null;
+                        const absEnd = w.end !== null ? segStart + w.end : null;
+                        let entry = wordMap.get(loc);
+                        if (!entry) {
+                            entry = { id: `w_${sIdx}_${loc.replace(/[:.]/g, '_')}`, text: w.word, segmentIndex: sIdx, passes: [], phonemes: [] };
+                            wordMap.set(loc, entry);
+                            this.canonicalWords.push(entry);
+                        }
+                        entry.passes.push({ start: absStart, end: absEnd });
+                        this.timeOccurrences.push({ wordId: entry.id, segmentIndex: sIdx, start: absStart, end: absEnd });
+                        (w.phonemes || []).forEach((p, pIdx) => {
+                            const phId = `p_${sIdx}_${loc.replace(/[:.]/g, '_')}_${pIdx}`;
+                            if (entry.passes.length === 1) entry.phonemes.push({ id: phId, phoneme: p.phoneme, start: p.start + segStart });
+                            this.phonemeOccurrences.push({ id: phId, start: p.start + segStart, end: p.end + segStart, wordId: entry.id, segmentIndex: sIdx });
+                        });
                     });
                 });
-
                 this.render();
             }
 
             render() {
-                this.emptyDropzone.classList.add('hidden');
-                this.ayahBlocksList.innerHTML = '';
+                document.getElementById('emptyDropzone').classList.add('hidden');
+                this.ayahBlocksList.innerHTML = this.segments.map((seg, sIdx) => {
+                    const repBadge = seg.has_repeated_words ? `<span class="badge-flag badge-repetition"><i class="fas fa-redo"></i> تكرار مرتل</span>` : '';
+                    const missBadge = seg.has_missing_words ? `<span class="badge-flag badge-missing"><i class="fas fa-exclamation-triangle"></i> كلمات ناقصة</span>` : '';
+                    const gapBadges = (seg._reviewGaps || []).map(g => `<span class="review-gap-pill" onclick="window.app.seek(${g.start})" title="انقر للاستماع للفاصل الصوتي"><i class="fas fa-headphones"></i> مراجعة فاصل (${g.duration}s)</span>`).join('');
+                    const segWords = this.canonicalWords.filter(w => w.segmentIndex === sIdx);
 
-                this.segments.forEach((seg, sIdx) => {
-                    const card = document.createElement('div');
-                    card.className = 'ayah-card';
-                    card.id = `ayah_card_${sIdx}`;
-
-                    // Header
-                    const header = document.createElement('div');
-                    header.className = 'ayah-header';
-                    header.innerHTML = `
-                        <span class="ayah-badge">${seg.ref_from || 'آية'} ${seg.ref_to && seg.ref_to !== seg.ref_from ? '→ ' + seg.ref_to : ''}</span>
-                        <span class="ayah-time">${this.formatTime(seg.time_from)} - ${this.formatTime(seg.time_to)}</span>
+                    return `
+                    <div class="ayah-card" id="ayah_card_${sIdx}">
+                        <div class="ayah-header">
+                            <div class="ayah-badges-group">
+                                <span class="ayah-badge">${seg.ref_from || 'آية'} ${seg.ref_to && seg.ref_to !== seg.ref_from ? '→ ' + seg.ref_to : ''}</span>
+                                ${repBadge}
+                                ${missBadge}
+                                ${gapBadges}
+                            </div>
+                            <span class="ayah-time">${this.formatTime(seg.time_from)} - ${this.formatTime(seg.time_to)}</span>
+                        </div>
+                        <div class="ayah-words-flow">
+                            ${segWords.map(w => `
+                                <div class="quran-word" id="${w.id}" onclick="window.app.seek(${w.passes[0]?.start ?? 0})">
+                                    <span class="word-text">${w.text}</span>
+                                    <div class="phoneme-row">${w.phonemes.map(p => `<span class="phoneme-pill" id="${p.id}" onclick="event.stopPropagation(); window.app.seek(${p.start})">${p.phoneme}</span>`).join('')}</div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
                     `;
-                    card.appendChild(header);
-
-                    // Words Flow
-                    const flow = document.createElement('div');
-                    flow.className = 'ayah-words-flow';
-
-                    const segWords = this.words.filter(w => w.segmentIndex === sIdx);
-                    segWords.forEach(w => {
-                        const wEl = document.createElement('div');
-                        wEl.className = 'quran-word';
-                        wEl.id = w.id;
-
-                        const textSpan = document.createElement('span');
-                        textSpan.className = 'word-text';
-                        textSpan.textContent = w.text;
-                        wEl.appendChild(textSpan);
-
-                        if (w.phonemes && w.phonemes.length > 0) {
-                            const pRow = document.createElement('div');
-                            pRow.className = 'phoneme-row';
-
-                            w.phonemes.forEach(p => {
-                                const pSpan = document.createElement('span');
-                                pSpan.className = 'phoneme-pill';
-                                pSpan.id = p.id;
-                                pSpan.textContent = p.phoneme;
-
-                                pSpan.addEventListener('click', (e) => {
-                                    e.stopPropagation();
-                                    if (p.start !== null) this.seek(p.start);
-                                });
-
-                                pRow.appendChild(pSpan);
-                            });
-                            wEl.appendChild(pRow);
-                        }
-
-                        wEl.addEventListener('click', () => {
-                            if (w.start !== null) this.seek(w.start);
-                        });
-
-                        flow.appendChild(wEl);
-                    });
-
-                    card.appendChild(flow);
-                    this.ayahBlocksList.appendChild(card);
-                });
+                }).join('');
             }
 
-            togglePlay() {
-                if (!this.audio.src) return;
-                if (this.audio.paused) this.audio.play();
-                else this.audio.pause();
-            }
-
-            seek(time) {
-                this.audio.currentTime = time;
-                if (this.audio.paused) this.audio.play();
-            }
-
-            startSync() {
-                const step = () => {
-                    this.updateSync();
-                    if (!this.audio.paused) {
-                        this.animFrame = requestAnimationFrame(step);
-                    }
-                };
-                this.animFrame = requestAnimationFrame(step);
-            }
-
-            stopSync() {
-                if (this.animFrame) cancelAnimationFrame(this.animFrame);
-            }
-
+            togglePlay() { this.audio.paused ? this.audio.play() : this.audio.pause(); }
+            seek(t) { this.audio.currentTime = t; if (this.audio.paused) this.audio.play(); }
+            startSync() { const step = () => { this.updateSync(); if (!this.audio.paused) this.animFrame = requestAnimationFrame(step); }; this.animFrame = requestAnimationFrame(step); }
+            stopSync() { cancelAnimationFrame(this.animFrame); }
             updateSync() {
                 const t = this.audio.currentTime;
-                const dur = this.audio.duration || 1;
-
-                // Update Timeline
                 this.timeElapsed.textContent = this.formatTime(t);
-                this.scrubFill.style.width = `${Math.min(100, (t / dur) * 100)}%`;
+                this.scrubFill.style.width = `${Math.min(100, (t / (this.audio.duration || 1)) * 100)}%`;
+                // 1. Sync Active Words
+                const activeWords = new Set();
+                let activeSegIdx = null;
+                this.timeOccurrences.forEach(o => {
+                    if (o.start !== null && o.end !== null && t >= o.start && t < o.end) {
+                        activeWords.add(o.wordId);
+                        activeSegIdx = o.segmentIndex;
+                    }
+                });
+                document.querySelectorAll('.quran-word').forEach(el => el.classList.toggle('word-active', activeWords.has(el.id)));
 
-                let activeWord = null;
+                // 2. Sync Active Phonemes (Only activates if its parent word is active)
                 let activePhoneme = null;
-                let activeSegIndex = null;
-
-                // Sync Phonemes (Strict single active sound)
-                for (let i = 0; i < this.phonemes.length; i++) {
-                    const p = this.phonemes[i];
-                    const el = document.getElementById(p.id);
-                    if (!el) continue;
-
-                    const isActive = (i === this.phonemes.length - 1)
-                        ? (t >= p.start && t <= p.end)
-                        : (t >= p.start && t < p.end);
-
-                    if (isActive) {
-                        el.classList.add('phoneme-active');
-                        activePhoneme = p;
-                    } else {
-                        el.classList.remove('phoneme-active');
-                    }
-                }
-
-                // Sync Words (Strict single active word)
-                for (let i = 0; i < this.words.length; i++) {
-                    const w = this.words[i];
-                    const el = document.getElementById(w.id);
-                    if (!el) continue;
-
-                    const isActive = (w.start !== null && w.end !== null) &&
-                        ((i === this.words.length - 1) ? (t >= w.start && t <= w.end) : (t >= w.start && t < w.end));
-
-                    if (isActive) {
-                        el.classList.add('word-active');
-                        activeWord = w;
-                        activeSegIndex = w.segmentIndex;
-                    } else {
-                        el.classList.remove('word-active');
-                    }
-                }
-
-                // Active Ayah Block Highlighting & Smooth Auto Scroll
-                if (activeSegIndex !== null) {
-                    document.querySelectorAll('.ayah-card').forEach((card, idx) => {
-                        if (idx === activeSegIndex) {
-                            if (!card.classList.contains('active-ayah')) {
-                                card.classList.add('active-ayah');
-                                card.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                            }
-                        } else {
-                            card.classList.remove('active-ayah');
+                const activeIds = new Set();
+                this.phonemeOccurrences.forEach(p => {
+                    if (p.start !== null && p.end !== null && t >= p.start && t < p.end) {
+                        if (activeWords.has(p.wordId)) {
+                            activeIds.add(p.id);
+                            activePhoneme = p;
                         }
-                    });
-
-                    const seg = this.segments[activeSegIndex];
-                    this.labelAyahRef.textContent = `${seg.ref_from || 'آية'} ${seg.ref_to && seg.ref_to !== seg.ref_from ? '→ ' + seg.ref_to : ''}`;
-
-                    if (activePhoneme) {
-                        this.badgeSound.classList.remove('hidden');
-                        this.badgeSound.textContent = activePhoneme.phoneme;
-                    } else {
-                        this.badgeSound.classList.add('hidden');
                     }
+                });
+                document.querySelectorAll('.phoneme-pill').forEach(el => el.classList.toggle('phoneme-active', activeIds.has(el.id)));
+
+                if (activeSegIdx !== null) {
+                    document.querySelectorAll('.ayah-card').forEach((c, i) => {
+                        if (i === activeSegIdx && !c.classList.contains('active-ayah')) c.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        c.classList.toggle('active-ayah', i === activeSegIdx);
+                    });
+                    this.badgeSound.classList.toggle('hidden', !activePhoneme);
+                    if (activePhoneme) this.badgeSound.textContent = activePhoneme.phoneme;
                 }
             }
-
-            formatTime(sec) {
-                if (sec === null || isNaN(sec)) return '00:00';
-                const m = Math.floor(sec / 60);
-                const s = Math.floor(sec % 60);
-                return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-            }
+            formatTime(s) { const m = Math.floor(s / 60); const sec = Math.floor(s % 60); return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`; }
         }
-
-        window.addEventListener('DOMContentLoaded', () => {
-            window.app = new QuranViewer();
-        });
+        window.addEventListener('DOMContentLoaded', () => window.app = new QuranViewer());
     </script>
 </body>
 </html>

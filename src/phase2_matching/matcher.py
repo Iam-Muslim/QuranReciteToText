@@ -105,21 +105,199 @@ def _slice_logprobs(logprobs, chunk_start_s: float, start_s: float, end_s: float
     return logprobs[start_frame:end_frame], chunk_start_s + start_frame / 25.0
 
 
-def _prepare_multi_chapter_units(
-    audio, sample_rate, regions, emissions, stage_metrics, resources, params
-):
-    """Splits cross-chapter ASR chunks and labels every chunk with its chapter."""
+def _find_silence_dip(audio_slice: np.ndarray, sample_rate: int = 16000) -> int:
+    """Finds the sample index of the local acoustic energy minimum (silence dip) within an audio slice."""
+    win = int(0.1 * sample_rate)
+    if len(audio_slice) < 3 * win:
+        return len(audio_slice) // 2
+    energies = [
+        float(np.sum(np.square(audio_slice[i : i + win])))
+        for i in range(win, len(audio_slice) - 2 * win, win // 2)
+    ]
+    if not energies:
+        return len(audio_slice) // 2
+    min_idx = int(np.argmin(energies))
+    return win + min_idx * (win // 2) + (win // 2)
+
+
+def _refine_repetitions_and_gaps(
+    audio, sample_rate, emissions, stage_metrics, resources, params
+) -> list[tuple[int, int]]:
+    """Refines token repetitions and re-transcribes non-silent acoustic gaps across all chunks."""
+    from config import (
+        ENABLE_GAP_RETRANSCRIPTION,
+        GAP_RETRANSCRIPTION_MIN_DURATION_S,
+        GAP_RETRANSCRIPTION_ENERGY_THRESHOLD_DB,
+        GAP_RETRANSCRIPTION_SPLIT_FALLBACK,
+    )
+
     anchors = [
         find_anchor_by_voting([tokens], resources.ngram_index, params.anchor)
         for tokens in emissions.tokens
     ]
+    asr_words_list = stage_metrics.get("asr_words", [])
+    if not asr_words_list:
+        return anchors
+
+    audio_pcm = None
+    if isinstance(audio, str):
+        import librosa
+        audio_pcm, _ = librosa.load(audio, sr=sample_rate, mono=True)
+    elif audio is not None:
+        audio_pcm = np.asarray(audio, dtype=np.float32)
+
+    refinement_candidates = []
+    for chunk_index, ((surah, _ayah), entry) in enumerate(zip(anchors, asr_words_list)):
+        if surah <= 0:
+            continue
+        words = entry[0] if isinstance(entry, tuple) else entry
+        covered_ranges = []
+        for current_index in range(1, len(words or [])):
+            gap = words[current_index]["start"] - words[current_index - 1]["end"]
+            # 1. Repetition by matching phoneme tokens
+            if gap >= 0.5:
+                current_text = words[current_index].get("phoneme", words[current_index].get("word", "")).strip()
+                previous_indices = [
+                    previous_index
+                    for previous_index in range(max(0, current_index - 12), current_index - 1)
+                    if words[previous_index].get("phoneme", words[previous_index].get("word", "")).strip() == current_text
+                    and words[current_index]["start"] - words[previous_index]["start"] <= 15.0
+                ]
+                if previous_indices:
+                    start_index = previous_indices[-1]
+                    refinement_candidates.append((
+                        chunk_index, start_index, current_index, surah, "repetition"
+                    ))
+                    covered_ranges.append((start_index, current_index))
+
+            # 2. Acoustic Speech Gap Retranscription
+            if ENABLE_GAP_RETRANSCRIPTION and gap >= GAP_RETRANSCRIPTION_MIN_DURATION_S and audio_pcm is not None:
+                gap_start_s = words[current_index - 1]["end"]
+                gap_end_s = words[current_index]["start"]
+                s_sample = int(gap_start_s * sample_rate)
+                e_sample = int(gap_end_s * sample_rate)
+                gap_slice = audio_pcm[s_sample:e_sample]
+                if len(gap_slice) >= int(0.2 * sample_rate):
+                    rms = float(np.sqrt(np.mean(np.square(gap_slice))))
+                    db = 20.0 * np.log10(max(rms, 1e-8))
+                    if db > GAP_RETRANSCRIPTION_ENERGY_THRESHOLD_DB:
+                        refinement_candidates.append((
+                            chunk_index, current_index - 1, current_index, surah, "acoustic_gap"
+                        ))
+
+    refinements: dict[int, list[tuple[int, int, list[dict]]]] = defaultdict(list)
+    if refinement_candidates and audio_pcm is not None:
+        from src.phase1_transcribe.zipformer import ZipformerONNX
+        model = ZipformerONNX.get_instance(device="cpu")
+
+        for chunk_index, start_index, end_index, surah, kind in refinement_candidates:
+            if any(
+                start_index < accepted_end and accepted_start < end_index
+                for accepted_start, accepted_end, _words in refinements[chunk_index]
+            ):
+                continue
+            entry = asr_words_list[chunk_index]
+            words = entry[0] if isinstance(entry, tuple) else entry
+            source_words = words[start_index:end_index]
+
+            if kind == "acoustic_gap":
+                slice_start = max(0.0, words[start_index]["end"] + 0.02)
+                slice_end = min(len(audio_pcm) / sample_rate, words[end_index]["start"] - 0.02)
+            else: # repetition
+                slice_start = max(0.0, source_words[0]["start"] - 0.2)
+                slice_end = min(len(audio_pcm) / sample_rate, words[end_index]["start"] - 0.05)
+
+            if slice_end - slice_start < 0.2:
+                continue
+
+            gap_audio = audio_pcm[int(slice_start * sample_rate) : int(slice_end * sample_rate)]
+            _text, replacement_words, _logprobs = model.transcribe(
+                gap_audio,
+                orig_sr=sample_rate,
+                safe_lufs=True,
+            )
+
+            # Split fallback if initial gap transcribe was empty and gap is long enough
+            if (
+                not replacement_words
+                and kind == "acoustic_gap"
+                and GAP_RETRANSCRIPTION_SPLIT_FALLBACK
+                and len(gap_audio) >= int(1.2 * sample_rate)
+            ):
+                dip_idx = _find_silence_dip(gap_audio, sample_rate)
+                sub1 = gap_audio[:dip_idx]
+                sub2 = gap_audio[dip_idx:]
+                _t1, w1, _ = model.transcribe(sub1, orig_sr=sample_rate, safe_lufs=True)
+                _t2, w2, _ = model.transcribe(sub2, orig_sr=sample_rate, safe_lufs=True)
+                combined = []
+                for w in (w1 or []):
+                    w["start"] += slice_start
+                    w["end"] += slice_start
+                    w["is_retranscribed"] = True
+                    combined.append(w)
+                for w in (w2 or []):
+                    w["start"] += slice_start + dip_idx / sample_rate
+                    w["end"] += slice_start + dip_idx / sample_rate
+                    w["is_retranscribed"] = True
+                    combined.append(w)
+                replacement_words = combined
+            else:
+                for word in replacement_words or []:
+                    word["start"] += slice_start
+                    word["end"] += slice_start
+                    if kind == "acoustic_gap":
+                        word["is_retranscribed"] = True
+
+            if not replacement_words:
+                continue
+
+            if kind == "acoustic_gap":
+                refinements[chunk_index].append(
+                    (end_index, end_index, replacement_words)
+                )
+            else:
+                replacement_tokens = _tokens_from_words(replacement_words or [])
+                minimum_words = len(source_words) + 1
+                if (
+                    len(replacement_words or []) < minimum_words
+                    or (
+                        normalize_arabic(replacement_words[0].get("word", replacement_words[0].get("phoneme", ""))).strip()
+                        != normalize_arabic(source_words[0].get("word", source_words[0].get("phoneme", ""))).strip()
+                    )
+                    or not _chapter_scores(
+                        replacement_tokens, resources.ngram_index
+                    ).get(surah, 0.0)
+                ):
+                    continue
+                refinements[chunk_index].append(
+                    (start_index, end_index, replacement_words)
+                )
+
+    for chunk_index, replacements in refinements.items():
+        entry = asr_words_list[chunk_index]
+        words = entry[0] if isinstance(entry, tuple) else entry
+        for start_index, end_index, replacement_words in sorted(
+            replacements, key=lambda replacement: replacement[0], reverse=True
+        ):
+            words[start_index:end_index] = replacement_words
+        emissions.tokens[chunk_index] = _tokens_from_words(words)
+        anchors[chunk_index] = find_anchor_by_voting(
+            [emissions.tokens[chunk_index]], resources.ngram_index, params.anchor
+        )
+
+    return anchors
+
+
+def _prepare_multi_chapter_units(
+    audio, sample_rate, regions, emissions, stage_metrics, resources, params, anchors
+):
+    """Splits cross-chapter ASR chunks and labels every chunk with its chapter."""
     if len({surah for surah, _ayah in anchors if surah > 0}) <= 1:
         return None
 
     asr_words_list = stage_metrics.get("asr_words", [])
     logprobs_list = stage_metrics.get("logprobs", [])
     split_points: dict[int, list[tuple[int, int, int]]] = defaultdict(list)
-    recovered_units = []
 
     for index in range(len(anchors) - 1):
         current_surah = anchors[index][0]
@@ -166,241 +344,6 @@ def _prepare_multi_chapter_units(
             _score, _gap, chunk_index, word_index = max(candidates)
             split_points[chunk_index].append((word_index, current_surah, next_surah))
 
-    refinement_candidates = []
-    for chunk_index, ((surah, _ayah), entry) in enumerate(zip(anchors, asr_words_list)):
-        if surah <= 0:
-            continue
-        words = entry[0] if isinstance(entry, tuple) else entry
-        covered_ranges = []
-        for current_index in range(1, len(words or [])):
-            gap = words[current_index]["start"] - words[current_index - 1]["end"]
-            if gap < 0.5:
-                continue
-            current_text = words[current_index].get("phoneme", words[current_index].get("word", "")).strip()
-            previous_indices = [
-                previous_index
-                for previous_index in range(max(0, current_index - 12), current_index - 1)
-                if words[previous_index].get("phoneme", words[previous_index].get("word", "")).strip() == current_text
-                and words[current_index]["start"] - words[previous_index]["start"] <= 15.0
-            ]
-            if previous_indices:
-                start_index = previous_indices[-1]
-                refinement_candidates.append((
-                    chunk_index, start_index, current_index, surah, "repetition"
-                ))
-                covered_ranges.append((start_index, current_index))
-        for word_index, word in enumerate(words or []):
-            if word["end"] - word["start"] < 2.0 or any(
-                start <= word_index < end for start, end in covered_ranges
-            ):
-                continue
-            refinement_candidates.append((
-                chunk_index, word_index, word_index + 1, surah, "collapsed"
-            ))
-
-    audio_pcm = None
-    model = None
-    refinements: dict[int, list[tuple[int, int, list[dict]]]] = defaultdict(list)
-    if refinement_candidates:
-        import librosa
-        from src.phase1_transcribe.zipformer import ZipformerONNX
-
-        if isinstance(audio, str):
-            audio_pcm, _ = librosa.load(audio, sr=sample_rate, mono=True)
-        else:
-            audio_pcm = np.asarray(audio, dtype=np.float32)
-        model = ZipformerONNX.get_instance(device="cpu")
-
-        for chunk_index, start_index, end_index, surah, kind in refinement_candidates:
-            if any(
-                start_index < accepted_end and accepted_start < end_index
-                for accepted_start, accepted_end, _words in refinements[chunk_index]
-            ):
-                continue
-            entry = asr_words_list[chunk_index]
-            words = entry[0] if isinstance(entry, tuple) else entry
-            source_words = words[start_index:end_index]
-            slice_start = max(0.0, source_words[0]["start"] - 0.2)
-            slice_end = min(
-                len(audio_pcm) / sample_rate,
-                (
-                    words[end_index]["start"] - 0.05
-                    if kind == "repetition"
-                    else source_words[-1]["end"] + 0.2
-                ),
-            )
-            _text, replacement_words, _logprobs = model.transcribe(
-                audio_pcm[int(slice_start * sample_rate):int(slice_end * sample_rate)],
-                orig_sr=sample_rate,
-                safe_lufs=True,
-            )
-            for word in replacement_words or []:
-                word["start"] += slice_start
-                word["end"] += slice_start
-            replacement_tokens = _tokens_from_words(replacement_words or [])
-            minimum_words = len(source_words) + 1 if kind == "repetition" else 2
-            if (
-                len(replacement_words or []) < minimum_words
-                or (
-                    kind == "repetition"
-                    and normalize_arabic(replacement_words[0].get("word", replacement_words[0].get("phoneme", ""))).strip()
-                    != normalize_arabic(source_words[0].get("word", source_words[0].get("phoneme", ""))).strip()
-                )
-                or not _chapter_scores(
-                    replacement_tokens, resources.ngram_index
-                ).get(surah, 0.0)
-            ):
-                continue
-            refinements[chunk_index].append(
-                (start_index, end_index, replacement_words)
-            )
-
-    for chunk_index, replacements in refinements.items():
-        entry = asr_words_list[chunk_index]
-        words = entry[0] if isinstance(entry, tuple) else entry
-        points = split_points.get(chunk_index, [])
-        split_points[chunk_index] = [
-            (
-                point + sum(
-                    len(replacement_words) - (end_index - start_index)
-                    for start_index, end_index, replacement_words in replacements
-                    if end_index <= point
-                ),
-                before_surah,
-                after_surah,
-            )
-            for point, before_surah, after_surah in points
-        ]
-        for start_index, end_index, replacement_words in sorted(
-            replacements, key=lambda replacement: replacement[0], reverse=True
-        ):
-            words[start_index:end_index] = replacement_words
-        emissions.tokens[chunk_index] = _tokens_from_words(words)
-        anchors[chunk_index] = find_anchor_by_voting(
-            [emissions.tokens[chunk_index]], resources.ngram_index, params.anchor
-        )
-
-    timestamped_words = []
-    for chunk_index, entry in enumerate(asr_words_list):
-        words = entry[0] if isinstance(entry, tuple) else entry
-        for word_index, word in enumerate(words or []):
-            timestamped_words.append((word["start"], chunk_index, word_index, word))
-    timestamped_words.sort()
-
-    recovery_gaps = []
-    for previous, current in zip(timestamped_words, timestamped_words[1:]):
-        gap_start = previous[3]["end"]
-        gap_end = current[3]["start"]
-        if gap_end - gap_start >= 2.5:
-            recovery_gaps.append((gap_start, gap_end, previous, current))
-
-    if recovery_gaps:
-        if model is None:
-            import librosa
-            from src.phase1_transcribe.zipformer import ZipformerONNX
-
-            if isinstance(audio, str):
-                audio_pcm, _ = librosa.load(audio, sr=sample_rate, mono=True)
-            else:
-                audio_pcm = np.asarray(audio, dtype=np.float32)
-            model = ZipformerONNX.get_instance(device="cpu")
-
-        for gap_start, gap_end, previous, current in recovery_gaps:
-            slice_start = max(0.0, gap_start - 0.2)
-            candidate_surahs = {
-                anchors[previous[1]][0],
-                anchors[current[1]][0],
-            } - {0}
-            recovered_words = None
-            recovered_tokens = None
-            recovered_logprobs = None
-            matched_surahs = []
-            for slice_end in (
-                min(len(audio_pcm) / sample_rate, gap_end + 3.0),
-                gap_end,
-            ):
-                _text, candidate_words, candidate_logprobs = model.transcribe(
-                    audio_pcm[int(slice_start * sample_rate):int(slice_end * sample_rate)],
-                    orig_sr=sample_rate,
-                    safe_lufs=True,
-                )
-                for word in candidate_words or []:
-                    word["start"] += slice_start
-                    word["end"] += slice_start
-                candidate_words = [
-                    word
-                    for word in (candidate_words or [])
-                    if word["start"] >= gap_start and word["end"] <= gap_end
-                ]
-                candidate_tokens = _tokens_from_words(candidate_words)
-                matched_surahs = [
-                    surah
-                    for surah in candidate_surahs
-                    if _chapter_scores(candidate_tokens, resources.ngram_index).get(surah, 0.0)
-                    or (
-                        len("".join(candidate_tokens).strip()) >= 6
-                        and _chapter_similarity(
-                            candidate_tokens, resources.chapter_refs[surah]
-                        ) >= 0.5
-                    )
-                ]
-                if matched_surahs:
-                    recovered_words = candidate_words
-                    recovered_tokens = candidate_tokens
-                    recovered_logprobs = candidate_logprobs
-                    break
-            if not matched_surahs:
-                continue
-            recovered_surah = max(
-                matched_surahs,
-                key=lambda surah: _chapter_scores(
-                    recovered_tokens, resources.ngram_index
-                ).get(surah, 0.0),
-            )
-            recovered_start = recovered_words[0]["start"]
-            recovered_end = recovered_words[-1]["end"]
-            sliced_logprobs, sliced_start = _slice_logprobs(
-                recovered_logprobs,
-                slice_start,
-                recovered_start,
-                recovered_end,
-            )
-            recovered_units.append((
-                Region(start_s=recovered_start, end_s=recovered_end),
-                recovered_tokens,
-                (recovered_surah, 1),
-                (recovered_words, sliced_start),
-                (sliced_logprobs, sliced_start),
-            ))
-            if previous[1] == current[1]:
-                split_points[previous[1]].append(
-                    (current[2], recovered_surah, recovered_surah)
-                )
-                source_entry = asr_words_list[previous[1]]
-                source_words = source_entry[0] if isinstance(source_entry, tuple) else source_entry
-                chapter_ref = resources.chapter_refs[recovered_surah]
-                for word_index in range(current[2] + 1, len(source_words)):
-                    previous_index = _chapter_word_index(
-                        source_words[word_index - 1]["word"], chapter_ref
-                    )
-                    current_index = _chapter_word_index(
-                        source_words[word_index]["word"], chapter_ref
-                    )
-                    gap = (
-                        source_words[word_index]["start"]
-                        - source_words[word_index - 1]["end"]
-                    )
-                    if (
-                        previous_index is not None
-                        and current_index is not None
-                        and previous_index - current_index >= 2
-                        and gap >= 0.5
-                    ):
-                        split_points[previous[1]].append(
-                            (word_index, recovered_surah, recovered_surah)
-                        )
-                        break
-
     unit_regions = []
     unit_tokens = []
     unit_labels = []
@@ -417,10 +360,8 @@ def _prepare_multi_chapter_units(
             unit_regions.append(region)
             unit_tokens.append(tokens)
             unit_labels.append(anchor)
-            if chunk_index < len(asr_words_list):
-                unit_asr_words.append(asr_words_list[chunk_index])
-            if chunk_index < len(logprobs_list):
-                unit_logprobs.append(logprobs_list[chunk_index])
+            unit_asr_words.append(asr_words_list[chunk_index] if chunk_index < len(asr_words_list) else None)
+            unit_logprobs.append(logprobs_list[chunk_index] if chunk_index < len(logprobs_list) else None)
             continue
 
         asr_entry = asr_words_list[chunk_index]
@@ -459,7 +400,6 @@ def _prepare_multi_chapter_units(
         unit_asr_words,
         unit_logprobs,
     ))
-    units.extend(recovered_units)
     units.sort(key=lambda unit: unit[0].start_s)
     (
         unit_regions,
@@ -471,9 +411,11 @@ def _prepare_multi_chapter_units(
         list, zip(*units)
     )
 
-    stage_metrics["asr_words"] = unit_asr_words
-    stage_metrics["logprobs"] = unit_logprobs
+    stage_metrics["asr_words"] = [w for w in unit_asr_words if w is not None]
+    stage_metrics["logprobs"] = [lp for lp in unit_logprobs if lp is not None]
     stage_metrics["multi_chapter"] = True
+
+    return Regions(regions=unit_regions), Emissions(tokens=unit_tokens), stage_metrics, unit_labels
 
 
 
@@ -515,8 +457,15 @@ def _run_post_asr_pipeline(
             max_transition_edit_distance=params.specials.max_transition_edit_distance,
         )
 
+        # 1. Unconditionally refine repetitions and re-transcribe speech gaps across all chunks
+        anchors = _refine_repetitions_and_gaps(
+            audio, sample_rate, emissions, stage_metrics, resources, params
+        )
+        transcribed_tokens = emissions.tokens
+
+        # 2. Check if recording spans multiple Surahs
         prepared = _prepare_multi_chapter_units(
-            audio, sample_rate, regions, emissions, stage_metrics, resources, params
+            audio, sample_rate, regions, emissions, stage_metrics, resources, params, anchors
         )
         if prepared is None:
             quran_tokens = transcribed_tokens[first_quran_idx:] if first_quran_idx < len(transcribed_tokens) else transcribed_tokens

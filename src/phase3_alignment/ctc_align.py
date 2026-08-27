@@ -317,7 +317,9 @@ def _frames_to_word_times(
                 p_conf = float(np.clip(np.exp(p_logp), 0.05, 0.99))
             else:
                 p_conf = 0.50
-            token_confs.append(p_conf)
+            # Ensure strict non-overlapping sequential phonemes
+            if len(phonemes_list) > 0 and p_rel_ws < phonemes_list[-1]["end"]:
+                phonemes_list[-1]["end"] = round(p_rel_ws, 4)
 
             phonemes_list.append({
                 "phoneme": tok_str,
@@ -550,8 +552,11 @@ def run_ctc_alignment(
             ph = wt.get("_phonemes")
             if ph:
                 entry["phonemes"] = ph
+            mapped_asr = asr_word_mapping.get(j)
+            if mapped_asr and mapped_asr.get("is_retranscribed"):
+                entry["is_retranscribed"] = True
             new_words.append(entry)
-            mapped_asr_words.append(asr_word_mapping.get(j))
+            mapped_asr_words.append(mapped_asr)
 
 
         seg.words = new_words
