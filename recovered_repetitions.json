@@ -1,0 +1,236 @@
+{
+  "total_recovered_gaps": 6,
+  "recovered_repetition_events": [
+    {
+      "segment": 1,
+      "surah": 14,
+      "ayah": 1,
+      "gap_absolute_start": 26.82,
+      "gap_absolute_end": 28.08,
+      "gap_duration": 1.26,
+      "raw_phonemes_in_gap": [
+        "ءِ",
+        "ذ",
+        "نِ",
+        "رَ",
+        "ببِ"
+      ],
+      "recovered_words": [
+        {
+          "word": "بِإِذْنِ",
+          "location": "14:1:11",
+          "absolute_start": 26.82,
+          "absolute_end": 27.52
+        },
+        {
+          "word": "رَبِّهِمْ",
+          "location": "14:1:12",
+          "absolute_start": 27.52,
+          "absolute_end": 28.2
+        }
+      ]
+    },
+    {
+      "segment": 6,
+      "surah": 14,
+      "ayah": 6,
+      "gap_absolute_start": 120.7,
+      "gap_absolute_end": 123.76,
+      "gap_duration": 3.06,
+      "raw_phonemes_in_gap": [
+        "كُ",
+        "رُ",
+        "ۥۥ",
+        "نِ",
+        "ع",
+        "مَ",
+        "تَ",
+        "للَ",
+        "اا",
+        "هِ",
+        "عَ",
+        "لَ",
+        "ي",
+        "كُ"
+      ],
+      "recovered_words": [
+        {
+          "word": "ٱذْكُرُوا۟",
+          "location": "14:6:5",
+          "absolute_start": 120.7,
+          "absolute_end": 121.56
+        },
+        {
+          "word": "نِعْمَةَ",
+          "location": "14:6:6",
+          "absolute_start": 121.56,
+          "absolute_end": 122.44
+        },
+        {
+          "word": "ٱللَّهِ",
+          "location": "14:6:7",
+          "absolute_start": 122.44,
+          "absolute_end": 123.16
+        },
+        {
+          "word": "عَلَيْكُمْ",
+          "location": "14:6:8",
+          "absolute_start": 123.16,
+          "absolute_end": 123.88
+        }
+      ]
+    },
+    {
+      "segment": 21,
+      "surah": 14,
+      "ayah": 21,
+      "gap_absolute_start": 509.86,
+      "gap_absolute_end": 513.56,
+      "gap_duration": 3.7,
+      "raw_phonemes_in_gap": [
+        "هَ",
+        "ل",
+        "ءَ",
+        "ںںں",
+        "تُ",
+        "ممممُ",
+        "غ",
+        "نُ",
+        "ۥۥ",
+        "نَ",
+        "عَ"
+      ],
+      "recovered_words": [
+        {
+          "word": "فَهَلْ",
+          "location": "14:21:12",
+          "absolute_start": 509.86,
+          "absolute_end": 510.38
+        },
+        {
+          "word": "أَنتُم",
+          "location": "14:21:13",
+          "absolute_start": 510.38,
+          "absolute_end": 511.54
+        },
+        {
+          "word": "مُّغْنُونَ",
+          "location": "14:21:14",
+          "absolute_start": 511.54,
+          "absolute_end": 513.68
+        }
+      ]
+    },
+    {
+      "segment": 26,
+      "surah": 14,
+      "ayah": 26,
+      "gap_absolute_start": 671.46,
+      "gap_absolute_end": 674.28,
+      "gap_duration": 2.82,
+      "raw_phonemes_in_gap": [
+        "تُ",
+        "ببَ",
+        "ت",
+        "مِ",
+        "ںںں",
+        "فَ",
+        "و",
+        "قِ",
+        "ل",
+        "ءَ",
+        "ر"
+      ],
+      "recovered_words": [
+        {
+          "word": "مِن",
+          "location": "14:26:7",
+          "absolute_start": 671.46,
+          "absolute_end": 673.2
+        },
+        {
+          "word": "فَوْقِ",
+          "location": "14:26:8",
+          "absolute_start": 673.2,
+          "absolute_end": 673.8
+        },
+        {
+          "word": "ٱلْأَرْضِ",
+          "location": "14:26:9",
+          "absolute_start": 673.8,
+          "absolute_end": 674.4
+        }
+      ]
+    },
+    {
+      "segment": 32,
+      "surah": 14,
+      "ayah": 32,
+      "gap_absolute_start": 776.46,
+      "gap_absolute_end": 778.92,
+      "gap_duration": 2.46,
+      "raw_phonemes_in_gap": [
+        "مِ",
+        "نَ",
+        "سسَ",
+        "مَ"
+      ],
+      "recovered_words": [
+        {
+          "word": "مِنَ",
+          "location": "14:32:7",
+          "absolute_start": 776.46,
+          "absolute_end": 777.28
+        },
+        {
+          "word": "ٱلسَّمَآءِ",
+          "location": "14:32:8",
+          "absolute_start": 777.28,
+          "absolute_end": 779.04
+        }
+      ]
+    },
+    {
+      "segment": 43,
+      "surah": 14,
+      "ayah": 43,
+      "gap_absolute_start": 997.7,
+      "gap_absolute_end": 1000.76,
+      "gap_duration": 3.06,
+      "raw_phonemes_in_gap": [
+        "يَ",
+        "ر",
+        "تَ",
+        "ددُ",
+        "ءِ",
+        "لَ",
+        "ي",
+        "هِ",
+        "م",
+        "طَ",
+        "ر",
+        "فُ"
+      ],
+      "recovered_words": [
+        {
+          "word": "يَرْتَدُّ",
+          "location": "14:43:5",
+          "absolute_start": 997.7,
+          "absolute_end": 999.1
+        },
+        {
+          "word": "إِلَيْهِمْ",
+          "location": "14:43:6",
+          "absolute_start": 999.1,
+          "absolute_end": 1000.16
+        },
+        {
+          "word": "طَرْفُهُمْ",
+          "location": "14:43:7",
+          "absolute_start": 1000.16,
+          "absolute_end": 1000.88
+        }
+      ]
+    }
+  ]
+}

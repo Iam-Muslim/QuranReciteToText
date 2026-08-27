@@ -136,7 +136,17 @@ def run_asr_cpu(
                 "chunk": len(raw_transcriptions) + 1,
                 "chunk_start_time_seconds": round(u_start, 3),
                 "chunk_end_time_seconds": round(u_end, 3),
-                "raw_text": "".join(sub_toks)
+                "raw_text": "".join(sub_toks),
+                "phoneme_count": len(sub_pts),
+                "phonemes": [
+                    {
+                        "phoneme": p.get("phoneme", ""),
+                        "start": round(p.get("start", 0.0), 3),
+                        "end": round(p.get("end", 0.0), 3),
+                        "confidence": round(p.get("margin_peak", 1.0), 2)
+                    }
+                    for p in sub_pts
+                ]
             })
 
             if logprobs is not None and len(logprobs) > 0:
@@ -155,15 +165,54 @@ def run_asr_cpu(
             "chunk": 1,
             "chunk_start_time_seconds": 0.0,
             "chunk_end_time_seconds": audio_dur,
-            "raw_text": "".join(chunk_phonemes)
+            "raw_text": "".join(chunk_phonemes),
+            "phoneme_count": len(phoneme_timestamps) if phoneme_timestamps else 0,
+            "phonemes": [
+                {
+                    "phoneme": p.get("phoneme", ""),
+                    "start": round(p.get("start", 0.0), 3),
+                    "end": round(p.get("end", 0.0), 3),
+                    "confidence": round(p.get("margin_peak", 1.0), 2)
+                }
+                for p in (phoneme_timestamps or [])
+            ]
         }]
 
     regions = Regions(regions=regions_list, audio_duration_s=audio_dur)
     emissions = Emissions(tokens=tokens)
 
-    # Write raw transcription for audit
+    # Compute inter-chunk gaps for diagnostic inspection
+    gaps_between_chunks = []
+    for c_i in range(len(raw_transcriptions) - 1):
+        c_prev_end = raw_transcriptions[c_i]["chunk_end_time_seconds"]
+        c_next_start = raw_transcriptions[c_i + 1]["chunk_start_time_seconds"]
+        gaps_between_chunks.append({
+            "gap_index": c_i + 1,
+            "after_chunk": c_i + 1,
+            "before_chunk": c_i + 2,
+            "gap_start_seconds": c_prev_end,
+            "gap_end_seconds": c_next_start,
+            "gap_duration_seconds": round(c_next_start - c_prev_end, 3)
+        })
+
+    # Write enriched raw transcription for audit
     with open("raw_transcription.json", "w", encoding="utf-8") as f:
-        json.dump({"absolute_raw_transcriptions": raw_transcriptions}, f, ensure_ascii=False, indent=2)
+        json.dump({
+            "total_audio_duration_seconds": round(audio_dur, 3),
+            "total_chunks": len(raw_transcriptions),
+            "total_phonemes": len(phoneme_timestamps) if phoneme_timestamps else 0,
+            "gaps_between_chunks": gaps_between_chunks,
+            "absolute_raw_transcriptions": raw_transcriptions,
+            "all_raw_phonemes": [
+                {
+                    "phoneme": p.get("phoneme", ""),
+                    "start": round(p.get("start", 0.0), 3),
+                    "end": round(p.get("end", 0.0), 3),
+                    "margin_peak": round(p.get("margin_peak", 1.0), 2)
+                }
+                for p in (phoneme_timestamps or [])
+            ]
+        }, f, ensure_ascii=False, indent=2)
 
     stage_metrics = {
         "segmentation": {},
