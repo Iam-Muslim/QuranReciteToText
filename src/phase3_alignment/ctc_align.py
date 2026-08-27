@@ -53,33 +53,6 @@ def _find_unmatched_affixes(transcribed_text: str, matched_text: str) -> tuple[l
     return prefix, suffix
 
 
-def _map_asr_words_to_reference(
-    asr_words: list[dict], ref_words: list[str]
-) -> tuple[dict[int, dict], set[int]]:
-    """Maps ASR words to canonical indices and returns unambiguously missing indices."""
-    if not asr_words or not ref_words:
-        return {}, set()
-
-    from src.phase2_matching.normalize import normalize_arabic
-    import difflib
-
-    asr_norm = [normalize_arabic(word.get("word", word.get("phoneme", ""))) for word in asr_words]
-    ref_norm = [normalize_arabic(word) for word in ref_words]
-    mapping: dict[int, dict] = {}
-    missing: set[int] = set()
-
-    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(
-        None, asr_norm, ref_norm, autojunk=False
-    ).get_opcodes():
-        if tag == "insert":
-            missing.update(range(j1, j2))
-        elif tag == "equal" or (tag == "replace" and i2 - i1 == j2 - j1):
-            for asr_index, ref_index in zip(range(i1, i2), range(j1, j2)):
-                mapping[ref_index] = asr_words[asr_index]
-
-    return mapping, missing
-
-
 def _load_vocab_and_mappings(tokens_path: str) -> tuple[list[str], dict[str, int]]:
     """Loads vocabulary and token-to-id mapping from tokens.txt."""
     id2token = {}
@@ -386,11 +359,6 @@ def run_ctc_alignment(
 
         prefix_words, suffix_words = _find_unmatched_affixes(transcribed_text, matched_text)
         ref_words = matched_text.split()
-        asr_words_entry = asr_words_list[idx] if idx < len(asr_words_list) else None
-        asr_words = asr_words_entry[0] if isinstance(asr_words_entry, tuple) else asr_words_entry
-        asr_word_mapping, missing_word_indices = _map_asr_words_to_reference(
-            asr_words or [], ref_words
-        )
 
         # ----------------------------------------------------------------
         # 1. Resolve exact locations for each ref_word
@@ -533,10 +501,7 @@ def run_ctc_alignment(
             word_times.append({"_start": None, "_end": None})
 
         new_words = []
-        mapped_asr_words = []
         for j, (word, wt) in enumerate(zip(ref_words, word_times)):
-            if j in missing_word_indices:
-                continue
             if word in ["۞", "۩"] or word.startswith("۞") or word.startswith("۩"):
                 continue
             entry: dict = {"word": word}
@@ -552,30 +517,7 @@ def run_ctc_alignment(
             ph = wt.get("_phonemes")
             if ph:
                 entry["phonemes"] = ph
-            mapped_asr = asr_word_mapping.get(j)
-            if mapped_asr and mapped_asr.get("is_retranscribed"):
-                entry["is_retranscribed"] = True
             new_words.append(entry)
-            mapped_asr_words.append(mapped_asr)
 
 
         seg.words = new_words
-        if stage_metrics.get("multi_chapter") and new_words:
-            first_asr_word = asr_word_mapping.get(0)
-            prefix_duration = (
-                first_asr_word["start"] - seg.start_time
-                if first_asr_word
-                else new_words[0].get("start")
-            )
-            if prefix_duration is not None and prefix_duration > 0:
-                seg.start_time = round(seg.start_time + prefix_duration, 3)
-                for word in new_words:
-                    if word.get("start") is not None:
-                        word["start"] = round(max(0.0, word["start"] - prefix_duration), 4)
-                    if word.get("end") is not None:
-                        word["end"] = round(max(0.0, word["end"] - prefix_duration), 4)
-                    for ph_item in word.get("phonemes", []):
-                        if ph_item.get("start") is not None:
-                            ph_item["start"] = round(max(0.0, ph_item["start"] - prefix_duration), 4)
-                        if ph_item.get("end") is not None:
-                            ph_item["end"] = round(max(0.0, ph_item["end"] - prefix_duration), 4)

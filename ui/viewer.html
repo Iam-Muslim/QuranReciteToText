@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>تلاوة القرآن العظيم</title>
+    <title>تلاوة القرآن العظيم - منصة التدقيق والمزامنة</title>
     
     <!-- Modern Luxury Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -13,26 +13,30 @@
 
     <style>
         :root {
-            --bg-base: #06080e;
-            --bg-surface: rgba(13, 17, 27, 0.85);
-            --bg-glass: rgba(10, 14, 23, 0.82);
+            --bg-base: #05070d;
+            --bg-surface: rgba(11, 15, 25, 0.88);
+            --bg-glass: rgba(8, 12, 20, 0.92);
             --bg-pill: rgba(255, 255, 255, 0.05);
             --bg-pill-hover: rgba(255, 255, 255, 0.1);
 
             --accent-gold: #d4af37;
             --accent-gold-light: #f7df8b;
-            --accent-gold-glow: rgba(212, 175, 55, 0.28);
+            --accent-gold-glow: rgba(212, 175, 55, 0.3);
             
             --accent-emerald: #10b981;
             --accent-emerald-light: #34d399;
             --accent-emerald-glow: rgba(16, 185, 129, 0.25);
+
+            --accent-sky: #38bdf8;
+            --accent-rose: #f87171;
+            --accent-amber: #fbbf24;
 
             --text-primary: #f8fafc;
             --text-secondary: #94a3b8;
             --text-muted: #526077;
 
             --border-subtle: rgba(255, 255, 255, 0.07);
-            --border-active: rgba(212, 175, 55, 0.35);
+            --border-active: rgba(212, 175, 55, 0.4);
 
             --font-quran: 'Amiri', 'Scheherazade New', serif;
             --font-ui: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -55,16 +59,16 @@
             display: flex;
             flex-direction: column;
             background-image: 
-                radial-gradient(circle at 50% 0%, rgba(212, 175, 55, 0.05) 0%, transparent 55%),
+                radial-gradient(circle at 50% 0%, rgba(212, 175, 55, 0.06) 0%, transparent 55%),
                 radial-gradient(circle at 100% 100%, rgba(16, 185, 129, 0.04) 0%, transparent 45%);
         }
 
-        /* --- Fullscreen Quran Canvas (No Top Toolbar) --- */
+        /* --- Fullscreen Quran Canvas --- */
         main {
             flex: 1;
             overflow-y: auto;
             overflow-x: hidden;
-            padding: 3rem 1.5rem 8.5rem 1.5rem;
+            padding: 1.5rem 1.5rem 8.5rem 1.5rem;
             display: flex;
             flex-direction: column;
             align-items: center;
@@ -75,16 +79,114 @@
             width: 6px;
         }
         main::-webkit-scrollbar-thumb {
-            background: rgba(255, 255, 255, 0.1);
+            background: rgba(255, 255, 255, 0.12);
             border-radius: 4px;
         }
 
         .quran-container {
             width: 100%;
-            max-width: 920px;
+            max-width: 960px;
             display: flex;
             flex-direction: column;
-            gap: 2.25rem;
+            gap: 1.5rem;
+        }
+
+        /* --- Advanced QA & Diagnostics Toolbar --- */
+        .qa-inspector-bar {
+            background: var(--bg-surface);
+            border: 1px solid var(--border-subtle);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border-radius: 16px;
+            padding: 0.85rem 1.25rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+        }
+
+        .qa-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+        }
+
+        .qa-filter-tabs {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            flex-wrap: wrap;
+        }
+
+        .qa-tab-btn {
+            background: transparent;
+            border: 1px solid transparent;
+            color: var(--text-muted);
+            padding: 0.35rem 0.85rem;
+            border-radius: 9999px;
+            font-size: 0.82rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+
+        .qa-tab-btn:hover {
+            color: var(--text-secondary);
+            background: var(--bg-pill);
+        }
+
+        .qa-tab-btn.active {
+            background: rgba(212, 175, 55, 0.15);
+            border-color: rgba(212, 175, 55, 0.35);
+            color: var(--accent-gold-light);
+            font-weight: 600;
+        }
+
+        .issue-nav-group {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .issue-nav-btn {
+            background: var(--bg-pill);
+            border: 1px solid var(--border-subtle);
+            color: var(--text-secondary);
+            border-radius: 8px;
+            padding: 0.25rem 0.65rem;
+            font-size: 0.78rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+        }
+
+        .issue-nav-btn:hover:not(:disabled) {
+            background: var(--bg-pill-hover);
+            color: var(--text-primary);
+            border-color: rgba(255, 255, 255, 0.2);
+        }
+
+        .issue-nav-btn:disabled {
+            opacity: 0.35;
+            cursor: not-allowed;
+        }
+
+        .issue-counter {
+            font-size: 0.78rem;
+            color: var(--accent-gold-light);
+            font-weight: 600;
+            font-variant-numeric: tabular-nums;
         }
 
         /* --- Empty Dropzone --- */
@@ -133,20 +235,26 @@
             line-height: 1.6;
         }
 
-        /* --- Ayah Card Block --- */
+        /* --- Ayah Card Block with Ultra-Smooth 120fps Rendering --- */
         .ayah-card {
+            content-visibility: auto;
+            contain-intrinsic-size: 1px 180px;
             background: var(--bg-surface);
             border: 1px solid var(--border-subtle);
             border-radius: 16px;
             padding: 1.75rem 2rem;
-            transition: all 0.25s ease;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
             position: relative;
         }
 
         .ayah-card.active-ayah {
             border-color: var(--border-active);
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(212, 175, 55, 0.2);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(212, 175, 55, 0.25);
             background: rgba(15, 21, 35, 0.95);
+        }
+
+        .ayah-card.has-issue-highlight {
+            border-right: 3px solid var(--accent-amber);
         }
 
         .ayah-badges-group {
@@ -167,13 +275,13 @@
         }
 
         .badge-repetition {
-            color: #38bdf8;
+            color: var(--accent-sky);
             background: rgba(56, 189, 248, 0.12);
             border: 1px solid rgba(56, 189, 248, 0.25);
         }
 
         .badge-missing {
-            color: #f87171;
+            color: var(--accent-rose);
             background: rgba(248, 113, 113, 0.12);
             border: 1px solid rgba(248, 113, 113, 0.25);
         }
@@ -181,7 +289,7 @@
         .review-gap-pill {
             font-size: 0.72rem;
             font-weight: 500;
-            color: #fbbf24;
+            color: var(--accent-amber);
             background: rgba(251, 191, 36, 0.1);
             border: 1px dashed rgba(251, 191, 36, 0.35);
             padding: 0.15rem 0.5rem;
@@ -242,7 +350,7 @@
             cursor: pointer;
             padding: 0.2rem 0.4rem;
             border-radius: 8px;
-            transition: all 0.15s ease;
+            transition: transform 0.12s ease;
             position: relative;
         }
 
@@ -250,7 +358,7 @@
             font-family: var(--font-quran);
             font-size: 1.95rem;
             color: var(--text-primary);
-            transition: color 0.15s ease, transform 0.15s ease;
+            transition: color 0.12s ease, text-shadow 0.12s ease;
             line-height: 1.2;
             margin-bottom: 4px;
         }
@@ -258,7 +366,11 @@
         .quran-word.word-active .word-text {
             color: var(--accent-gold-light);
             text-shadow: 0 0 16px var(--accent-gold-glow);
-            transform: scale(1.04);
+            transform: scale(1.03);
+        }
+
+        .quran-word.word-retranscribed .word-text {
+            color: #bae6fd;
         }
 
         .phoneme-row {
@@ -271,7 +383,7 @@
             padding: 1px 4px;
             border: 1px solid rgba(255, 255, 255, 0.04);
             opacity: 0.65;
-            transition: opacity 0.2s;
+            transition: opacity 0.15s;
         }
 
         .quran-word.word-active .phoneme-row {
@@ -286,7 +398,7 @@
             padding: 0 3px;
             border-radius: 3px;
             color: var(--text-muted);
-            transition: all 0.08s ease;
+            transition: all 0.06s ease;
         }
 
         .phoneme-pill.phoneme-active {
@@ -297,6 +409,7 @@
             box-shadow: 0 0 8px var(--accent-emerald-glow);
         }
 
+        /* --- Floating Audio Player Capsule --- */
         .player-capsule-wrapper {
             position: fixed;
             bottom: 1.75rem;
@@ -453,15 +566,36 @@
 
     <main id="mainContent">
         <div class="quran-container">
+            <!-- Inspection & QA Dashboard Toolbar -->
+            <div class="qa-inspector-bar hidden" id="qaInspectorBar">
+                <div class="qa-row">
+                    <div class="qa-filter-tabs">
+                        <button class="qa-tab-btn active" data-filter="all"><i class="fas fa-list"></i> جميع الآيات</button>
+                        <button class="qa-tab-btn" data-filter="repetitions"><i class="fas fa-redo"></i> تكرارات (<span id="countRepetitions">0</span>)</button>
+                        <button class="qa-tab-btn" data-filter="missing"><i class="fas fa-exclamation-triangle"></i> كلمات ناقصة (<span id="countMissing">0</span>)</button>
+                        <button class="qa-tab-btn" data-filter="gaps"><i class="fas fa-headphones"></i> فواصل (<span id="countGaps">0</span>)</button>
+                    </div>
+                    <div class="issue-nav-group" id="issueNavGroup">
+                        <button class="issue-nav-btn" id="btnPrevIssue" title="الانتقال للملاحظة السابقة"><i class="fas fa-chevron-right"></i> السابق</button>
+                        <span class="issue-counter" id="issueCounterText">0 / 0</span>
+                        <button class="issue-nav-btn" id="btnNextIssue" title="الانتقال للملاحظة التالية">التالي <i class="fas fa-chevron-left"></i></button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Empty Dropzone -->
             <div class="empty-dropzone" id="emptyDropzone">
                 <div class="dropzone-icon"><i class="fas fa-quran"></i></div>
-                <div class="dropzone-title">عرض وتتبع التلاوة المباركة</div>
-                <div class="dropzone-subtitle">قم برفع ملف التوقيت (output.json) وملف الصوت (audio.mp3) لبدء المزامنة</div>
+                <div class="dropzone-title">عرض وتدقيق التلاوة المباركة</div>
+                <div class="dropzone-subtitle">قم برفع ملف التوقيت (output.json) وملف الصوت (audio.mp3) لبدء التتبع السلس وفحص الملاحظات</div>
             </div>
+
+            <!-- Ayah Blocks List -->
             <div id="ayahBlocksList" style="display: flex; flex-direction: column; gap: 2rem;"></div>
         </div>
     </main>
 
+    <!-- Floating Player Capsule -->
     <div class="player-capsule-wrapper">
         <div class="player-capsule">
             <button class="capsule-btn" id="btnUploadJson"><i class="fas fa-file-code"></i> <span>JSON</span></button>
@@ -493,6 +627,20 @@
                 this.timeOccurrences = [];
                 this.phonemeOccurrences = [];
                 this.animFrame = null;
+                
+                // 120fps Smooth Scrolling & Performance Caching
+                this.isUserInteracting = false;
+                this.userScrollTimeout = null;
+                this.activeWordId = null;
+                this.activePhonemeId = null;
+                this.activeSegmentIndex = null;
+                this.elementsMap = new Map();
+                
+                // QA & Issue Navigation State
+                this.activeFilter = 'all';
+                this.flaggedSegmentIndices = [];
+                this.currentIssueIndex = -1;
+
                 this.initElements();
                 this.bindEvents();
             }
@@ -503,6 +651,9 @@
                 this.btnUploadJson = document.getElementById('btnUploadJson');
                 this.btnUploadAudio = document.getElementById('btnUploadAudio');
                 this.ayahBlocksList = document.getElementById('ayahBlocksList');
+                this.mainContent = document.getElementById('mainContent');
+                this.qaInspectorBar = document.getElementById('qaInspectorBar');
+                
                 this.btnPlayPause = document.getElementById('btnPlayPause');
                 this.playIcon = document.getElementById('playIcon');
                 this.labelAyahRef = document.getElementById('labelAyahRef');
@@ -511,6 +662,14 @@
                 this.timeTotal = document.getElementById('timeTotal');
                 this.scrubContainer = document.getElementById('scrubContainer');
                 this.scrubFill = document.getElementById('scrubFill');
+                this.selectSpeed = document.getElementById('selectSpeed');
+
+                this.countRepetitions = document.getElementById('countRepetitions');
+                this.countMissing = document.getElementById('countMissing');
+                this.countGaps = document.getElementById('countGaps');
+                this.btnPrevIssue = document.getElementById('btnPrevIssue');
+                this.btnNextIssue = document.getElementById('btnNextIssue');
+                this.issueCounterText = document.getElementById('issueCounterText');
             }
 
             bindEvents() {
@@ -519,20 +678,55 @@
                 this.jsonInput.addEventListener('change', (e) => this.handleJsonFile(e.target.files[0]));
                 this.audioInput.addEventListener('change', (e) => this.handleAudioFile(e.target.files[0]));
                 this.btnPlayPause.addEventListener('click', () => this.togglePlay());
+                this.selectSpeed.addEventListener('change', (e) => this.audio.playbackRate = parseFloat(e.target.value));
+
                 this.scrubContainer.addEventListener('click', (e) => {
                     if (!this.audio.duration) return;
                     const rect = this.scrubContainer.getBoundingClientRect();
                     const ratio = 1 - ((e.clientX - rect.left) / rect.width);
                     this.audio.currentTime = Math.max(0, Math.min(this.audio.duration, ratio * this.audio.duration));
                 });
+
                 this.audio.addEventListener('play', () => { this.playIcon.className = 'fas fa-pause'; this.startSync(); });
                 this.audio.addEventListener('pause', () => { this.playIcon.className = 'fas fa-play'; this.stopSync(); });
                 this.audio.addEventListener('loadedmetadata', () => this.timeTotal.textContent = this.formatTime(this.audio.duration));
+
+                // Manual Scroll Detection: Pause auto-scroll while user is actively reading
+                const handleUserScroll = () => {
+                    this.isUserInteracting = true;
+                    clearTimeout(this.userScrollTimeout);
+                    this.userScrollTimeout = setTimeout(() => {
+                        this.isUserInteracting = false;
+                    }, 2500);
+                };
+                this.mainContent.addEventListener('wheel', handleUserScroll, { passive: true });
+                this.mainContent.addEventListener('touchmove', handleUserScroll, { passive: true });
+
+                // Filter tabs
+                document.querySelectorAll('.qa-tab-btn').forEach(btn => {
+                    btn.addEventListener('click', (e) => {
+                        document.querySelectorAll('.qa-tab-btn').forEach(b => b.classList.remove('active'));
+                        const target = e.currentTarget;
+                        target.classList.add('active');
+                        this.applyFilter(target.dataset.filter);
+                    });
+                });
+
+                this.btnPrevIssue.addEventListener('click', () => this.navigateIssue(-1));
+                this.btnNextIssue.addEventListener('click', () => this.navigateIssue(1));
             }
 
             handleJsonFile(file) {
                 const reader = new FileReader();
-                reader.onload = (e) => { this.loadData(JSON.parse(e.target.result)); this.btnUploadJson.classList.add('ready'); };
+                reader.onload = (e) => {
+                    try {
+                        const parsed = JSON.parse(e.target.result);
+                        this.loadData(parsed);
+                        this.btnUploadJson.classList.add('ready');
+                    } catch (err) {
+                        alert("حدث خطأ أثناء قراءة ملف JSON: " + err.message);
+                    }
+                };
                 reader.readAsText(file);
             }
 
@@ -542,16 +736,27 @@
             }
 
             loadData(data) {
-                this.segments = (data.segments || []).filter(s => s.matched_text);
+                const rawSegments = Array.isArray(data) ? data : (data.segments || []);
+                this.segments = rawSegments.filter(s => s.matched_text || s.words);
                 this.canonicalWords = [];
                 this.timeOccurrences = [];
                 this.phonemeOccurrences = [];
+                this.elementsMap.clear();
+
+                let repCount = 0;
+                let missCount = 0;
+                let gapCount = 0;
+                this.flaggedSegmentIndices = [];
+
                 this.segments.forEach((seg, sIdx) => {
                     const segStart = seg.time_from || 0;
                     const wordMap = new Map();
                     const wordsList = seg.words || [];
 
-                    // Extract acoustic review gaps (>= 1.0s)
+                    if (seg.has_repeated_words) repCount++;
+                    if (seg.has_missing_words) missCount++;
+
+                    // Extract unaligned review gaps (>= 1.0s)
                     const gaps = [];
                     for (let i = 0; i < wordsList.length - 1; i++) {
                         const currEnd = wordsList[i].end !== null ? segStart + wordsList[i].end : null;
@@ -562,22 +767,35 @@
                                 end: nextStart,
                                 duration: (nextStart - currEnd).toFixed(1)
                             });
+                            gapCount++;
                         }
                     }
                     seg._reviewGaps = gaps;
 
+                    if (seg.has_repeated_words || seg.has_missing_words || gaps.length > 0) {
+                        this.flaggedSegmentIndices.push(sIdx);
+                    }
+
                     wordsList.forEach((w, wIdx) => {
                         const loc = w.location || `loc_${wIdx}`;
-                        const absStart = w.start !== null ? segStart + w.start : null;
-                        const absEnd = w.end !== null ? segStart + w.end : null;
+                        const absStart = w.start !== null && w.start !== undefined ? segStart + w.start : null;
+                        const absEnd = w.end !== null && w.end !== undefined ? segStart + w.end : null;
                         let entry = wordMap.get(loc);
                         if (!entry) {
-                            entry = { id: `w_${sIdx}_${loc.replace(/[:.]/g, '_')}`, text: w.word, segmentIndex: sIdx, passes: [], phonemes: [] };
+                            entry = {
+                                id: `w_${sIdx}_${loc.replace(/[:.]/g, '_')}`,
+                                text: w.word,
+                                segmentIndex: sIdx,
+                                passes: [],
+                                phonemes: [],
+                                is_retranscribed: Boolean(w.is_retranscribed)
+                            };
                             wordMap.set(loc, entry);
                             this.canonicalWords.push(entry);
                         }
                         entry.passes.push({ start: absStart, end: absEnd });
                         this.timeOccurrences.push({ wordId: entry.id, segmentIndex: sIdx, start: absStart, end: absEnd });
+
                         (w.phonemes || []).forEach((p, pIdx) => {
                             const phId = `p_${sIdx}_${loc.replace(/[:.]/g, '_')}_${pIdx}`;
                             if (entry.passes.length === 1) entry.phonemes.push({ id: phId, phoneme: p.phoneme, start: p.start + segStart });
@@ -585,19 +803,68 @@
                         });
                     });
                 });
+
+                // Update QA Toolbar Counts
+                this.countRepetitions.textContent = repCount;
+                this.countMissing.textContent = missCount;
+                this.countGaps.textContent = gapCount;
+                this.qaInspectorBar.classList.remove('hidden');
+                this.currentIssueIndex = this.flaggedSegmentIndices.length > 0 ? 0 : -1;
+                this.updateIssueNavUI();
+
                 this.render();
+            }
+
+            applyFilter(filter) {
+                this.activeFilter = filter;
+                this.render();
+            }
+
+            updateIssueNavUI() {
+                if (this.flaggedSegmentIndices.length === 0) {
+                    this.issueCounterText.textContent = '0 / 0';
+                    this.btnPrevIssue.disabled = true;
+                    this.btnNextIssue.disabled = true;
+                    return;
+                }
+                this.issueCounterText.textContent = `${this.currentIssueIndex + 1} / ${this.flaggedSegmentIndices.length}`;
+                this.btnPrevIssue.disabled = this.currentIssueIndex <= 0;
+                this.btnNextIssue.disabled = this.currentIssueIndex >= this.flaggedSegmentIndices.length - 1;
+            }
+
+            navigateIssue(delta) {
+                if (this.flaggedSegmentIndices.length === 0) return;
+                const newIdx = this.currentIssueIndex + delta;
+                if (newIdx >= 0 && newIdx < this.flaggedSegmentIndices.length) {
+                    this.currentIssueIndex = newIdx;
+                    this.updateIssueNavUI();
+                    const sIdx = this.flaggedSegmentIndices[newIdx];
+                    const card = document.getElementById(`ayah_card_${sIdx}`);
+                    if (card) {
+                        card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        card.classList.add('active-ayah');
+                    }
+                }
             }
 
             render() {
                 document.getElementById('emptyDropzone').classList.add('hidden');
-                this.ayahBlocksList.innerHTML = this.segments.map((seg, sIdx) => {
+                this.elementsMap.clear();
+
+                const cardsHtml = this.segments.map((seg, sIdx) => {
+                    // Filter check
+                    if (this.activeFilter === 'repetitions' && !seg.has_repeated_words) return '';
+                    if (this.activeFilter === 'missing' && !seg.has_missing_words) return '';
+                    if (this.activeFilter === 'gaps' && (!seg._reviewGaps || seg._reviewGaps.length === 0)) return '';
+
                     const repBadge = seg.has_repeated_words ? `<span class="badge-flag badge-repetition"><i class="fas fa-redo"></i> تكرار مرتل</span>` : '';
                     const missBadge = seg.has_missing_words ? `<span class="badge-flag badge-missing"><i class="fas fa-exclamation-triangle"></i> كلمات ناقصة</span>` : '';
                     const gapBadges = (seg._reviewGaps || []).map(g => `<span class="review-gap-pill" onclick="window.app.seek(${g.start})" title="انقر للاستماع للفاصل الصوتي"><i class="fas fa-headphones"></i> مراجعة فاصل (${g.duration}s)</span>`).join('');
                     const segWords = this.canonicalWords.filter(w => w.segmentIndex === sIdx);
+                    const hasIssue = seg.has_repeated_words || seg.has_missing_words || (seg._reviewGaps && seg._reviewGaps.length > 0);
 
                     return `
-                    <div class="ayah-card" id="ayah_card_${sIdx}">
+                    <div class="ayah-card ${hasIssue ? 'has-issue-highlight' : ''}" id="ayah_card_${sIdx}">
                         <div class="ayah-header">
                             <div class="ayah-badges-group">
                                 <span class="ayah-badge">${seg.ref_from || 'آية'} ${seg.ref_to && seg.ref_to !== seg.ref_from ? '→ ' + seg.ref_to : ''}</span>
@@ -609,7 +876,7 @@
                         </div>
                         <div class="ayah-words-flow">
                             ${segWords.map(w => `
-                                <div class="quran-word" id="${w.id}" onclick="window.app.seek(${w.passes[0]?.start ?? 0})">
+                                <div class="quran-word ${w.is_retranscribed ? 'word-retranscribed' : ''}" id="${w.id}" onclick="window.app.seek(${w.passes[0]?.start ?? 0})">
                                     <span class="word-text">${w.text}</span>
                                     <div class="phoneme-row">${w.phonemes.map(p => `<span class="phoneme-pill" id="${p.id}" onclick="event.stopPropagation(); window.app.seek(${p.start})">${p.phoneme}</span>`).join('')}</div>
                                 </div>
@@ -618,51 +885,108 @@
                     </div>
                     `;
                 }).join('');
+
+                this.ayahBlocksList.innerHTML = cardsHtml;
+
+                // Cache DOM element handles for dirty checking
+                this.canonicalWords.forEach(w => {
+                    const el = document.getElementById(w.id);
+                    if (el) this.elementsMap.set(w.id, el);
+                    w.phonemes.forEach(p => {
+                        const pEl = document.getElementById(p.id);
+                        if (pEl) this.elementsMap.set(p.id, pEl);
+                    });
+                });
             }
 
             togglePlay() { this.audio.paused ? this.audio.play() : this.audio.pause(); }
             seek(t) { this.audio.currentTime = t; if (this.audio.paused) this.audio.play(); }
             startSync() { const step = () => { this.updateSync(); if (!this.audio.paused) this.animFrame = requestAnimationFrame(step); }; this.animFrame = requestAnimationFrame(step); }
             stopSync() { cancelAnimationFrame(this.animFrame); }
+
             updateSync() {
                 const t = this.audio.currentTime;
                 this.timeElapsed.textContent = this.formatTime(t);
                 this.scrubFill.style.width = `${Math.min(100, (t / (this.audio.duration || 1)) * 100)}%`;
-                // 1. Sync Active Words
-                const activeWords = new Set();
-                let activeSegIdx = null;
-                this.timeOccurrences.forEach(o => {
-                    if (o.start !== null && o.end !== null && t >= o.start && t < o.end) {
-                        activeWords.add(o.wordId);
-                        activeSegIdx = o.segmentIndex;
-                    }
-                });
-                document.querySelectorAll('.quran-word').forEach(el => el.classList.toggle('word-active', activeWords.has(el.id)));
 
-                // 2. Sync Active Phonemes (Only activates if its parent word is active)
-                let activePhoneme = null;
-                const activeIds = new Set();
-                this.phonemeOccurrences.forEach(p => {
-                    if (p.start !== null && p.end !== null && t >= p.start && t < p.end) {
-                        if (activeWords.has(p.wordId)) {
-                            activeIds.add(p.id);
-                            activePhoneme = p;
+                // 1. Find Current Active Word
+                let currentWordId = null;
+                let currentSegIdx = null;
+                for (let i = 0; i < this.timeOccurrences.length; i++) {
+                    const o = this.timeOccurrences[i];
+                    if (o.start !== null && o.end !== null && t >= o.start && t < o.end) {
+                        currentWordId = o.wordId;
+                        currentSegIdx = o.segmentIndex;
+                        break;
+                    }
+                }
+
+                // Dirty-check word update
+                if (currentWordId !== this.activeWordId) {
+                    if (this.activeWordId && this.elementsMap.has(this.activeWordId)) {
+                        this.elementsMap.get(this.activeWordId).classList.remove('word-active');
+                    }
+                    if (currentWordId && this.elementsMap.has(currentWordId)) {
+                        this.elementsMap.get(currentWordId).classList.add('word-active');
+                    }
+                    this.activeWordId = currentWordId;
+                }
+
+                // 2. Find Current Active Phoneme (Strictly gated by active word)
+                let currentPhonemeId = null;
+                let activePhonemeObj = null;
+                if (currentWordId) {
+                    for (let i = 0; i < this.phonemeOccurrences.length; i++) {
+                        const p = this.phonemeOccurrences[i];
+                        if (p.wordId === currentWordId && p.start !== null && p.end !== null && t >= p.start && t < p.end) {
+                            currentPhonemeId = p.id;
+                            activePhonemeObj = p;
+                            break;
                         }
                     }
-                });
-                document.querySelectorAll('.phoneme-pill').forEach(el => el.classList.toggle('phoneme-active', activeIds.has(el.id)));
+                }
 
-                if (activeSegIdx !== null) {
-                    document.querySelectorAll('.ayah-card').forEach((c, i) => {
-                        if (i === activeSegIdx && !c.classList.contains('active-ayah')) c.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                        c.classList.toggle('active-ayah', i === activeSegIdx);
-                    });
-                    this.badgeSound.classList.toggle('hidden', !activePhoneme);
-                    if (activePhoneme) this.badgeSound.textContent = activePhoneme.phoneme;
+                // Dirty-check phoneme update
+                if (currentPhonemeId !== this.activePhonemeId) {
+                    if (this.activePhonemeId && this.elementsMap.has(this.activePhonemeId)) {
+                        this.elementsMap.get(this.activePhonemeId).classList.remove('phoneme-active');
+                    }
+                    if (currentPhonemeId && this.elementsMap.has(currentPhonemeId)) {
+                        this.elementsMap.get(currentPhonemeId).classList.add('phoneme-active');
+                    }
+                    this.activePhonemeId = currentPhonemeId;
+                    this.badgeSound.classList.toggle('hidden', !activePhonemeObj);
+                    if (activePhonemeObj) this.badgeSound.textContent = activePhonemeObj.phoneme;
+                }
+
+                // 3. Active Ayah Card Highlight & Smooth Auto-Scroll (Only when not user-interacting)
+                if (currentSegIdx !== null && currentSegIdx !== this.activeSegmentIndex) {
+                    if (this.activeSegmentIndex !== null) {
+                        const prevCard = document.getElementById(`ayah_card_${this.activeSegmentIndex}`);
+                        if (prevCard) prevCard.classList.remove('active-ayah');
+                    }
+                    const nextCard = document.getElementById(`ayah_card_${currentSegIdx}`);
+                    if (nextCard) {
+                        nextCard.classList.add('active-ayah');
+                        if (!this.isUserInteracting) {
+                            nextCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }
+                    }
+                    this.activeSegmentIndex = currentSegIdx;
+                    if (this.segments[currentSegIdx]) {
+                        this.labelAyahRef.textContent = this.segments[currentSegIdx].ref_from || '---';
+                    }
                 }
             }
-            formatTime(s) { const m = Math.floor(s / 60); const sec = Math.floor(s % 60); return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`; }
+
+            formatTime(s) {
+                if (s === null || isNaN(s)) return '00:00';
+                const m = Math.floor(s / 60);
+                const sec = Math.floor(s % 60);
+                return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+            }
         }
+
         window.addEventListener('DOMContentLoaded', () => window.app = new QuranViewer());
     </script>
 </body>

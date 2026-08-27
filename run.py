@@ -96,10 +96,6 @@ def main():
         print(f"Error: Input audio file not found at {args.audio}")
         sys.exit(1)
 
-    import threading
-    cache_thread = threading.Thread(target=preload_caches, daemon=True)
-    cache_thread.start()
-
     from src.core.main_flow import process_audio
 
     try:

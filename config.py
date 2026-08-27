@@ -7,7 +7,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.absolute()
 DATA_PATH = PROJECT_ROOT / "data"
 
-# Quran Uthmani Script Reference
+# Quran Uthmani Script Reference (QPC Hafs Word Database)
 QURAN_SCRIPT_PATH_COMPUTE = DATA_PATH / "qpc_hafs.json"
 
 # Word Timestamp Tuning Controls

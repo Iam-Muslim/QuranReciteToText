@@ -100,7 +100,10 @@ class ZipformerONNX:
         opts.frame_opts.frame_length_ms = 25.0
 
         fbank = knf.OnlineFbank(opts)
-        fbank.accept_waveform(SAMPLE_RATE, audio.tolist())
+        chunk_samples = 30 * SAMPLE_RATE
+        for offset in range(0, len(audio), chunk_samples):
+            sub_chunk = audio[offset : offset + chunk_samples]
+            fbank.accept_waveform(SAMPLE_RATE, sub_chunk.tolist())
         fbank.input_finished()
 
         num_frames = fbank.num_frames_ready

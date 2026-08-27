@@ -30,44 +30,6 @@ def _chapter_scores(tokens, ngram_index) -> dict[int, float]:
     return scores
 
 
-def _chapter_start_ayah(tokens, surah: int, resources, fallback: int) -> int:
-    """Returns the best matching ayah inside a known chapter."""
-    scores: dict[int, float] = defaultdict(float)
-    ngram_index = resources.ngram_index
-    ngram_size = ngram_index.ngram_size
-    for index in range(len(tokens) - ngram_size + 1):
-        ngram = tuple(tokens[index:index + ngram_size])
-        count = ngram_index.ngram_counts.get(ngram)
-        if not count:
-            continue
-        for candidate_surah, ayah in ngram_index.ngram_positions[ngram]:
-            if candidate_surah == surah:
-                scores[ayah] += 1.0 / count
-    query = "".join(normalize_phoneme_to_core(t) for t in tokens).strip()
-    ayah_tokens: dict[int, list[str]] = defaultdict(list)
-    for word in resources.chapter_refs[surah].words:
-        ayah_tokens[word.ayah].extend(word.phonemes)
-    similarities = {
-        ayah: SequenceMatcher(
-            None, query, "".join(normalize_phoneme_to_core(p) for p in reference), autojunk=False
-        ).find_longest_match().size / max(1, len(query))
-        for ayah, reference in ayah_tokens.items()
-    }
-    if similarities and max(similarities.values()) >= 0.5:
-        return max(similarities, key=similarities.get)
-    return max(scores, key=scores.get) if scores else fallback
-
-
-def _chapter_similarity(tokens, chapter_ref) -> float:
-    """Returns the longest normalized character match ratio for one chapter."""
-    query = "".join(normalize_phoneme_to_core(t) for t in tokens).strip()
-    reference = "".join(normalize_phoneme_to_core(phoneme) for word in chapter_ref.words for phoneme in word.phonemes)
-    if not query or not reference:
-        return 0.0
-    match = SequenceMatcher(None, query, reference, autojunk=False).find_longest_match()
-    return match.size / len(query)
-
-
 def _tokens_from_words(words: list[dict]) -> list[str]:
     """Builds phoneme tokens from timestamped ASR words."""
     tokens = []
@@ -76,21 +38,6 @@ def _tokens_from_words(words: list[dict]) -> list[str]:
         if tok and tok.strip():
             tokens.append(tok.strip())
     return tokens
-
-
-def _chapter_word_index(text: str, chapter_ref) -> int | None:
-    """Returns the closest canonical chapter word index for one ASR word."""
-    query = "".join(normalize_phoneme_to_core(t) for t in _tokens_from_words([{"word": text}])).strip()
-    if not query:
-        return None
-    matches = [
-        SequenceMatcher(
-            None, query, "".join(normalize_phoneme_to_core(p) for p in word.phonemes).strip(), autojunk=False
-        ).ratio()
-        for word in chapter_ref.words
-    ]
-    best_index = max(range(len(matches)), key=matches.__getitem__)
-    return best_index if matches[best_index] >= 0.5 else None
 
 
 
@@ -105,193 +52,22 @@ def _slice_logprobs(logprobs, chunk_start_s: float, start_s: float, end_s: float
     return logprobs[start_frame:end_frame], chunk_start_s + start_frame / 25.0
 
 
-def _find_silence_dip(audio_slice: np.ndarray, sample_rate: int = 16000) -> int:
-    """Finds the sample index of the local acoustic energy minimum (silence dip) within an audio slice."""
-    win = int(0.1 * sample_rate)
-    if len(audio_slice) < 3 * win:
-        return len(audio_slice) // 2
-    energies = [
-        float(np.sum(np.square(audio_slice[i : i + win])))
-        for i in range(win, len(audio_slice) - 2 * win, win // 2)
-    ]
-    if not energies:
-        return len(audio_slice) // 2
-    min_idx = int(np.argmin(energies))
-    return win + min_idx * (win // 2) + (win // 2)
-
-
-def _refine_repetitions_and_gaps(
-    audio, sample_rate, emissions, stage_metrics, resources, params
-) -> list[tuple[int, int]]:
-    """Refines token repetitions and re-transcribes non-silent acoustic gaps across all chunks."""
-    from config import (
-        ENABLE_GAP_RETRANSCRIPTION,
-        GAP_RETRANSCRIPTION_MIN_DURATION_S,
-        GAP_RETRANSCRIPTION_ENERGY_THRESHOLD_DB,
-        GAP_RETRANSCRIPTION_SPLIT_FALLBACK,
-    )
-
+def _prepare_multi_chapter_units(
+    audio, sample_rate, regions, emissions, stage_metrics, resources, params
+):
+    """Splits cross-chapter ASR chunks and labels every chunk with its chapter."""
     anchors = [
         find_anchor_by_voting([tokens], resources.ngram_index, params.anchor)
         for tokens in emissions.tokens
     ]
-    asr_words_list = stage_metrics.get("asr_words", [])
-    if not asr_words_list:
-        return anchors
+    # Propagate active Surah context to any unanchored (0, 0) chunks
+    last_known = (0, 0)
+    for i in range(len(anchors)):
+        if anchors[i][0] > 0:
+            last_known = anchors[i]
+        elif last_known[0] > 0:
+            anchors[i] = last_known
 
-    audio_pcm = None
-    if isinstance(audio, str):
-        import librosa
-        audio_pcm, _ = librosa.load(audio, sr=sample_rate, mono=True)
-    elif audio is not None:
-        audio_pcm = np.asarray(audio, dtype=np.float32)
-
-    refinement_candidates = []
-    for chunk_index, ((surah, _ayah), entry) in enumerate(zip(anchors, asr_words_list)):
-        if surah <= 0:
-            continue
-        words = entry[0] if isinstance(entry, tuple) else entry
-        covered_ranges = []
-        for current_index in range(1, len(words or [])):
-            gap = words[current_index]["start"] - words[current_index - 1]["end"]
-            # 1. Repetition by matching phoneme tokens
-            if gap >= 0.5:
-                current_text = words[current_index].get("phoneme", words[current_index].get("word", "")).strip()
-                previous_indices = [
-                    previous_index
-                    for previous_index in range(max(0, current_index - 12), current_index - 1)
-                    if words[previous_index].get("phoneme", words[previous_index].get("word", "")).strip() == current_text
-                    and words[current_index]["start"] - words[previous_index]["start"] <= 15.0
-                ]
-                if previous_indices:
-                    start_index = previous_indices[-1]
-                    refinement_candidates.append((
-                        chunk_index, start_index, current_index, surah, "repetition"
-                    ))
-                    covered_ranges.append((start_index, current_index))
-
-            # 2. Acoustic Speech Gap Retranscription
-            if ENABLE_GAP_RETRANSCRIPTION and gap >= GAP_RETRANSCRIPTION_MIN_DURATION_S and audio_pcm is not None:
-                gap_start_s = words[current_index - 1]["end"]
-                gap_end_s = words[current_index]["start"]
-                s_sample = int(gap_start_s * sample_rate)
-                e_sample = int(gap_end_s * sample_rate)
-                gap_slice = audio_pcm[s_sample:e_sample]
-                if len(gap_slice) >= int(0.2 * sample_rate):
-                    rms = float(np.sqrt(np.mean(np.square(gap_slice))))
-                    db = 20.0 * np.log10(max(rms, 1e-8))
-                    if db > GAP_RETRANSCRIPTION_ENERGY_THRESHOLD_DB:
-                        refinement_candidates.append((
-                            chunk_index, current_index - 1, current_index, surah, "acoustic_gap"
-                        ))
-
-    refinements: dict[int, list[tuple[int, int, list[dict]]]] = defaultdict(list)
-    if refinement_candidates and audio_pcm is not None:
-        from src.phase1_transcribe.zipformer import ZipformerONNX
-        model = ZipformerONNX.get_instance(device="cpu")
-
-        for chunk_index, start_index, end_index, surah, kind in refinement_candidates:
-            if any(
-                start_index < accepted_end and accepted_start < end_index
-                for accepted_start, accepted_end, _words in refinements[chunk_index]
-            ):
-                continue
-            entry = asr_words_list[chunk_index]
-            words = entry[0] if isinstance(entry, tuple) else entry
-            source_words = words[start_index:end_index]
-
-            if kind == "acoustic_gap":
-                slice_start = max(0.0, words[start_index]["end"] + 0.02)
-                slice_end = min(len(audio_pcm) / sample_rate, words[end_index]["start"] - 0.02)
-            else: # repetition
-                slice_start = max(0.0, source_words[0]["start"] - 0.2)
-                slice_end = min(len(audio_pcm) / sample_rate, words[end_index]["start"] - 0.05)
-
-            if slice_end - slice_start < 0.2:
-                continue
-
-            gap_audio = audio_pcm[int(slice_start * sample_rate) : int(slice_end * sample_rate)]
-            _text, replacement_words, _logprobs = model.transcribe(
-                gap_audio,
-                orig_sr=sample_rate,
-                safe_lufs=True,
-            )
-
-            # Split fallback if initial gap transcribe was empty and gap is long enough
-            if (
-                not replacement_words
-                and kind == "acoustic_gap"
-                and GAP_RETRANSCRIPTION_SPLIT_FALLBACK
-                and len(gap_audio) >= int(1.2 * sample_rate)
-            ):
-                dip_idx = _find_silence_dip(gap_audio, sample_rate)
-                sub1 = gap_audio[:dip_idx]
-                sub2 = gap_audio[dip_idx:]
-                _t1, w1, _ = model.transcribe(sub1, orig_sr=sample_rate, safe_lufs=True)
-                _t2, w2, _ = model.transcribe(sub2, orig_sr=sample_rate, safe_lufs=True)
-                combined = []
-                for w in (w1 or []):
-                    w["start"] += slice_start
-                    w["end"] += slice_start
-                    w["is_retranscribed"] = True
-                    combined.append(w)
-                for w in (w2 or []):
-                    w["start"] += slice_start + dip_idx / sample_rate
-                    w["end"] += slice_start + dip_idx / sample_rate
-                    w["is_retranscribed"] = True
-                    combined.append(w)
-                replacement_words = combined
-            else:
-                for word in replacement_words or []:
-                    word["start"] += slice_start
-                    word["end"] += slice_start
-                    if kind == "acoustic_gap":
-                        word["is_retranscribed"] = True
-
-            if not replacement_words:
-                continue
-
-            if kind == "acoustic_gap":
-                refinements[chunk_index].append(
-                    (end_index, end_index, replacement_words)
-                )
-            else:
-                replacement_tokens = _tokens_from_words(replacement_words or [])
-                minimum_words = len(source_words) + 1
-                if (
-                    len(replacement_words or []) < minimum_words
-                    or (
-                        normalize_arabic(replacement_words[0].get("word", replacement_words[0].get("phoneme", ""))).strip()
-                        != normalize_arabic(source_words[0].get("word", source_words[0].get("phoneme", ""))).strip()
-                    )
-                    or not _chapter_scores(
-                        replacement_tokens, resources.ngram_index
-                    ).get(surah, 0.0)
-                ):
-                    continue
-                refinements[chunk_index].append(
-                    (start_index, end_index, replacement_words)
-                )
-
-    for chunk_index, replacements in refinements.items():
-        entry = asr_words_list[chunk_index]
-        words = entry[0] if isinstance(entry, tuple) else entry
-        for start_index, end_index, replacement_words in sorted(
-            replacements, key=lambda replacement: replacement[0], reverse=True
-        ):
-            words[start_index:end_index] = replacement_words
-        emissions.tokens[chunk_index] = _tokens_from_words(words)
-        anchors[chunk_index] = find_anchor_by_voting(
-            [emissions.tokens[chunk_index]], resources.ngram_index, params.anchor
-        )
-
-    return anchors
-
-
-def _prepare_multi_chapter_units(
-    audio, sample_rate, regions, emissions, stage_metrics, resources, params, anchors
-):
-    """Splits cross-chapter ASR chunks and labels every chunk with its chapter."""
     if len({surah for surah, _ayah in anchors if surah > 0}) <= 1:
         return None
 
@@ -311,13 +87,11 @@ def _prepare_multi_chapter_units(
                 continue
             entry = asr_words_list[chunk_index]
             words = entry[0] if isinstance(entry, tuple) else entry
-            if not words or len(words) < 2:
+            if not words or len(words) < 4:
                 continue
-            for word_index in range(1, len(words)):
-                if word_index < 3 or len(words) - word_index < 3:
-                    continue
+            for word_index in range(2, len(words) - 1):
                 gap = words[word_index]["start"] - words[word_index - 1]["end"]
-                if gap < 0.5:
+                if gap < 0.3:
                     continue
                 prefix_scores = _chapter_scores(
                     _tokens_from_words(words[:word_index]), resources.ngram_index
@@ -325,20 +99,9 @@ def _prepare_multi_chapter_units(
                 suffix_scores = _chapter_scores(
                     _tokens_from_words(words[word_index:]), resources.ngram_index
                 )
-                prefix_tokens = _tokens_from_words(words[:word_index])
-                suffix_tokens = _tokens_from_words(words[word_index:])
-                prefix_similarity = _chapter_similarity(
-                    prefix_tokens, resources.chapter_refs[current_surah]
-                )
-                suffix_similarity = _chapter_similarity(
-                    suffix_tokens, resources.chapter_refs[next_surah]
-                )
-                prefix_matches = prefix_scores.get(current_surah, 0.0) or prefix_similarity >= 0.35
-                suffix_matches = suffix_scores.get(next_surah, 0.0) or suffix_similarity >= 0.35
-                if prefix_matches and suffix_matches:
-                    candidates.append(
-                        (prefix_similarity + suffix_similarity, gap, chunk_index, word_index)
-                    )
+                if prefix_scores.get(current_surah, 0.0) > 0 and suffix_scores.get(next_surah, 0.0) > 0:
+                    score = prefix_scores[current_surah] + suffix_scores[next_surah]
+                    candidates.append((score, gap, chunk_index, word_index))
 
         if candidates:
             _score, _gap, chunk_index, word_index = max(candidates)
@@ -418,8 +181,6 @@ def _prepare_multi_chapter_units(
     return Regions(regions=unit_regions), Emissions(tokens=unit_tokens), stage_metrics, unit_labels
 
 
-
-
 def _run_post_asr_pipeline(
     audio,
     sample_rate,
@@ -457,15 +218,8 @@ def _run_post_asr_pipeline(
             max_transition_edit_distance=params.specials.max_transition_edit_distance,
         )
 
-        # 1. Unconditionally refine repetitions and re-transcribe speech gaps across all chunks
-        anchors = _refine_repetitions_and_gaps(
-            audio, sample_rate, emissions, stage_metrics, resources, params
-        )
-        transcribed_tokens = emissions.tokens
-
-        # 2. Check if recording spans multiple Surahs
         prepared = _prepare_multi_chapter_units(
-            audio, sample_rate, regions, emissions, stage_metrics, resources, params, anchors
+            audio, sample_rate, regions, emissions, stage_metrics, resources, params
         )
         if prepared is None:
             quran_tokens = transcribed_tokens[first_quran_idx:] if first_quran_idx < len(transcribed_tokens) else transcribed_tokens
@@ -550,15 +304,13 @@ def _run_post_asr_pipeline(
                 ):
                     group_end += 1
                 group_tokens = transcribed_tokens[unit_index:group_end]
-                unit_ayah = _chapter_start_ayah(
-                    group_tokens[0], unit_surah, resources, fallback_ayah
-                )
-                start_ayah = max(1, unit_ayah - 3)
+                start_ayah = fallback_ayah if fallback_ayah > 0 else 1
                 chapter_ref = resources.chapter_refs[unit_surah]
-                start_pointer = next(
-                    (i for i, word in enumerate(chapter_ref.words) if word.ayah == start_ayah),
-                    0,
-                )
+                start_pointer = 0
+                for i, word in enumerate(chapter_ref.words):
+                    if word.ayah == start_ayah:
+                        start_pointer = i
+                        break
                 unit_result = run_matching_sequence(
                     phoneme_texts=group_tokens,
                     start_surah=unit_surah,

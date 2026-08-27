@@ -121,14 +121,21 @@ def process_audio(
     # Phase 4: Canonical 1-Ayah = 1-Segment Aggregation & Formatting
     from src.phase4_splitting.ayah_split import aggregate_by_canonical_ayah, smooth_word_timestamps
     from src.phase4_splitting.missing_words import recompute_missing_words, inject_missing_words
+    from src.phase4_splitting.repetition_recovery import recover_unaligned_repetitions
 
-    # 1. Exact 1-Ayah = 1-Segment Canonical Aggregator
+    from config import ENABLE_GAP_RETRANSCRIPTION, ENABLE_WORD_SMOOTHING, ENABLE_MISSING_WORD_INJECTION
+
+    # 1. Exact 1-Ayah = 1-Segment Canonical Aggregator (Baseline 100% Guaranteed)
     segments = aggregate_by_canonical_ayah(segments)
 
-    # 2. Recompute missing words from canonical Quran coverage
+    # 2. Non-Destructive Repetition Recovery in Speech Gaps (Respects config flag)
+    if ENABLE_GAP_RETRANSCRIPTION:
+        recover_unaligned_repetitions(segments, audio_pcm, sample_rate)
+
+    # 3. Recompute missing words from canonical Quran coverage
     recompute_missing_words(segments)
 
-    # 3. Optional: extend word end-timestamps into trailing silence
+    # 4. Optional: extend word end-timestamps into trailing silence
     smooth_word_timestamps(
         segments,
         audio_data=audio,
@@ -138,7 +145,7 @@ def process_audio(
         bridge_unsplit_gaps=bool(stage_metrics.get("multi_chapter")),
     )
 
-    # 4. Optional: inject missing (unrecited) words into the words array
+    # 5. Optional: inject missing (unrecited) words into the words array
     inject_missing_words(segments)
 
     profiling.total_time = time.time() - pipeline_start
