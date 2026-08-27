@@ -118,65 +118,17 @@ def process_audio(
         import traceback
         traceback.print_exc()
 
-    # Split fused specials (Isti'adha+Basmala) and multi-ayah chunks using CTC word timestamps.
-    from src.phase4_splitting.ayah_split import split_fused_segments, split_segments_at_ayah_boundaries
-    segments = split_fused_segments(segments)
-    segments = split_segments_at_ayah_boundaries(
-        segments,
-        split_all_ayahs=True,
-    )
+    # Phase 4: Canonical 1-Ayah = 1-Segment Aggregation & Formatting
+    from src.phase4_splitting.ayah_split import aggregate_by_canonical_ayah, smooth_word_timestamps
+    from src.phase4_splitting.missing_words import recompute_missing_words, inject_missing_words
 
-    if stage_metrics.get("multi_chapter"):
-        from src.phase4_splitting.auto_merge import _merge_two_segments
-        # Rejoin a one-word recovery fragment without consuming the following repeat.
-        merged_segments = []
-        segment_index = 0
-        while segment_index < len(segments):
-            if segment_index + 2 < len(segments):
-                current, continuation, repeated = segments[segment_index:segment_index + 3]
-                current_words = current.words or []
-                current_loc = current_words[0].get("location") if len(current_words) == 1 else None
-                continuation_loc = (
-                    continuation.words[0].get("location")
-                    if continuation.words else None
-                )
-                repeated_loc = repeated.words[0].get("location") if repeated.words else None
-                try:
-                    current_ref = tuple(map(int, current_loc.split(":")))
-                    continuation_ref = tuple(map(int, continuation_loc.split(":")))
-                    repeated_ref = tuple(map(int, repeated_loc.split(":")))
-                except (AttributeError, ValueError):
-                    current_ref = continuation_ref = repeated_ref = None
-                if (
-                    current_ref
-                    and continuation_ref[:2] == current_ref[:2] == repeated_ref[:2]
-                    and continuation_ref[2] == current_ref[2] + 1
-                    and repeated_ref[2] <= current_ref[2]
-                ):
-                    merged_segments.append(_merge_two_segments(current, continuation))
-                    segment_index += 2
-                    continue
-            merged_segments.append(segments[segment_index])
-            segment_index += 1
-        segments = merged_segments
+    # 1. Exact 1-Ayah = 1-Segment Canonical Aggregator
+    segments = aggregate_by_canonical_ayah(segments)
 
-    # Fuse adjacent segments belonging to the SAME Ayah when the reciter
-    # recited continuously without a long pause (e.g. 17:56:1-9 + 17:56:10-13 -> 17:56:1-13).
-    from src.phase4_splitting.auto_merge import fuse_adjacent_same_ayah_segments
-    segments = fuse_adjacent_same_ayah_segments(segments)
-
-    # Stamp segment numbers.
-    for i, seg in enumerate(segments):
-        seg.segment_number = i + 1
-
-    # Recompute has_missing_words flags from word coverage (single authority).
-    from src.phase4_splitting.missing_words import recompute_missing_words
+    # 2. Recompute missing words from canonical Quran coverage
     recompute_missing_words(segments)
 
-    # Optional: extend word end-timestamps into trailing silence.
-    # Both smooth and inject mutate seg.words in-place before serialization.
-    # Controlled by ENABLE_WORD_SMOOTHING in config.py.
-    from src.phase4_splitting.ayah_split import smooth_word_timestamps
+    # 3. Optional: extend word end-timestamps into trailing silence
     smooth_word_timestamps(
         segments,
         audio_data=audio,
@@ -185,25 +137,8 @@ def process_audio(
         pad_ms=pad_ms,
         bridge_unsplit_gaps=bool(stage_metrics.get("multi_chapter")),
     )
-    if stage_metrics.get("multi_chapter"):
-        for previous, current in zip(segments, segments[1:]):
-            if current.start_time > previous.end_time:
-                continue
-            old_start = current.start_time
-            current.start_time = round(previous.end_time + 0.001, 3)
-            offset = current.start_time - old_start
-            for word in current.words or []:
-                if word.get("start") is not None:
-                    word["start"] = round(max(0.0, word["start"] - offset), 4)
-                if word.get("end") is not None:
-                    word["end"] = round(max(0.0, word["end"] - offset), 4)
-            if current.end_time <= current.start_time:
-                current.end_time = round(current.start_time + 0.04, 3)
 
-    # Optional: inject missing (unrecited) words into the words array.
-    # Runs before serialization so injected words appear in the output JSON.
-    # Controlled by ENABLE_MISSING_WORD_INJECTION in config.py.
-    from src.phase4_splitting.missing_words import inject_missing_words
+    # 4. Optional: inject missing (unrecited) words into the words array
     inject_missing_words(segments)
 
     profiling.total_time = time.time() - pipeline_start

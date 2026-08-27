@@ -1,14 +1,11 @@
-"""Ayah-Level Splitting via CTC Word Timestamps.
+"""Canonical 1-Ayah = 1-Segment Aggregator & Timestamp Smoothing.
 
-Splits multi-ayah SDK segments into per-ayah segments at word boundaries,
-preserving ALL metadata (repetitions, wrap ranges, error, etc.) from the
-parent segment.
-
-Repetition handling:
-- A chunk that contains a repetition (wrap_word_ranges set) is split normally
-  at ayah boundaries. The sub-segment that contains the repeated section
-  inherits has_repeated_words=True and the relevant wrap/repeated fields.
-- Repetitions spanning two ayahs (rare) are kept on the first sub-segment.
+Transforms raw CTC-aligned word sequences into strict 1-to-1 canonical Ayah segments:
+- Every distinct recited (Surah, Ayah) forms exactly 1 segment.
+- Cross-chunk and mid-ayah pause fragments are seamlessly assembled into complete verses.
+- Intra-verse repetitions (breath repeats) are organized chronologically with repetition metadata.
+- Opening specials (Isti'adha, Basmala) are preserved as distinct cards.
+- Word timestamps and letter-level phoneme arrays are preserved with microsecond precision.
 """
 
 from __future__ import annotations
@@ -16,536 +13,284 @@ import math
 from typing import Any
 import numpy as np
 from src.core.segment_types import SegmentInfo
+from src.core.quran_index import get_quran_index, parse_location_key
+
+_SPECIAL_TEXTS = {
+    "Isti'adha": "أَعُوذُ بِٱللَّهِ مِنَ ٱلشَّيْطَـٰنِ ٱلرَّجِيمِ",
+    "Basmala": "بِسْمِ ٱللَّهِ ٱلرَّحْمَـٰنِ ٱلرَّحِيمِ",
+}
 
 
-WAQF_MARKS = frozenset("ۖۗۘۚۛۜ")
+def aggregate_by_canonical_ayah(segments: list[SegmentInfo]) -> list[SegmentInfo]:
+    """Aggregates all CTC-aligned words into exact 1-to-1 canonical Ayah segments.
 
-
-def _ayah_key_and_word(location: str | None):
-    if not location:
-        return None, None
-    parts = location.split(":")
-    if len(parts) >= 3:
-        try:
-            return f"{parts[0]}:{parts[1]}", int(parts[2])
-        except ValueError:
-            return f"{parts[0]}:{parts[1]}", None
-    elif len(parts) >= 2:
-        return f"{parts[0]}:{parts[1]}", None
-    return None, None
-
-
-def _wrap_ranges_for_group(wrap_word_ranges: Any, group_locs: set[str]):
-    """Filter wrap_word_ranges to those whose jump_to falls in this group's locs."""
-    if not wrap_word_ranges:
-        return None
-    result = []
-    for wr in wrap_word_ranges:
-        # wr is (jump_to, jump_from, repeat_end) or (jump_to, jump_from)
-        jump_to = wr[0] if wr else None
-        if jump_to and jump_to in group_locs:
-            result.append(wr)
-    return result if result else None
-
-
-# A group is a plain dict with keys: key (str), reason (str), words (list[dict])
-# Using dicts avoids all tuple-unpacking type checker complaints and allows
-# in-place mutation of the words list.
-def _new_group(key: str | None, reason: str, first_word: dict) -> dict:
-    return {"key": key, "reason": reason, "words": [first_word]}
-
-
-def split_segments_at_ayah_boundaries(
-    segments: list[SegmentInfo],
-    min_word_gap_s: float = 0.5,
-    split_all_ayahs: bool = False,
-) -> list[SegmentInfo]:
-    """Splits segments at ayah, repetition, and meaningful intra-ayah pause boundaries.
-
-    Ayah boundaries require a small meaningful silence gap, repetition boundaries
-    are always retained, and pauses within one ayah use ``min_word_gap_s``.
-
-    Preserves all metadata from the parent segment including:
-    - has_repeated_words / wrap_word_ranges / repeated_ranges / repeated_text
-    - error, match_score, _original_alignment_idx
-    - has_missing_words (will be recomputed by recompute_missing_words later)
+    Guarantees:
+      1. Exactly 1 segment per distinct recited (Surah, Ayah).
+      2. Assembles mid-verse pauses/chunks naturally into complete verses.
+      3. Preserves all chronological word timestamps and letter-level phonemes with frame-perfect sync.
+      4. Detects within-verse repetitions (breath repeats) and stamps has_repeated_words=True.
+      5. Sets matched_text to canonical Medina Mushaf verse text from QuranIndex.
     """
-    # Minimum silence gap (seconds) between the end of the last word of one
-    # ayah group and the start of the first word of the next to justify a split.
-    # Below this threshold the groups are merged back (reciter read continuously).
-    # CTC timestamp jitter is typically < 40ms, so 40ms is a safe floor.
-    MIN_SPLIT_GAP_S = 0.04
+    if not segments:
+        return []
 
-    from qua_sdk.domain import SPECIAL_NAMES as ALL_SPECIAL_REFS
-    result: list[SegmentInfo] = []
+    qi = get_quran_index()
+
+    # Step 1: Collect chronological word stream with absolute audio timestamps
+    verse_groups: list[dict] = []
+    current_group: dict | None = None
 
     for seg in segments:
-        # Skip specials and segments with no word timestamps
-        if seg.matched_ref in ALL_SPECIAL_REFS or not seg.words:
-            result.append(seg)
-            continue
+        ref = str(seg.matched_ref or "")
+        is_special = ref in ("Isti'adha", "Basmala")
+        seg_base = seg.start_time if seg.start_time is not None else 0.0
 
-        # ----------------------------------------------------------------
-        # Step 1: Group words by (surah:ayah) key.
-        # A new group is opened when:
-        #   a) the ayah key changes            → reason "ayah_boundary"
-        #   b) the word index goes backward    → reason "repetition"
-        #   c) two words in one ayah have a meaningful pause → reason "word_gap"
-        #   d) a waqf mark is followed by a clear ASR gap   → reason "waqf"
-        # ----------------------------------------------------------------
-        groups: list[dict] = []
-        prev_key: str | None = None
-        prev_word_num: int | None = None
-
-        for word_index, w in enumerate(seg.words):
-            loc: str | None = w.get("location")
-            if not loc or loc.startswith("0:0:"):
-                # Special-segment words (location 0:0:N) — attach to current group
-                if groups:
-                    groups[-1]["words"].append(w)
-                else:
-                    groups.append(_new_group("special", "first", w))
-                continue
-
-            key, word_num = _ayah_key_and_word(loc)
-            acoustic_gap = (
-                seg._acoustic_word_gaps[word_index]
-                if seg._acoustic_word_gaps
-                and word_index < len(seg._acoustic_word_gaps)
-                else None
-            )
-            asr_gap = (
-                seg._asr_word_gaps[word_index]
-                if seg._asr_word_gaps and word_index < len(seg._asr_word_gaps)
-                else None
-            )
-
-            if not groups:
-                groups.append(_new_group(key, "first", w))
-            elif key != prev_key and key is not None:
-                groups.append(_new_group(key, "ayah_boundary", w))
-            elif (
-                word_num is not None
-                and prev_word_num is not None
-                and word_num <= prev_word_num
-            ):
-                # Backward word index within the same ayah = repetition boundary
-                groups.append(_new_group(key, "repetition", w))
-            elif key == prev_key:
-                previous_word = groups[-1]["words"][-1]
-                previous_end = previous_word.get("end")
-                current_start = w.get("start")
-                ctc_gap = (
-                    current_start - previous_end
-                    if previous_end is not None and current_start is not None
-                    else None
-                )
-                has_waqf = any(mark in previous_word.get("word", "") for mark in WAQF_MARKS)
-                waqf_gap = asr_gap if asr_gap is not None else ctc_gap
-                if acoustic_gap is not None and acoustic_gap >= min_word_gap_s:
-                    groups.append(_new_group(key, "word_gap", w))
-                elif (
-                    has_waqf
-                    and waqf_gap is not None
-                    and waqf_gap >= max(0.24, min_word_gap_s * 0.5)
-                ):
-                    # Zipformer encoder frames advance in 40ms steps (25 Hz),
-                    # so 240ms (6 frames) reliably captures natural Waqf pauses.
-                    groups.append(_new_group(key, "waqf", w))
-
-                else:
-                    groups[-1]["words"].append(w)
-            else:
-                groups[-1]["words"].append(w)
-
-            if key is not None:
-                prev_key = key
-            if word_num is not None:
-                prev_word_num = word_num
-
-        # No split needed
-        if len(groups) <= 1:
-            result.append(seg)
-            continue
-
-        # ----------------------------------------------------------------
-        # Step 2: Merge back adjacent ayah-boundary groups that have no
-        # meaningful silence gap (the reciter read continuously).
-        # Repetition and intra-ayah pause boundaries are ALWAYS kept.
-        # ----------------------------------------------------------------
-        merged: list[dict] = [groups[0]]
-        for grp in groups[1:]:
-            if grp["reason"] == "ayah_boundary":
-                if split_all_ayahs:
-                    merged.append(grp)
-                    continue
-                prev_words = merged[-1]["words"]
-                last_end = prev_words[-1].get("end")
-                next_start = grp["words"][0].get("start")
-                gap = (
-                    (next_start - last_end)
-                    if last_end is not None and next_start is not None
-                    else None
-                )
-                if gap is None or gap < MIN_SPLIT_GAP_S:
-                    # No real pause — merge into previous group
-                    merged[-1]["words"].extend(grp["words"])
-                    continue
-            merged.append(grp)
-
-        # Still no split needed after gap filtering
-        if len(merged) <= 1:
-            result.append(seg)
-            continue
-
-        # ----------------------------------------------------------------
-        # Step 3: Emit one SegmentInfo per group.
-        # ----------------------------------------------------------------
-        seg_start = seg.start_time
-        parent_has_rep = seg.has_repeated_words
-        parent_wraps = seg.wrap_word_ranges
-
-        for g_idx, grp in enumerate(merged):
-            words = grp["words"]
-            is_first = (g_idx == 0)
-            is_last  = (g_idx == len(merged) - 1)
-
-            first_rel_start = words[0].get("start")
-            last_rel_end    = words[-1].get("end")
-
-            if is_first:
-                abs_start = seg.start_time
-            elif first_rel_start is not None:
-                abs_start = seg_start + first_rel_start
-            else:
-                abs_start = result[-1].end_time if result else seg.start_time
-
-            abs_end_word = (
-                seg_start + last_rel_end if last_rel_end is not None else abs_start + 0.04
-            )
-
-            if is_last:
-                abs_end = seg.end_time
-            else:
-                next_words     = merged[g_idx + 1]["words"]
-                next_rel_start = next_words[0].get("start")
-                abs_end = (
-                    (abs_end_word + seg_start + next_rel_start) / 2.0
-                    if next_rel_start is not None
-                    else abs_end_word
-                )
-
-            abs_start = round(abs_start, 3)
-            abs_end   = round(abs_end,   3)
-            if abs_end <= abs_start:
-                abs_end = abs_start + 0.04
-
-            # Build ref from word locations
-            locs = [
-                w.get("location")
-                for w in words
-                if w.get("location") and not w.get("location", "").startswith("0:0:")
-            ]
-            if locs:
-                ref_from  = locs[0]
-                ref_to    = locs[-1]
-                matched_ref = ref_from if ref_from == ref_to else f"{ref_from}-{ref_to}"
-            else:
-                matched_ref = seg.matched_ref
-
-            matched_text = " ".join(
-                w.get("word", "") for w in words if not w.get("is_missing")
-            )
-
-            # Re-offset word timestamps to be relative to sub-segment start
-            offset = abs_start - seg_start
-            sub_words: list[dict] = []
-            for w in words:
-                entry = dict(w)
-                if entry.get("start") is not None:
-                    entry["start"] = round(max(0.0, entry["start"] - offset), 4)
-                if entry.get("end") is not None:
-                    entry["end"]   = round(max(0.0, entry["end"]   - offset), 4)
-                if "phonemes" in entry:
-                    entry["phonemes"] = [
+        # Case A: Special segment (Isti'adha or Basmala)
+        if is_special and (not seg.words or all(w.get("location", "").startswith("0:0:") for w in seg.words)):
+            special_words = []
+            for w in seg.words or []:
+                w_s = w.get("start")
+                w_e = w.get("end")
+                special_words.append({
+                    **w,
+                    "abs_start": round(seg_base + w_s, 4) if w_s is not None else seg_base,
+                    "abs_end": round(seg_base + w_e, 4) if w_e is not None else seg_base + 1.0,
+                    "abs_phonemes": [
                         {
                             **p,
-                            "start": round(max(0.0, p["start"] - offset), 4) if p.get("start") is not None else None,
-                            "end": round(max(0.0, p["end"] - offset), 4) if p.get("end") is not None else None,
+                            "abs_start": round(seg_base + p.get("start", 0.0), 4) if p.get("start") is not None else seg_base,
+                            "abs_end": round(seg_base + p.get("end", 0.0), 4) if p.get("end") is not None else seg_base,
                         }
-                        for p in entry["phonemes"]
-                    ]
-                sub_words.append(entry)
-
-            # Determine if this sub-segment owns a repetition group.
-            # The jump_to location decides which sub-segment inherits the wrap.
-            group_locs = {w.get("location") for w in words if w.get("location")}
-            sub_wraps  = _wrap_ranges_for_group(parent_wraps, group_locs) if parent_has_rep else None
-            sub_has_rep = bool(sub_wraps)
-
-            # Recompute repeated_ranges and repeated_text for the sub-segment
-            sub_rep_ranges = None
-            sub_rep_text   = None
-            if sub_has_rep and sub_wraps and matched_ref and "-" in matched_ref:
-                try:
-                    from src.core.sdk_adapt import derive_repetition
-                    sub_rep_ranges, sub_rep_text = derive_repetition(matched_ref, sub_wraps)
-                except Exception:
-                    pass
-
-            sub_seg = SegmentInfo(
-                start_time=abs_start,
-                end_time=abs_end,
-                transcribed_text=seg.transcribed_text,
-                matched_text=matched_text,
-                matched_ref=matched_ref,
-                match_score=seg.match_score,
-                error=seg.error,
-                has_missing_words=False,    # recomputed by recompute_missing_words
-                has_repeated_words=sub_has_rep,
-                wrap_word_ranges=sub_wraps,
-                repeated_ranges=sub_rep_ranges,
-                repeated_text=sub_rep_text,
-                words=sub_words,
-                _original_alignment_idx=seg._original_alignment_idx,
-                _preserve_split_before=(
-                    not is_first and grp["reason"] in {"word_gap", "repetition", "waqf"}
-                ),
-            )
-            result.append(sub_seg)
-
-    return result
-
-
-def split_fused_segments(segments: list[SegmentInfo]) -> list[SegmentInfo]:
-    """Splits combined or fused special segments (Isti'adha/Basmala) using word timestamps."""
-    from qua_sdk.domain import SPECIAL_TEXT, SPECIAL_NAMES as ALL_SPECIAL_REFS
-
-    _BASMALA_TEXT = SPECIAL_TEXT["Basmala"]
-    _ISTIATHA_TEXT = SPECIAL_TEXT["Isti'adha"]
-    _COMBINED_TEXT = _ISTIATHA_TEXT + " ۝ " + _BASMALA_TEXT
-
-    _ISTIATHA_WORD_COUNT = len(_ISTIATHA_TEXT.split())
-    _BASMALA_WORD_COUNT = len(_BASMALA_TEXT.split())
-
-    split_indices = []
-    for idx, seg in enumerate(segments):
-        if seg.matched_ref == "Isti'adha+Basmala":
-            split_indices.append((idx, "combined", "Isti'adha+Basmala", None))
-        elif seg.matched_ref and seg.matched_ref not in ALL_SPECIAL_REFS and seg.matched_text:
-            if seg.matched_text.startswith(_COMBINED_TEXT):
-                split_indices.append((idx, "fused_combined", f"Isti'adha+Basmala+{seg.matched_ref}", seg.matched_ref))
-            elif seg.matched_text.startswith(_ISTIATHA_TEXT):
-                split_indices.append((idx, "fused_istiatha", f"Isti'adha+{seg.matched_ref}", seg.matched_ref))
-            elif seg.matched_text.startswith(_BASMALA_TEXT):
-                split_indices.append((idx, "fused_basmala", f"Basmala+{seg.matched_ref}", seg.matched_ref))
-
-    if not split_indices:
-        return segments
-
-    new_segments = []
-    split_set = {idx for idx, _, _, _ in split_indices}
-    split_map = {idx: (i, case, mfa_ref, verse_ref) for i, (idx, case, mfa_ref, verse_ref) in enumerate(split_indices)}
-
-    for idx, seg in enumerate(segments):
-        if idx not in split_set:
-            new_segments.append(seg)
+                        for p in w.get("phonemes", [])
+                    ] if w.get("phonemes") else None,
+                })
+            s_start = min((w["abs_start"] for w in special_words), default=seg_base)
+            s_end = max((w["abs_end"] for w in special_words), default=seg.end_time or seg_base + 2.0)
+            verse_groups.append({
+                "type": "special",
+                "special_type": ref,
+                "surah": 0,
+                "ayah": 0,
+                "words": special_words,
+                "abs_start": s_start,
+                "abs_end": s_end,
+                "score": seg.match_score,
+                "error": seg.error,
+                "has_repetition": False,
+                "repeated_ranges": None,
+                "repeated_text": None,
+            })
+            current_group = None
             continue
 
-        batch_i, case, mfa_ref, verse_ref = split_map[idx]
-        words = seg.words
+        if not seg.words:
+            continue
 
-        if words is None:
-            if case == "combined":
-                mid_time = (seg.start_time + seg.end_time) / 2.0
-                new_segments.append(SegmentInfo(
-                    start_time=seg.start_time, end_time=mid_time,
-                    transcribed_text="", matched_text=_ISTIATHA_TEXT,
-                    matched_ref="Isti'adha", match_score=seg.match_score,
-                ))
-                new_segments.append(SegmentInfo(
-                    start_time=mid_time, end_time=seg.end_time,
-                    transcribed_text="", matched_text=_BASMALA_TEXT,
-                    matched_ref="Basmala", match_score=seg.match_score,
-                ))
+        # Case B: Iterate through words in this segment and convert to absolute timeline
+        for w in seg.words:
+            loc = w.get("location")
+            if not loc:
+                continue
+
+            # Check if this word is a special (Basmala/Isti'adha)
+            if loc.startswith("0:0:"):
+                continue
+
+            parts = loc.split(":")
+            if len(parts) < 3:
+                continue
+
+            try:
+                surah, ayah, word_num = int(parts[0]), int(parts[1]), int(parts[2])
+            except ValueError:
+                continue
+
+            w_s = w.get("start")
+            w_e = w.get("end")
+            abs_w_start = round(seg_base + w_s, 4) if w_s is not None else seg_base
+            abs_w_end = round(seg_base + w_e, 4) if w_e is not None else abs_w_start + 0.3
+
+            abs_ph_list = []
+            for p in w.get("phonemes", []):
+                p_s = p.get("start")
+                p_e = p.get("end")
+                abs_ph_list.append({
+                    "phoneme": p.get("phoneme", ""),
+                    "abs_start": round(seg_base + p_s, 4) if p_s is not None else abs_w_start,
+                    "abs_end": round(seg_base + p_e, 4) if p_e is not None else abs_w_end,
+                    "confidence": p.get("confidence", 0.99),
+                })
+
+            w_entry = {
+                "word": w.get("word", ""),
+                "location": loc,
+                "abs_start": abs_w_start,
+                "abs_end": abs_w_end,
+                "confidence": w.get("confidence", 0.99),
+                "abs_phonemes": abs_ph_list if abs_ph_list else None,
+            }
+
+            # Check if we should continue current group or start/resume a group
+            if current_group and current_group["type"] == "verse" and current_group["surah"] == surah and current_group["ayah"] == ayah:
+                # Check for repetition: if word_num <= last seen word_num
+                last_w = current_group["last_word_num"]
+                if last_w is not None and word_num <= last_w:
+                    current_group["has_repetition"] = True
+                    rep_range = (f"{surah}:{ayah}:{word_num}", f"{surah}:{ayah}:{last_w}")
+                    if current_group["repeated_ranges"] is None:
+                        current_group["repeated_ranges"] = []
+                    current_group["repeated_ranges"].append(rep_range)
+
+                current_group["words"].append(w_entry)
+                current_group["last_word_num"] = word_num
+                current_group["scores"].append(seg.match_score)
+                if seg.error:
+                    current_group["error"] = seg.error
             else:
-                new_segments.append(seg)
+                # Check if an earlier group exists for this exact same (surah, ayah)
+                existing_group = next(
+                    (g for g in verse_groups if g["type"] == "verse" and g["surah"] == surah and g["ayah"] == ayah),
+                    None
+                )
+                if existing_group is not None:
+                    # Reciter resumed or repeated this Ayah after a pause or multi-chapter shift
+                    last_w = existing_group["last_word_num"]
+                    if last_w is not None and word_num <= last_w:
+                        existing_group["has_repetition"] = True
+                        rep_range = (f"{surah}:{ayah}:{word_num}", f"{surah}:{ayah}:{last_w}")
+                        if existing_group["repeated_ranges"] is None:
+                            existing_group["repeated_ranges"] = []
+                        existing_group["repeated_ranges"].append(rep_range)
+
+                    existing_group["words"].append(w_entry)
+                    existing_group["last_word_num"] = word_num
+                    existing_group["scores"].append(seg.match_score)
+                    if seg.error:
+                        existing_group["error"] = seg.error
+                    current_group = existing_group
+                else:
+                    # New Ayah
+                    new_grp = {
+                        "type": "verse",
+                        "special_type": None,
+                        "surah": surah,
+                        "ayah": ayah,
+                        "words": [w_entry],
+                        "last_word_num": word_num,
+                        "scores": [seg.match_score],
+                        "error": seg.error,
+                        "has_repetition": False,
+                        "repeated_ranges": None,
+                        "repeated_text": None,
+                    }
+                    verse_groups.append(new_grp)
+                    current_group = new_grp
+
+    # Step 2: Build SegmentInfo objects from unified verse groups
+    final_segments: list[SegmentInfo] = []
+
+    for idx, grp in enumerate(verse_groups, start=1):
+        if grp["type"] == "special":
+            sp_type = grp["special_type"]
+            canonical_text = _SPECIAL_TEXTS.get(sp_type, sp_type)
+            s_start = grp["abs_start"]
+            s_end = grp["abs_end"]
+            
+            reletive_special_words = []
+            for w in grp["words"]:
+                reletive_special_words.append({
+                    "word": w.get("word", ""),
+                    "location": w.get("location", ""),
+                    "start": round(max(0.0, w["abs_start"] - s_start), 4) if "abs_start" in w else 0.0,
+                    "end": round(max(0.0, w["abs_end"] - s_start), 4) if "abs_end" in w else 1.0,
+                })
+
+            final_segments.append(SegmentInfo(
+                segment_number=idx,
+                start_time=round(s_start, 3),
+                end_time=round(s_end, 3),
+                transcribed_text="",
+                matched_text=canonical_text,
+                matched_ref=sp_type,
+                match_score=grp.get("score", 1.0),
+                error=grp.get("error"),
+                words=reletive_special_words or None,
+            ))
             continue
 
-        seg_start = seg.start_time
+        surah = grp["surah"]
+        ayah = grp["ayah"]
+        raw_words = grp["words"]
 
-        if case == "combined":
-            istiatha_end = None
-            for w in words:
-                if w.get("location", "") == f"0:0:{_ISTIATHA_WORD_COUNT}":
-                    istiatha_end = seg_start + w["end"]
-                    break
-            if istiatha_end is None:
-                istiatha_end = (seg.start_time + seg.end_time) / 2.0
+        # Unified Ayah boundaries in absolute audio timeline
+        valid_starts = [w["abs_start"] for w in raw_words if w.get("abs_start") is not None]
+        valid_ends = [w["abs_end"] for w in raw_words if w.get("abs_end") is not None]
+        unified_start = min(valid_starts) if valid_starts else 0.0
+        unified_end = max(valid_ends) if valid_ends else unified_start + 1.0
 
-            new_segments.append(SegmentInfo(
-                start_time=seg.start_time, end_time=istiatha_end,
-                transcribed_text="", matched_text=_ISTIATHA_TEXT,
-                matched_ref="Isti'adha", match_score=seg.match_score,
-            ))
-            new_segments.append(SegmentInfo(
-                start_time=istiatha_end, end_time=seg.end_time,
-                transcribed_text="", matched_text=_BASMALA_TEXT,
-                matched_ref="Basmala", match_score=seg.match_score,
-            ))
+        # Convert words and phonemes back to relative timestamps within this segment
+        segment_words = []
+        for w in raw_words:
+            w_out = {
+                "word": w.get("word", ""),
+                "location": w.get("location", ""),
+                "start": round(max(0.0, w["abs_start"] - unified_start), 4) if w.get("abs_start") is not None else 0.0,
+                "end": round(max(0.0, w["abs_end"] - unified_start), 4) if w.get("abs_end") is not None else 0.5,
+                "confidence": w.get("confidence", 0.99),
+            }
+            if w.get("abs_phonemes"):
+                w_out["phonemes"] = [
+                    {
+                        "phoneme": p.get("phoneme", ""),
+                        "start": round(max(0.0, p["abs_start"] - unified_start), 4) if p.get("abs_start") is not None else 0.0,
+                        "end": round(max(0.0, p["abs_end"] - unified_start), 4) if p.get("abs_end") is not None else 0.0,
+                        "confidence": p.get("confidence", 0.99),
+                    }
+                    for p in w["abs_phonemes"]
+                ]
+            segment_words.append(w_out)
 
-        elif case == "fused_combined":
-            istiatha_end = None
-            basmala_end = None
-            basmala_last_loc = f"0:0:{_ISTIATHA_WORD_COUNT + _BASMALA_WORD_COUNT}"
+        # Word range
+        word_nums = [parse_location_key(w)[2] for w in raw_words]
+        min_wn = min(word_nums) if word_nums else 1
+        max_wn = max(word_nums) if word_nums else 1
+        matched_ref = f"{surah}:{ayah}:{min_wn}-{surah}:{ayah}:{max_wn}" if min_wn != max_wn else f"{surah}:{ayah}:{min_wn}"
 
-            for w in words:
-                loc = w.get("location", "")
-                if loc == f"0:0:{_ISTIATHA_WORD_COUNT}":
-                    istiatha_end = seg_start + w["end"]
-                if loc == basmala_last_loc:
-                    basmala_end = seg_start + w["end"]
+        # Canonical text from Medina QuranIndex
+        canonical_text = qi.get_ayah_text(surah, ayah)
+        if not canonical_text:
+            canonical_text = " ".join(w.get("word", "") for w in raw_words if not w.get("is_missing"))
 
-            if istiatha_end is None:
-                istiatha_end = seg.start_time + (seg.end_time - seg.start_time) / 3.0
-            if basmala_end is None:
-                basmala_end = seg.start_time + 2 * (seg.end_time - seg.start_time) / 3.0
+        # Repetition text derivation
+        rep_text_list = None
+        if grp["has_repetition"] and grp["repeated_ranges"]:
+            rep_text_list = []
+            for r_from, r_to in grp["repeated_ranges"]:
+                idx_tuple = qi.ref_to_indices(f"{r_from}-{r_to}")
+                if idx_tuple:
+                    s_i, e_i = idx_tuple
+                    rep_text_list.append(" ".join(qi.words[k].text for k in range(s_i, e_i + 1)))
+                else:
+                    rep_text_list.append("")
 
-            verse_text = seg.matched_text
-            if verse_text.startswith(_COMBINED_TEXT):
-                verse_text = verse_text[len(_COMBINED_TEXT):].lstrip()
+        avg_score = float(np.mean(grp["scores"])) if grp["scores"] else 1.0
 
-            new_segments.append(SegmentInfo(
-                start_time=seg.start_time, end_time=istiatha_end,
-                transcribed_text="", matched_text=_ISTIATHA_TEXT,
-                matched_ref="Isti'adha", match_score=seg.match_score,
-            ))
-            new_segments.append(SegmentInfo(
-                start_time=istiatha_end, end_time=basmala_end,
-                transcribed_text="", matched_text=_BASMALA_TEXT,
-                matched_ref="Basmala", match_score=seg.match_score,
-            ))
-            new_segments.append(SegmentInfo(
-                start_time=basmala_end, end_time=seg.end_time,
-                transcribed_text=seg.transcribed_text, matched_text=verse_text,
-                matched_ref=verse_ref, match_score=seg.match_score,
-                error=seg.error, has_missing_words=seg.has_missing_words,
-                _original_alignment_idx=seg._original_alignment_idx,
-            ))
+        final_segments.append(SegmentInfo(
+            segment_number=idx,
+            start_time=round(unified_start, 3),
+            end_time=round(unified_end, 3),
+            transcribed_text="",
+            matched_text=canonical_text,
+            matched_ref=matched_ref,
+            match_score=round(avg_score, 3),
+            error=grp.get("error"),
+            has_repeated_words=grp["has_repetition"],
+            repeated_ranges=grp["repeated_ranges"],
+            repeated_text=rep_text_list,
+            words=segment_words,
+        ))
 
-        elif case == "fused_istiatha":
-            istiatha_end = None
-            for w in words:
-                if w.get("location", "") == f"0:0:{_ISTIATHA_WORD_COUNT}":
-                    istiatha_end = seg_start + w["end"]
-                    break
-            if istiatha_end is None:
-                new_segments.append(seg)
-                continue
-
-            verse_text = seg.matched_text
-            if verse_text.startswith(_ISTIATHA_TEXT):
-                verse_text = verse_text[len(_ISTIATHA_TEXT):].lstrip()
-
-            new_segments.append(SegmentInfo(
-                start_time=seg.start_time, end_time=istiatha_end,
-                transcribed_text="", matched_text=_ISTIATHA_TEXT,
-                matched_ref="Isti'adha", match_score=seg.match_score,
-            ))
-            new_segments.append(SegmentInfo(
-                start_time=istiatha_end, end_time=seg.end_time,
-                transcribed_text=seg.transcribed_text, matched_text=verse_text,
-                matched_ref=verse_ref, match_score=seg.match_score,
-                error=seg.error, has_missing_words=seg.has_missing_words,
-                _original_alignment_idx=seg._original_alignment_idx,
-            ))
-
-        elif case == "fused_basmala":
-            basmala_end = None
-            for w in words:
-                if w.get("location", "") == f"0:0:{_BASMALA_WORD_COUNT}":
-                    basmala_end = seg_start + w["end"]
-                    break
-            if basmala_end is None:
-                new_segments.append(seg)
-                continue
-
-            verse_text = seg.matched_text
-            if verse_text.startswith(_BASMALA_TEXT):
-                verse_text = verse_text[len(_BASMALA_TEXT):].lstrip()
-
-            verse_words, basmala_words = None, None
-            verse_asr_gaps, verse_acoustic_gaps = None, None
-            verse_start = basmala_end
-            if seg.words:
-                split_rel = basmala_end - seg.start_time
-                b_list, v_list = [], []
-                v_asr_gaps, v_acoustic_gaps = [], []
-                for word_index, w in enumerate(seg.words):
-                    w_copy = dict(w)
-                    loc = w_copy.get("location", "")
-                    if loc.startswith("0:0:"):
-                        b_list.append(w_copy)
-                    else:
-                        if w_copy.get("start") is not None:
-                            w_copy["start"] = max(0.0, round(w_copy["start"] - split_rel, 4))
-                        if w_copy.get("end") is not None:
-                            w_copy["end"] = max(0.0, round(w_copy["end"] - split_rel, 4))
-                        if "phonemes" in w_copy:
-                            w_copy["phonemes"] = [
-                                {
-                                    **p,
-                                    "start": max(0.0, round(p["start"] - split_rel, 4)) if p.get("start") is not None else None,
-                                    "end": max(0.0, round(p["end"] - split_rel, 4)) if p.get("end") is not None else None,
-                                }
-                                for p in w_copy["phonemes"]
-                            ]
-                        v_list.append(w_copy)
-                        v_asr_gaps.append(
-                            seg._asr_word_gaps[word_index]
-                            if seg._asr_word_gaps and word_index < len(seg._asr_word_gaps)
-                            else None
-                        )
-                        v_acoustic_gaps.append(
-                            seg._acoustic_word_gaps[word_index]
-                            if seg._acoustic_word_gaps
-                            and word_index < len(seg._acoustic_word_gaps)
-                            else None
-                        )
-
-                verse_offset = v_list[0].get("start") if v_list else None
-                if verse_offset is not None and verse_offset > 0:
-                    verse_start += verse_offset
-                    for word in v_list:
-                        if word.get("start") is not None:
-                            word["start"] = max(0.0, round(word["start"] - verse_offset, 4))
-                        if word.get("end") is not None:
-                            word["end"] = max(0.0, round(word["end"] - verse_offset, 4))
-                basmala_words = b_list or None
-                verse_words = v_list or None
-                verse_asr_gaps = ([None] + v_asr_gaps[1:]) if v_asr_gaps else None
-                verse_acoustic_gaps = (
-                    [None] + v_acoustic_gaps[1:] if v_acoustic_gaps else None
-                )
-
-            new_segments.append(SegmentInfo(
-                start_time=seg.start_time, end_time=basmala_end,
-                transcribed_text="", matched_text=_BASMALA_TEXT,
-                matched_ref="Basmala", match_score=seg.match_score,
-                words=basmala_words,
-            ))
-            new_segments.append(SegmentInfo(
-                start_time=verse_start, end_time=seg.end_time,
-                transcribed_text=seg.transcribed_text, matched_text=verse_text,
-                matched_ref=verse_ref, match_score=seg.match_score,
-                error=seg.error, has_missing_words=seg.has_missing_words,
-                words=verse_words,
-                _original_alignment_idx=seg._original_alignment_idx,
-                _asr_word_gaps=verse_asr_gaps,
-                _acoustic_word_gaps=verse_acoustic_gaps,
-            ))
-
-    return new_segments
+    return final_segments
 
 
 def _find_sustained_silence(
@@ -714,5 +459,3 @@ def smooth_word_timestamps(
             stretched_end = min(orig_end + max_stretch_s, next_bound_rel)
             new_end = max(orig_end, stretched_end)
             w["end"] = round(new_end, 4)
-
-

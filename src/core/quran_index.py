@@ -87,6 +87,21 @@ class QuranIndex:
         except Exception:
             return None
 
+    def get_ayah_words(self, surah: int, ayah: int) -> list[WordInfo]:
+        """Returns all canonical words for a given surah and ayah."""
+        w_list = []
+        w_num = 1
+        while (surah, ayah, w_num) in self.word_lookup:
+            idx = self.word_lookup[(surah, ayah, w_num)]
+            w_list.append(self.words[idx])
+            w_num += 1
+        return w_list
+
+    def get_ayah_text(self, surah: int, ayah: int) -> str:
+        """Returns full canonical Uthmani text for an ayah."""
+        words = self.get_ayah_words(surah, ayah)
+        return " ".join(w.text for w in words)
+
 
 def parse_location_key(item) -> tuple[int, int, int]:
     """Parses location string like '2:255:3' or dict with location into (2, 255, 3)."""

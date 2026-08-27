@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 from qua_sdk.schemas import Alignment, Emissions, Regions
-from src.phase4_splitting.auto_merge import stamp_auto_merge_group, waqf_sakt_consumed_by_target
 from src.core.segment_types import ProfilingData, SegmentInfo, compute_reading_sequence
 
 
@@ -13,7 +12,6 @@ def alignment_to_segment_infos(
 ) -> list[SegmentInfo]:
     """Maps SDK Alignment output onto SegmentInfo list."""
     tokens = emissions.tokens
-    auto_merged = waqf_sakt_consumed_by_target(alignment)
     segments: list[SegmentInfo] = []
 
     for seg in alignment.segments:
@@ -40,9 +38,6 @@ def alignment_to_segment_infos(
             repeated_text=rep_text,
             _original_alignment_idx=seg.id + 1,
         )
-        consumed = auto_merged.get(seg.id)
-        if consumed is not None:
-            stamp_auto_merge_group(info, seg, consumed, regions)
         segments.append(info)
 
     return segments
