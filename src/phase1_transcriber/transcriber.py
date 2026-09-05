@@ -1,6 +1,8 @@
 """Acoustic Model Wrapper for Zipformer2 Arabic Phoneme CTC (ONNXRuntime)."""
 
 import os
+import sys
+import time
 import urllib.request
 from pathlib import Path
 import numpy as np
@@ -8,6 +10,8 @@ import librosa
 import pyloudnorm as pyln
 import onnxruntime as ort
 import kaldi_native_fbank as knf
+
+from src.core.models import PhonemeToken, RawTranscriptionResult
 
 MODEL_DIR = Path(__file__).parent.parent.parent / "data" / "onnx"
 ZIPFORMER_ONNX_PATH = str(MODEL_DIR / "zipformer_p_arabic_v3.int8.onnx")
@@ -113,15 +117,45 @@ class ZipformerONNX:
         feats = np.array([fbank.get_frame(i) for i in range(num_frames)], dtype=np.float32)
         return feats
 
+    def transcribe_audio(
+        self,
+        audio: np.ndarray,
+        sample_rate: int = 16000,
+        silence_pad_frames: int = 105,
+        safe_lufs: bool = True,
+        on_progress=None,
+    ) -> RawTranscriptionResult:
+        """Alias matching Dart OfflineTranscriber.transcribeAudio."""
+        return self.transcribe(
+            audio=audio,
+            orig_sr=sample_rate,
+            safe_lufs=safe_lufs,
+            silence_pad_frames=silence_pad_frames,
+            progress_callback=on_progress,
+        )
+
     def transcribe(
         self,
         audio: np.ndarray,
         orig_sr: int = 16000,
-        safe_lufs: bool = True
-    ) -> tuple[str, list[dict], np.ndarray]:
-        """Transcribe an audio segment to phonemes, per-phoneme timings, and full logprobs matrix."""
+        safe_lufs: bool = True,
+        silence_pad_frames: int = 105,
+        progress_callback=None,
+    ) -> RawTranscriptionResult:
+        """Transcribe an audio segment to phonemes, per-phoneme timings, and full logprobs matrix.
+
+        Returns:
+            RawTranscriptionResult (also unpackable as (full_text, phonemes_timestamps, valid_logprobs))
+        """
         if self.session is None or len(audio) == 0:
-            return "", [], np.empty((0, len(self.vocab)), dtype=np.float32)
+            return RawTranscriptionResult(
+                phonemes=[],
+                raw_tokens=[],
+                raw_timestamps=[],
+                logprobs_matrix=np.empty((0, len(self.vocab)), dtype=np.float32),
+                num_frames=0,
+                vocab_size=len(self.vocab),
+            )
 
         clean_audio = audio.astype(np.float32)
 
@@ -134,9 +168,6 @@ class ZipformerONNX:
         if safe_lufs and rms < 1e-3:
             should_normalize = False
 
-        import time
-        init_start = time.time()
-        
         if should_normalize:
             try:
                 import warnings
@@ -149,23 +180,29 @@ class ZipformerONNX:
             except Exception:
                 pass
 
-        norm_time = time.time()
-
         peak = np.max(np.abs(clean_audio)) if len(clean_audio) > 0 else 0.0
         if peak > 1.0:
             clean_audio = clean_audio / peak
 
         feats = self._extract_fbank(clean_audio)
-        fbank_time = time.time()
 
         if len(feats) == 0:
-            return "", [], np.empty((0, len(self.vocab)), dtype=np.float32)
+            return RawTranscriptionResult(
+                phonemes=[],
+                raw_tokens=[],
+                raw_timestamps=[],
+                logprobs_matrix=np.empty((0, len(self.vocab)), dtype=np.float32),
+                num_frames=0,
+                vocab_size=len(self.vocab),
+            )
 
-        # Append right-context silence frames (~1.05s / 105 frames) so the streaming buffer
+        # Append right-context silence frames so the streaming buffer
         # fully flushes all acoustic information from trailing speech.
-        silence_pad_frames = 105
-        silence_feats = np.zeros((silence_pad_frames, 80), dtype=np.float32)
-        padded_feats = np.vstack([feats, silence_feats])
+        if silence_pad_frames > 0:
+            silence_feats = np.zeros((silence_pad_frames, 80), dtype=np.float32)
+            padded_feats = np.vstack([feats, silence_feats])
+        else:
+            padded_feats = feats
 
         states = self._create_initial_states()
         num_frames = len(padded_feats)
@@ -193,30 +230,44 @@ class ZipformerONNX:
 
             pos += CHUNK_LEN
             
-            # Safe, short progress bar that won't trigger terminal word-wrap flooding
+            percent = (pos / num_frames) * 100.0
+            elapsed = max(0.001, time.time() - start_time)
+            processed_sec = (pos / num_frames) * (len(clean_audio) / SAMPLE_RATE)
+            speed = processed_sec / elapsed if elapsed > 0 else 0.0
+
+            if progress_callback is not None:
+                progress_callback(percent, speed, elapsed)
+
             if pos - last_print_pos >= 2000:
-                percent = (pos / num_frames) * 100
-                elapsed = max(0.1, time.time() - start_time)
-                speed = (pos / 100.0) / elapsed
                 msg = f"\rTranscribing ({len(clean_audio)/SAMPLE_RATE:.1f}s)... {percent:.1f}% | Speed: {speed:.1f}x"
                 sys.stdout.write(msg.ljust(60))
                 sys.stdout.flush()
                 last_print_pos = pos
 
         if not all_chunk_logprobs:
-            return "", [], np.empty((0, len(self.vocab)), dtype=np.float32)
+            return RawTranscriptionResult(
+                phonemes=[],
+                raw_tokens=[],
+                raw_timestamps=[],
+                logprobs_matrix=np.empty((0, len(self.vocab)), dtype=np.float32),
+                num_frames=0,
+                vocab_size=len(self.vocab),
+            )
 
         full_logprobs = np.concatenate(all_chunk_logprobs, axis=0)  # shape: [T_total, 251]
 
-        # Calculate the number of output frames corresponding to original non-padded audio
-        actual_output_frames = max(1, int(np.ceil(len(feats) / 4.0)))
+        # Calculate the number of output frames corresponding to original non-padded audio (rawFrames ~/ 4 in Dart)
+        actual_output_frames = max(1, len(feats) // 4)
         total_valid_frames = min(len(full_logprobs), actual_output_frames + 4)
         valid_logprobs = full_logprobs[:total_valid_frames]
 
         # Greedy CTC decoding
         pred_idx = np.argmax(valid_logprobs, axis=-1)
 
-        phonemes_timestamps = []
+        phonemes: list[PhonemeToken] = []
+        raw_tokens: list[str] = []
+        raw_timestamps: list[float] = []
+
         prev_idx = -1
         current_run_frames = []
         current_tok_idx = -1
@@ -235,13 +286,24 @@ class ZipformerONNX:
                 pk_sorted = np.sort(valid_logprobs[pk_frame])[::-1]
                 margin_pk = float(pk_sorted[0] - pk_sorted[1]) if len(pk_sorted) > 1 else 1.0
 
-                phonemes_timestamps.append({
-                    "phoneme": tok_str,
-                    "word": tok_str,
-                    "start": round(start_f * FRAME_TIME_STEP, 4),
-                    "end": round(end_f * FRAME_TIME_STEP, 4),
-                    "margin_peak": round(margin_pk, 4),
-                })
+                start_sec = round(start_f * FRAME_TIME_STEP, 4)
+                end_sec = round(end_f * FRAME_TIME_STEP, 4)
+                pk_time = round(pk_frame * FRAME_TIME_STEP, 4)
+
+                token_obj = PhonemeToken(
+                    phoneme=tok_str,
+                    start=start_sec,
+                    end=end_sec,
+                    confidence=round(margin_pk, 4),
+                    is_recovered=False,
+                    start_frame=start_f,
+                    end_frame=end_f,
+                    peak_frame=pk_frame,
+                    peak_timestamp=pk_time,
+                )
+                phonemes.append(token_obj)
+                raw_tokens.append(tok_str)
+                raw_timestamps.append(pk_time)
 
         for f_idx, idx in enumerate(pred_idx):
             if idx == prev_idx:
@@ -255,5 +317,16 @@ class ZipformerONNX:
 
         _flush_phoneme_run()
 
-        full_text = " ".join([p["phoneme"] for p in phonemes_timestamps])
-        return full_text, phonemes_timestamps, valid_logprobs
+        return RawTranscriptionResult(
+            phonemes=phonemes,
+            raw_tokens=raw_tokens,
+            raw_timestamps=raw_timestamps,
+            logprobs_matrix=valid_logprobs,
+            num_frames=total_valid_frames,
+            vocab_size=len(self.vocab),
+        )
+
+
+# Dart class name alias
+OfflineTranscriber = ZipformerONNX
+

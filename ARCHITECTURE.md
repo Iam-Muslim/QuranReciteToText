@@ -1,112 +1,95 @@
 # QuranReciteToText Architecture & Pipeline Guide
 
-## 1. Overview
-`QuranReciteToText` is an offline, high-precision Quran recitation transcription and forced-alignment engine. It takes an audio recitation file and generates frame-accurate word-level and letter-level timestamps aligned to the standard Medina Mushaf (Hafs 'an 'Asim).
+`QuranReciteToText` is an offline, high-precision Quran recitation transcription and forced-alignment engine (100% pure Python / Dart parity). It takes an audio recitation file and generates frame-accurate word-level and letter-level timestamps aligned to the Medina Mushaf (Hafs 'an 'Asim).
 
 ---
 
-## 2. Directory Layout & Module Responsibilities
+## 1. Directory Structure
+
+The repository mirrors the modern Flutter/Dart engine (`ReciteQuran`) structure 1-to-1:
 
 ```
 QuranReciteToText/
-├── config.py                   # Global paths, flags, and feature toggles
-├── run.py                      # CLI entry point (multiprocessing / thread tuning)
+├── config.py                       # Global paths, audio specs, and PipelineConfig
+├── run.py                          # CLI runner
+├── requirements.txt                # Pure Python dependencies (no C++ wheels, no qua_sdk)
 ├── data/
-│   ├── onnx/                   # Zipformer INT8 acoustic models & tokens.txt
-│   ├── ordered_quran_phonemes.json # Canonical Medina Mushaf phoneme sequences
-│   └── qpc_hafs.json           # Uthmani text reference
+│   ├── onnx/                       # Zipformer INT8 acoustic models & tokens.txt
+│   ├── ordered_quran_phonemes.json # Medina Mushaf phoneme sequence reference
+│   ├── ref_norm_ph.txt             # 311k normalized Medina phoneme reference text
+│   └── ph_index.npy                # (311886, 7) uint16 binary Quran index
 └── src/
-    ├── core/                   # Core shared utilities, models, and orchestration
-    │   ├── main_flow.py        # Central 4-phase pipeline coordinator (process_audio)
-    │   ├── segment_types.py    # Canonical SegmentInfo dataclass & JSON export
-    │   ├── sdk_adapt.py        # QUA SDK data converters
-    │   ├── quran_index.py      # Medina Mushaf canonical word lookups
-    │   └── updater.py          # Background GitHub release checker
-    ├── phase1_transcribe/      # Acoustic feature extraction & inference
-    │   ├── stream.py           # Continuous ASR stream & natural pause chunking
-    │   └── zipformer.py        # ONNX Zipformer2 acoustic model inference
-    ├── phase2_matching/        # Quran text alignment & verse resolution
-    │   ├── matcher.py          # Sequence matching, repetition refinement, gap recovery
-    │   └── normalize.py        # Phoneme tokenization & Tajweed substitution penalty engine
-    ├── phase3_alignment/       # Precise timestamp forced alignment
-    │   └── ctc_align.py        # Viterbi trellis forced alignment (word & letter timings)
-    └── phase4_splitting/      # Post-alignment splitting & formatting
-        ├── ayah_split.py       # Special opening & Ayah boundary splitting + word smoothing
-        ├── auto_merge.py       # Same-Ayah continuous segment fusion
-        └── missing_words.py    # Unrecited word detection & injection
+    ├── core/                       # Core shared models, decoding & orchestration
+    │   ├── audio_decoder.py        # Audio loading, decoding & loudness normalization
+    │   ├── main_flow.py            # Central 4-phase coordinator (AudioPipeline & process_audio)
+    │   └── models.py               # Unified data models matching Dart models.dart
+    ├── phase1_transcriber/         # Phase 1: Pure ONNX CTC Transcription & Speech Recovery
+    │   ├── transcriber.py          # ZipformerONNX / OfflineTranscriber
+    │   └── speech_recovery.py      # Energy-aware speech & repetition hole recovery
+    ├── phase2_aligner/             # Phase 2: CTC Viterbi Trellis Forced Alignment
+    │   └── ctc_aligner.py          # Dynamic programming Viterbi trellis & acoustic crossover
+    ├── phase3_matcher/             # Phase 3: Tajweed Phonetic Matcher & Ayah Sequencer
+    │   ├── matcher_config.py       # Scoring thresholds & presets (normal, easy, strict)
+    │   ├── phonetic_cost_engine.py # Tajweed & acoustic confusion cost engine
+    │   ├── dictation_matcher.py    # Semi-global DTW with free lead-in noise skipping
+    │   ├── dictation_sequencer.py  # Continuous word stream sequencer & repetition state machine
+    │   ├── quran_word_matcher.py   # Preamble detection, Ayah partitioning & BaseQuranMatcher
+    │   └── surah_finder/           # Global fast Quran search
+    │       ├── fuzzy_search.py     # Gene Myers' 64-bit Bit-Parallel Substring Search
+    │       ├── phonetic_search.py  # Binary NPY index search engine
+    │       ├── multi_surah_finder.py# Single/multi-Surah timeline clustering
+    │       └── models.py           # SurahMatchSpan, SurahAudioBlock, etc.
+    └── phase4_export/              # Phase 4: Post-Processing, Sub-Segmentation & JSON Export
+        └── quran_json_exporter.py  # Pause calculation, Waqf sub-segments & 4 JSON exports
 ```
 
 ---
 
-## 3. Four-Phase Data Flow
+## 2. Four-Phase Pipeline Flow
 
-```mermaid
-flowchart TD
-    Audio[Input Audio] --> P1[Phase 1: Continuous ASR stream.py]
-    P1 -->|Phoneme Tokens & Logprobs| P2[Phase 2: Text Matcher matcher.py]
-    P2 -->|Mapped Medina Quran References| P3[Phase 3: CTC Trellis ctc_align.py]
-    P3 -->|Word & Letter Timestamps| P4[Phase 4: Post-Processing phase4_splitting/]
-    P4 --> Output[output.json: Frame-Accurate Verse Timestamps]
 ```
-
-### **Phase 1: Continuous ASR Transcription (`src/phase1_transcribe/`)**
-* **Model**: Zipformer2 INT8 ONNX acoustic model (40ms encoder step, 25 fps).
-* **Chunking**: Single continuous pass over raw 16kHz PCM buffer. Cuts utterances *only* at natural breath pauses ($\ge 2.0\text{s}$ pause + subsequent phoneme is a valid Arabic voweled consonant `_VALID_STARTERS`).
-
-### **Phase 2: Post-ASR Text Matching (`src/phase2_matching/`)**
-* Maps recognized Tajweed phonemes onto canonical Quranic verses (`Surah:Ayah:Word`).
-* **Repetition Refinement**: Slices and re-transcribes reciter pause-repetitions (e.g. breath repeats) to ensure complex verses are unified into single continuous segments.
-* **Gap Recovery**: Scans gaps $\ge 2.5\text{s}$ for whispered or quiet words.
-
-### **Phase 3: CTC Forced Alignment (`src/phase3_alignment/`)**
-* Runs dynamic programming Viterbi trellis over the Zipformer log-probability matrix $T \times 251$.
-* Extracts frame-perfect start/end millisecond timestamps for every word and letter.
-* Applies $-60\text{ms}$ streaming lookahead delay compensation and energy-weighted blank distribution.
-
-### **Phase 4: Post-Processing & Splitting (`src/phase4_splitting/`)**
-1. **`ayah_split.py`**:
-   * Splits fused openings (*Isti'adha* + *Basmala*).
-   * Splits multi-ayah audio chunks into $1\text{-to-}1$ Ayah cards using CTC word timestamps.
-2. **`auto_merge.py`**:
-   * Fuses continuous fragments of the same Ayah into a unified segment.
-3. **`missing_words.py`**:
-   * Cross-references recited word indices against the canonical Quran dictionary to mark/inject unrecited words.
-4. **`smooth_word_timestamps()`**:
-   * Extends word end timestamps into trailing acoustic silence for smooth karaoke rendering.
+[Input Audio 16kHz PCM]
+       │
+       ▼
+[AudioDecoder] (src/core/audio_decoder.py)
+       │ Decodes & normalizes audio (-23 LUFS / RMS target)
+       ▼
+[Phase 1: Pure ONNX Zipformer CTC Transcription] (src/phase1_transcriber/transcriber.py)
+       │ Outputs raw_phonemes + logprobs_matrix (T x 251)
+       ▼
+[Phase 1.1: Authentic Speech & Repetition Recovery] (src/phase1_transcriber/speech_recovery.py)
+       │ Slices audio gaps (energy > -35dB, duration >= 0.40s), re-transcribes with context padding
+       │ Outputs effective_phonemes + recovery_events + recovery_summary
+       ▼
+[Phase 2: CTC Viterbi Trellis Forced Alignment] (src/phase2_aligner/ctc_aligner.py)
+       │ 6-stage DP Trellis forward/backtrack + acoustic crossover + -60ms lookahead delay
+       │ Outputs aligned_phonemes (frame-accurate acoustic bounds)
+       ▼
+[Phase 3: Tajweed Quran Text Matcher & Sequencer] (src/phase3_matcher/quran_word_matcher.py)
+       │ MultiSurahFinder & PhoneticSearch (Myers 64-bit Bit-Parallel search on binary NPY index)
+       │ PhoneticCostEngine (Tajweed acoustic substitution, insertion, deletion matrix)
+       │ QuranDictationMatcher (Semi-Global DTW with free lead-in noise skipping)
+       │ DictationSequencer (In-order tracking, Wasl merging, omissions, backward repetitions)
+       │ Outputs matched Ayahs, Words, Prologues (Isti'adhah/Basmalah) & Repetitions
+       ▼
+[Phase 4: Post-Processing, Sub-Segmentation & JSON Export] (src/phase4_export/quran_json_exporter.py)
+       │ Inter-word pause calculation (> 1.0s)
+       │ Waqf breath-phrase sub-segmentation & repetition isolation
+       │ Exports 4 canonical JSON files:
+       │   1. raw_transcription.json
+       │   2. recovered_speech.json
+       │   3. ctc_aligned_phonemes.json
+       │   4. output.json
+```
 
 ---
 
-## 4. Key Data Contracts (`SegmentInfo`)
+## 3. Key Data Contracts
 
-Every audio segment is represented by `SegmentInfo` in [segment_types.py](file:///d:/there%20is%20no%20god%20unless%20ALLAH/QuranReciteToText/src/core/segment_types.py):
-
-```python
-@dataclass
-class SegmentInfo:
-    start_time: float                     # Segment start in seconds
-    end_time: float                       # Segment end in seconds
-    transcribed_text: str                 # Recognized phoneme string
-    matched_text: str                     # Canonical Medina Mushaf Arabic text
-    matched_ref: str                      # "surah:ayah:from_word-surah:ayah:to_word"
-    match_score: float                    # Match confidence [0.0, 1.0]
-    words: list[dict] | None = None       # Word-level timing entries
-    has_missing_words: bool = False       # True if unrecited words exist in range
-    has_repeated_words: bool = False      # True if reciter repeated words
-```
-
-Each word in `seg.words`:
-```json
-{
-  "word": "ٱلرَّحْمَـٰنِ",
-  "location": "1:3:1",
-  "start": 0.12,
-  "end": 0.84,
-  "phonemes": [
-    {"char": "ررَ", "start": 0.12, "end": 0.32},
-    {"char": "ح", "start": 0.32, "end": 0.52},
-    {"char": "مَ", "start": 0.52, "end": 0.68},
-    {"char": "اا", "start": 0.68, "end": 0.78},
-    {"char": "نِ", "start": 0.78, "end": 0.84}
-  ]
-}
-```
+* **`PhonemeToken`**: Individual acoustic token with frame bounds and peak confidence:
+  `{ "phoneme": "بِ", "start": 0.12, "end": 0.32, "confidence": 0.95 }`
+* **`QuranWord`**: Aligned Medina Mushaf word:
+  `{ "word": "بِسْمِ", "location": "1:1:1", "start": 0.12, "end": 0.68, "score": 1.0 }`
+* **`AyahSubSegment`**: Natural breath-phrase inside an Ayah:
+  `{ "sub_segment": 1, "start_time": 0.12, "end_time": 3.54, "text": "بِسْمِ ٱللَّهِ ٱلرَّحْمَـٰنِ ٱلرَّحِيمِ", "words_range": "1:1:1-1:1:4" }`
+* **`QuranSegment`**: Canonical 1-Ayah segment containing metadata, words, sub-segments, repetitions, and prologue.

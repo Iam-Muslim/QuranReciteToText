@@ -1,159 +1,483 @@
-"""Pipeline Entry Points — Orchestrates Phase 1, Phase 2, Phase 3, and Phase 4 processing."""
+"""Central Pipeline Coordinator & Entry Point.
 
+Orchestrates the 4 unified phases:
+- Phase 1: Pure ONNX Zipformer CTC Transcription (phase1_transcriber)
+- Phase 1.1: Speech & Repetition Recovery (phase1_transcriber)
+- Phase 2: CTC Viterbi Trellis Forced Alignment (phase2_aligner)
+- Phase 3: Tajweed Quran Text Matcher & Ayah Sequencer (phase3_matcher)
+- Phase 4: Pause Calculation, Subsegmentation & JSON Export (phase4_export)
+
+Mirrors Dart lib/core/pipeline.dart directly.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
 import time
-import subprocess
+import logging
+from typing import Optional, Callable, Dict, Any, List, Union, Tuple
 import numpy as np
 
-from src.core import sdk_adapt
-from src.core.segment_types import ProfilingData
-from src.phase1_transcribe.stream import run_asr_cpu
-from src.phase2_matching.matcher import _run_post_asr_pipeline
-from src.phase3_alignment.ctc_align import run_ctc_alignment
-from src.phase1_transcribe.zipformer import TOKENS_PATH
+from config import (
+    PipelineConfig,
+    SAMPLE_RATE,
+    BLANK_ID,
+    DEFAULT_MODEL_PATH,
+    DEFAULT_TOKENS_PATH,
+    DEFAULT_QURAN_PHONEMES_PATH,
+    DEFAULT_REF_NORM_PH_PATH,
+    DEFAULT_PH_INDEX_PATH,
+    ENABLE_SPEECH_RECOVERY,
+    SPEECH_RECOVERY_ENERGY_THRESHOLD_DB,
+    SPEECH_RECOVERY_MIN_HOLE_DURATION_S,
+    SPEECH_RECOVERY_PADDING_S,
+    SPEECH_RECOVERY_MIN_PHONEMES_IN_GAP,
+)
+from src.core.models import (
+    PipelineStage,
+    PipelineProgressEvent,
+    PipelineProfiling,
+    PipelineResult,
+    PhonemeToken,
+    RecoveryEvent,
+    RecoverySummary,
+    QuranSegment,
+)
+from src.core.audio_decoder import AudioDecoder
+from src.phase1_transcriber.transcriber import OfflineTranscriber
+from src.phase1_transcriber.speech_recovery import SpeechRecoveryEngine
+from src.phase2_aligner.ctc_aligner import CtcViterbiAligner
+from src.phase3_matcher.quran_word_matcher import QuranWordMatcher, BaseQuranMatcher
+from src.phase4_export.quran_json_exporter import QuranJsonExporter
+
+logger = logging.getLogger(__name__)
 
 
-def _resample_audio_ffmpeg(audio_array, orig_sr, target_sr=16000):
-    """Resamples in-memory NumPy audio array to target sample rate using FFmpeg stdin pipe."""
-    command = [
-        'ffmpeg', '-v', 'quiet',
-        '-f', 'f32le', '-ar', str(orig_sr), '-ac', '1',
-        '-i', 'pipe:0',
-        '-f', 'f32le', '-acodec', 'pcm_f32le', '-ac', '1', '-ar', str(target_sr),
-        'pipe:1'
-    ]
-    process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    stdout, stderr = process.communicate(input=audio_array.tobytes())
+class AudioPipeline:
+    """Central 4-phase audio transcription and Quran alignment coordinator."""
 
-    if process.returncode != 0:
-        raise RuntimeError(f"FFmpeg resample failed: {stderr.decode('utf-8', errors='ignore')}")
+    def __init__(self):
+        self.transcriber: OfflineTranscriber = OfflineTranscriber.get_instance()
+        self.matcher: BaseQuranMatcher = QuranWordMatcher()
 
-    return np.frombuffer(stdout, dtype=np.float32)
+    def initialize(
+        self,
+        model_path: str = DEFAULT_MODEL_PATH,
+        tokens_path: str = DEFAULT_TOKENS_PATH,
+        quran_phonemes_path: str = DEFAULT_QURAN_PHONEMES_PATH,
+        ref_norm_ph_path: str = DEFAULT_REF_NORM_PH_PATH,
+        ph_index_path: str = DEFAULT_PH_INDEX_PATH,
+        num_threads: int = 2,
+        custom_matcher: Optional[BaseQuranMatcher] = None,
+    ) -> None:
+        """Initializes acoustic and phonetic reference resources."""
+        if custom_matcher is not None:
+            self.matcher = custom_matcher
+
+        if isinstance(self.matcher, QuranWordMatcher):
+            if not self.matcher.is_initialized:
+                if os.path.exists(quran_phonemes_path):
+                    self.matcher.initialize_from_file(
+                        json_file_path=quran_phonemes_path,
+                        ref_norm_ph_path=ref_norm_ph_path,
+                        ph_index_path=ph_index_path,
+                    )
+
+    def process_audio_file(
+        self,
+        audio_file_path: str,
+        output_dir: str = ".",
+        export_json_files: bool = True,
+        on_progress_event: Optional[Callable[[PipelineProgressEvent], None]] = None,
+        on_progress: Optional[Callable[..., None]] = None,
+    ) -> PipelineResult:
+        """Processes an audio file from path (mirroring Dart AudioPipeline.processAudioFile)."""
+        logger.info(f"[Pipeline] Step 1: Loading audio file: {audio_file_path}")
+        load_start = time.time()
+
+        if on_progress_event:
+            on_progress_event(
+                PipelineProgressEvent(
+                    stage=PipelineStage.loading,
+                    percent=0.0,
+                    elapsed_seconds=0.0,
+                    message="جارٍ قراءة وفك تشفير الملف الصوتي...",
+                )
+            )
+        if on_progress:
+            on_progress(PipelineStage.loading.name, 0.0, 0.0)
+
+        audio_pcm = AudioDecoder.load_audio_file(audio_file_path)
+        audio_duration = len(audio_pcm) / AudioDecoder.target_sample_rate
+        load_time = time.time() - load_start
+
+        logger.info(f"[Pipeline] Audio decoded: {audio_duration:.2f}s in {load_time:.2f}s")
+        if on_progress_event:
+            on_progress_event(
+                PipelineProgressEvent(
+                    stage=PipelineStage.loading,
+                    percent=100.0,
+                    elapsed_seconds=load_time,
+                    message=f"تم فك تشفير الصوت ({audio_duration:.1f} ثانية)",
+                )
+            )
+        if on_progress:
+            on_progress(PipelineStage.loading.name, 100.0, load_time)
+
+        return self.process_pcm(
+            audio_pcm=audio_pcm,
+            load_time=load_time,
+            output_dir=output_dir,
+            export_json_files=export_json_files,
+            on_progress_event=on_progress_event,
+            on_progress=on_progress,
+        )
+
+    def process_audio_bytes(
+        self,
+        audio_bytes: bytes,
+        output_dir: str = ".",
+        export_json_files: bool = True,
+        on_progress_event: Optional[Callable[[PipelineProgressEvent], None]] = None,
+        on_progress: Optional[Callable[..., None]] = None,
+    ) -> PipelineResult:
+        """Processes raw audio file bytes directly in memory."""
+        logger.info(f"[Pipeline] Step 1: Decoding in-memory audio bytes ({len(audio_bytes)} bytes)...")
+        load_start = time.time()
+
+        if on_progress_event:
+            on_progress_event(
+                PipelineProgressEvent(
+                    stage=PipelineStage.loading,
+                    percent=0.0,
+                    elapsed_seconds=0.0,
+                    message="جارٍ قراءة وفك تشفير الملف الصوتي...",
+                )
+            )
+        if on_progress:
+            on_progress(PipelineStage.loading.name, 0.0, 0.0)
+
+        audio_pcm = AudioDecoder.decode_bytes(audio_bytes)
+        audio_duration = len(audio_pcm) / AudioDecoder.target_sample_rate
+        load_time = time.time() - load_start
+
+        if on_progress_event:
+            on_progress_event(
+                PipelineProgressEvent(
+                    stage=PipelineStage.loading,
+                    percent=100.0,
+                    elapsed_seconds=load_time,
+                    message=f"تم فك تشفير الصوت ({audio_duration:.1f} ثانية)",
+                )
+            )
+        if on_progress:
+            on_progress(PipelineStage.loading.name, 100.0, load_time)
+
+        return self.process_pcm(
+            audio_pcm=audio_pcm,
+            load_time=load_time,
+            output_dir=output_dir,
+            export_json_files=export_json_files,
+            on_progress_event=on_progress_event,
+            on_progress=on_progress,
+        )
+
+    def process_pcm(
+        self,
+        audio_pcm: np.ndarray,
+        load_time: float = 0.0,
+        output_dir: str = ".",
+        export_json_files: bool = True,
+        on_progress_event: Optional[Callable[[PipelineProgressEvent], None]] = None,
+        on_progress: Optional[Callable[..., None]] = None,
+    ) -> PipelineResult:
+        """Common pipeline execution from 16kHz normalized mono PCM (mirrors Dart processPcm)."""
+        overall_start = time.time()
+        audio_duration = len(audio_pcm) / AudioDecoder.target_sample_rate
+
+        def emit(stage: PipelineStage, pct: float, elapsed: float, speed_x: Optional[float] = None, msg: str = ""):
+            if on_progress_event:
+                on_progress_event(
+                    PipelineProgressEvent(
+                        stage=stage,
+                        percent=pct,
+                        elapsed_seconds=elapsed,
+                        speed_x=speed_x,
+                        message=msg,
+                    )
+                )
+            if on_progress:
+                on_progress(stage.name, pct, elapsed, speed_x=speed_x)
+
+        # ── 2. Phase 1: Pure ONNX Zipformer CTC Transcription ──
+        logger.info("[Pipeline] Step 2: Phase 1 ONNX Zipformer CTC Transcription...")
+        asr_start = time.time()
+        emit(PipelineStage.transcribing, 0.0, 0.0, msg="بدء النسخ الصوتي...")
+
+        def _on_asr_progress(pct: float, spd: float, elp: float):
+            emit(
+                PipelineStage.transcribing,
+                pct,
+                elp,
+                speed_x=spd,
+                msg=f"النسخ الصوتي: {pct:.1f}% ({spd:.1f}x)",
+            )
+
+        raw_result = self.transcriber.transcribe_audio(
+            audio=audio_pcm,
+            sample_rate=AudioDecoder.target_sample_rate,
+            on_progress=_on_asr_progress,
+        )
+        raw_phonemes = raw_result.phonemes
+        asr_time = time.time() - asr_start
+        asr_speed = (audio_duration / asr_time) if asr_time > 0 else 0.0
+
+        logger.info(
+            f"[Pipeline] Phase 1 Finished: {len(raw_phonemes)} raw phonemes in {asr_time:.2f}s ({asr_speed:.1f}x)"
+        )
+        emit(
+            PipelineStage.transcribing,
+            100.0,
+            asr_time,
+            speed_x=asr_speed,
+            msg=f"تم النسخ: {len(raw_phonemes)} فونيم ({asr_speed:.1f}x)",
+        )
+
+        # ── 3. Phase 1.1: Authentic Speech & Repetition Recovery ──
+        recovery_start = time.time()
+        effective_phonemes = raw_phonemes
+        recovery_events: List[RecoveryEvent] = []
+        recovery_summary = RecoverySummary(
+            scanned_gaps_count=0,
+            speech_holes_detected=0,
+            recovered_events_count=0,
+            recovered_phonemes_count=0,
+            recovery_time_seconds=0.0,
+            energy_threshold_db=SPEECH_RECOVERY_ENERGY_THRESHOLD_DB,
+            min_hole_duration_s=SPEECH_RECOVERY_MIN_HOLE_DURATION_S,
+        )
+        recovery_time = 0.0
+
+        if ENABLE_SPEECH_RECOVERY:
+            logger.info("[Pipeline] Step 3: Phase 1.1 Speech & Repetition Recovery...")
+            emit(PipelineStage.recovering, 0.0, 0.0, msg="فحص واسترجاع المقاطع غير المكتشفة...")
+
+            def _on_rec_progress(pct: float, elp: float):
+                spd = (audio_duration * (pct / 100.0)) / elp if elp > 0 else 0.0
+                emit(
+                    PipelineStage.recovering,
+                    pct,
+                    elp,
+                    speed_x=spd,
+                    msg=f"استرجاع الكلام: {pct:.1f}% ({spd:.1f}x)",
+                )
+
+            recovery_res = SpeechRecoveryEngine.recover_speech(
+                audio_pcm=audio_pcm,
+                initial_phonemes=raw_phonemes,
+                audio_duration=audio_duration,
+                transcriber=self.transcriber,
+                energy_threshold_db=SPEECH_RECOVERY_ENERGY_THRESHOLD_DB,
+                min_hole_duration_s=SPEECH_RECOVERY_MIN_HOLE_DURATION_S,
+                padding_s=SPEECH_RECOVERY_PADDING_S,
+                min_phonemes_in_gap=SPEECH_RECOVERY_MIN_PHONEMES_IN_GAP,
+                on_progress=_on_rec_progress,
+            )
+            effective_phonemes = recovery_res.recovered_phonemes
+            recovery_events = recovery_res.recovery_events
+            recovery_summary = recovery_res.recovery_summary
+            recovery_time = time.time() - recovery_start
+            recovery_speed = (audio_duration / recovery_time) if recovery_time > 0 else 0.0
+
+            logger.info(
+                f"[Pipeline] Phase 1.1 Finished: {len(effective_phonemes)} effective phonemes "
+                f"({len(recovery_events)} events) in {recovery_time:.2f}s"
+            )
+            emit(
+                PipelineStage.recovering,
+                100.0,
+                recovery_time,
+                speed_x=recovery_speed,
+                msg=f"تم الاسترجاع: {len(effective_phonemes)} فونيم إجمالي ({len(recovery_events)} حدث)",
+            )
+
+        # ── 4. Phase 2: CTC Viterbi Trellis Forced Alignment ──
+        logger.info("[Pipeline] Step 4: Phase 2 CTC Viterbi Trellis Forced Alignment...")
+        align_start = time.time()
+        emit(PipelineStage.aligning, 0.0, 0.0, msg="بدء المحاذاة الزمنية الدقيقة (CTC Aligner)...")
+
+        aligned_phonemes = CtcViterbiAligner.align_phonemes(
+            target_phonemes=effective_phonemes,
+            audio_duration=audio_duration,
+            token2id=self.transcriber.token2id,
+            logprobs_matrix=raw_result.logprobs_matrix,
+            num_frames=raw_result.num_frames,
+            custom_blank_id=BLANK_ID,
+        )
+        align_time = time.time() - align_start
+
+        logger.info(f"[Pipeline] Phase 2 Finished: {len(aligned_phonemes)} aligned phonemes in {align_time:.2f}s")
+        emit(
+            PipelineStage.aligning,
+            100.0,
+            align_time,
+            msg=f"اكتملت المحاذاة: {len(aligned_phonemes)} فونيم في {align_time:.2f} ثانية",
+        )
+
+        # ── 5. Phase 3: Quran Text Matcher & Ayah/Word Segmentation ──
+        logger.info("[Pipeline] Step 5: Phase 3 Quran Text Matcher & Verse Finder...")
+        match_start = time.time()
+        emit(PipelineStage.matching, 0.0, 0.0, msg="مطابقة النص القرآني وتقسيم الآيات والكلمات...")
+
+        if isinstance(self.matcher, QuranWordMatcher) and not self.matcher.is_initialized:
+            self.matcher.initialize_from_file()
+
+        segments: List[QuranSegment] = self.matcher.match_segments(
+            aligned_phonemes=aligned_phonemes,
+            audio_duration=audio_duration,
+        )
+        match_time = time.time() - match_start
+
+        logger.info(f"[Pipeline] Phase 3 Finished: {len(segments)} Quran segments matched in {match_time:.2f}s")
+        emit(
+            PipelineStage.matching,
+            100.0,
+            match_time,
+            msg=f"اكتملت المطابقة: {len(segments)} مقطع قرآني في {match_time:.2f} ثانية",
+        )
+
+        # ── 6. Phase 4: JSON Export ──
+        export_start = time.time()
+        if export_json_files:
+            emit(PipelineStage.exporting, 0.0, 0.0, msg="تصدير ملفات JSON...")
+            QuranJsonExporter.export_all(
+                output_dir=output_dir,
+                audio_duration=audio_duration,
+                raw_phonemes=raw_phonemes,
+                recovery_summary=recovery_summary,
+                recovery_events=recovery_events,
+                aligned_phonemes=aligned_phonemes,
+                segments=segments,
+            )
+        export_time = time.time() - export_start
+        emit(PipelineStage.exporting, 100.0, export_time, msg="تم تصدير ملفات JSON بنجاح")
+
+        total_time = time.time() - overall_start
+
+        profiling = PipelineProfiling(
+            audio_duration=audio_duration,
+            load_time=load_time,
+            asr_time=asr_time,
+            recovery_time=recovery_time,
+            alignment_time=align_time,
+            match_time=match_time,
+            export_time=export_time,
+            total_time=total_time,
+        )
+
+        emit(
+            PipelineStage.completed,
+            100.0,
+            total_time,
+            speed_x=profiling.real_time_factor,
+            msg=f"اكتملت المعالجة بنجاح ({profiling.real_time_factor:.1f}x)",
+        )
+
+        return PipelineResult(
+            audio_duration_seconds=audio_duration,
+            raw_phonemes=raw_phonemes,
+            recovered_phonemes=effective_phonemes,
+            recovery_events=recovery_events,
+            recovery_summary=recovery_summary,
+            ctc_aligned_phonemes=aligned_phonemes,
+            segments=segments,
+            total_processing_time_seconds=total_time,
+            profiling=profiling,
+        )
+
+    def destroy(self) -> None:
+        pass
+
+
+_shared_pipeline: Optional[AudioPipeline] = None
+
+
+def get_shared_pipeline() -> AudioPipeline:
+    """Returns or lazily creates a shared singleton AudioPipeline instance."""
+    global _shared_pipeline
+    if _shared_pipeline is None:
+        _shared_pipeline = AudioPipeline()
+        _shared_pipeline.initialize()
+    return _shared_pipeline
 
 
 def process_audio(
-    audio_data,
-    model_name="Base",
-    profile_name="auto",
+    audio_data: Union[str, np.ndarray, Tuple[int, np.ndarray]],
+    model_name: str = "Base",
+    profile_name: str = "auto",
     return_profiling: bool = False,
     progress_callback=None,
-    min_silence_ms: int = 1200,
-    pad_ms: int = 600,
-):
-    """Main execution wrapper for the transcription and Quran alignment pipeline.
+    output_dir: str = ".",
+    export_json_files: bool = False,
+) -> Union[List[Dict[str, Any]], Tuple[List[Dict[str, Any]], PipelineProfiling]]:
+    """Functional wrapper for AudioPipeline.
 
     Args:
-        audio_data: Input audio file path or (sample_rate, numpy_array).
-        model_name: Acoustic model name.
-        profile_name: Transcription profile preset ('auto', 'fast', 'noisy', 'clean', 'sliding').
-        return_profiling: If True, returns (json_output, profiling).
+        audio_data: Audio file path, raw numpy array, or (sample_rate, numpy_array).
+        model_name: Acoustic model name (default: 'Base').
+        profile_name: Transcription profile preset (default: 'auto').
+        return_profiling: If True, returns (segments_dicts, profiling).
         progress_callback: Optional callable(pct, msg) for progress tracking.
-        min_silence_ms: Requested silence threshold for chunk detection and subtitle splitting.
-        pad_ms: Maximum adaptive padding added around speech chunks.
+        output_dir: Output directory for JSON files if export_json_files is True.
+        export_json_files: If True, writes the 4 standard JSON artifacts to output_dir.
+
+    Returns:
+        List of segment dicts (or (segments, profiling) if return_profiling=True).
     """
     if audio_data is None:
-        return ([], ProfilingData()) if return_profiling else []
+        empty_prof = PipelineProfiling()
+        return ([], empty_prof) if return_profiling else []
 
-    profiling = ProfilingData()
-    pipeline_start = time.time()
+    pipeline = get_shared_pipeline()
+
+    def _on_progress(stage: str, pct: float, elapsed: float, speed_x: Optional[float] = None):
+        if progress_callback:
+            msg = f"[{stage}] {pct:.1f}% ({speed_x:.1f}x)" if speed_x else f"[{stage}] {pct:.1f}%"
+            try:
+                progress_callback(pct, msg)
+            except TypeError:
+                progress_callback(pct)
 
     if isinstance(audio_data, str):
-        audio = audio_data
-        sample_rate = 16000
+        result = pipeline.process_audio_file(
+            audio_file_path=audio_data,
+            output_dir=output_dir,
+            export_json_files=export_json_files,
+            on_progress=_on_progress,
+        )
+    elif isinstance(audio_data, tuple):
+        orig_sr, pcm = audio_data
+        if orig_sr != AudioDecoder.target_sample_rate:
+            import librosa
+            pcm = librosa.resample(pcm.astype(np.float32), orig_sr=orig_sr, target_sr=AudioDecoder.target_sample_rate)
+        result = pipeline.process_pcm(
+            audio_pcm=pcm.astype(np.float32),
+            output_dir=output_dir,
+            export_json_files=export_json_files,
+            on_progress=_on_progress,
+        )
     else:
-        sample_rate, audio = audio_data
-
-        if audio.dtype == np.int16:
-            audio = audio.astype(np.float32) / 32768.0
-        elif audio.dtype == np.int32:
-            audio = audio.astype(np.float32) / 2147483648.0
-
-        if len(audio.shape) > 1:
-            audio = audio.mean(axis=1)
-
-        if sample_rate != 16000:
-            resample_start = time.time()
-            audio = _resample_audio_ffmpeg(audio, orig_sr=sample_rate, target_sr=16000)
-            profiling.resample_time = time.time() - resample_start
-            sample_rate = 16000
-
-    # Phase 1: Continuous ASR Transcription
-    try:
-        regions, emissions, stage_metrics, asr_time, audio_pcm = run_asr_cpu(
-            audio,
-            sample_rate,
-            model_name=model_name,
-            profile_name=profile_name,
-            progress_callback=progress_callback,
-            min_silence_ms=min_silence_ms,
-            pad_ms=pad_ms,
+        pcm = audio_data.astype(np.float32)
+        result = pipeline.process_pcm(
+            audio_pcm=pcm,
+            output_dir=output_dir,
+            export_json_files=export_json_files,
+            on_progress=_on_progress,
         )
-    except Exception as e:
-        profiling.total_time = time.time() - pipeline_start
-        return ([], profiling) if return_profiling else []
 
-    sdk_adapt.metrics_to_profiling(stage_metrics, profiling)
-    intervals = sdk_adapt.intervals_from_regions(regions)
-
-    profiling.audio_duration_s = regions.audio_duration_s
-
-    if not intervals:
-        profiling.total_time = time.time() - pipeline_start
-        return ([], profiling) if return_profiling else []
-
-    profiling.asr_time = asr_time
-
-    segments = _run_post_asr_pipeline(
-        audio_pcm, sample_rate, intervals,
-        model_name, profiling, pipeline_start,
-        regions=regions, emissions=emissions, stage_metrics=stage_metrics
-    )
-
-    try:
-        run_ctc_alignment(
-            segments=segments,
-            stage_metrics=stage_metrics,
-            vocab_path=TOKENS_PATH,
-        )
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-
-    # Phase 4: Canonical 1-Ayah = 1-Segment Aggregation & Formatting
-    from src.phase4_splitting.ayah_split import aggregate_by_canonical_ayah, smooth_word_timestamps
-    from src.phase4_splitting.missing_words import recompute_missing_words, inject_missing_words
-    from src.phase4_splitting.repetition_recovery import recover_unaligned_repetitions
-
-    from config import ENABLE_GAP_RETRANSCRIPTION, ENABLE_WORD_SMOOTHING, ENABLE_MISSING_WORD_INJECTION
-
-    # 1. Exact 1-Ayah = 1-Segment Canonical Aggregator (Baseline 100% Guaranteed)
-    segments = aggregate_by_canonical_ayah(segments)
-
-    # 2. Non-Destructive Repetition Recovery in Speech Gaps (Respects config flag)
-    if ENABLE_GAP_RETRANSCRIPTION:
-        recover_unaligned_repetitions(segments, audio_pcm, sample_rate)
-
-    # 3. Recompute missing words from canonical Quran coverage
-    recompute_missing_words(segments)
-
-    # 4. Optional: extend word end-timestamps into trailing silence
-    smooth_word_timestamps(
-        segments,
-        audio_data=audio,
-        sample_rate=sample_rate,
-        min_silence_ms=min_silence_ms,
-        pad_ms=pad_ms,
-        bridge_unsplit_gaps=bool(stage_metrics.get("multi_chapter")),
-    )
-
-    # 5. Optional: inject missing (unrecited) words into the words array
-    inject_missing_words(segments)
-
-    profiling.total_time = time.time() - pipeline_start
-
-    # Build the core JSON payload (words always included).
-    from src.core.segment_types import build_segment_export
-    payload = build_segment_export(segments, include_words=True)
+    segments_dicts = [s.to_dict() for s in result.segments]
 
     if return_profiling:
-        return payload, profiling
-    return payload
+        return segments_dicts, result.profiling
+    return segments_dicts
