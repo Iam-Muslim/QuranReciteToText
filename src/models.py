@@ -1,11 +1,8 @@
-"""Unified data models for Transcription, Speech Recovery, CTC Alignment, and Quran Output Segments.
-
-Mirrors the Dart lib/core/models.dart definitions exactly.
-"""
+"""Unified Data Models for Transcription, CTC Alignment, and Quran Output Segments."""
 
 from __future__ import annotations
 
-import json
+from enum import Enum
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any
 import numpy as np
@@ -13,11 +10,11 @@ import numpy as np
 
 @dataclass
 class PhonemeToken:
-    """Represents an individual phoneme token with timestamps and confidence."""
+    """Individual acoustic phoneme token with timestamps and confidence."""
     phoneme: str
     start: float
     end: float
-    confidence: float = 1.0  # margin_peak
+    confidence: float = 1.0
     is_recovered: bool = False
     start_frame: Optional[int] = None
     end_frame: Optional[int] = None
@@ -66,13 +63,13 @@ class PhonemeToken:
             "start_seconds": round(self.start, 3),
             "end_seconds": round(self.end, 3),
             "duration_seconds": round(self.duration, 3),
+            "confidence": round(self.confidence, 2),
+            "is_recovered": self.is_recovered,
         }
         if self.start_frame is not None:
             d["start_frame"] = self.start_frame
         if self.end_frame is not None:
             d["end_frame"] = self.end_frame
-        d["confidence"] = round(self.confidence, 2)
-        d["is_recovered"] = self.is_recovered
         return d
 
 
@@ -90,30 +87,10 @@ class RawTranscriptionResult:
     def raw_text(self) -> str:
         return " ".join(self.raw_tokens)
 
-    # Enables legacy 3-tuple unpacking: text, phoneme_timestamps, logprobs
-    def __iter__(self):
-        legacy_dicts = []
-        for p in self.phonemes:
-            legacy_dicts.append({
-                "phoneme": p.phoneme,
-                "word": p.phoneme,
-                "start": p.start,
-                "end": p.end,
-                "margin_peak": p.confidence,
-                "start_frame": p.start_frame,
-                "end_frame": p.end_frame,
-                "peak_frame": p.peak_frame,
-                "peak_timestamp": p.peak_timestamp,
-                "is_recovered": p.is_recovered,
-            })
-        yield self.raw_text
-        yield legacy_dicts
-        yield self.logprobs_matrix
-
 
 @dataclass
 class RecoveryEvent:
-    """Represents a recovered speech event from a detected deletion hole."""
+    """Recovered speech event from an untranscribed deletion hole."""
     event_id: int
     gap_start: float
     gap_end: float
@@ -173,7 +150,7 @@ class RecoverySummary:
 
 @dataclass
 class SpeechRecoveryResult:
-    """Consolidated result of Phase 1.1 Speech & Repetition Recovery."""
+    """Consolidated result of speech recovery."""
     recovered_phonemes: List[PhonemeToken]
     recovery_events: List[RecoveryEvent]
     recovery_summary: RecoverySummary
@@ -181,7 +158,7 @@ class SpeechRecoveryResult:
 
 @dataclass
 class QuranWord:
-    """Word-level timing entry matching Dart QuranWord format."""
+    """Word-level timing entry aligned to the Medina Mushaf."""
     word: str
     location: Optional[str] = None  # "surah:ayah:word_num"
     start: Optional[float] = None
@@ -210,7 +187,7 @@ class QuranWord:
 
 @dataclass
 class AyahSubSegment:
-    """Represents an internal breath / Waqf phrase inside an Ayah."""
+    """Internal breath or Waqf phrase inside an Ayah."""
     sub_segment_number: int
     start_time: float
     end_time: float
@@ -235,7 +212,7 @@ class AyahSubSegment:
 
 @dataclass
 class QuranSegment:
-    """Canonical 1-Ayah segment matching Dart QuranSegment format."""
+    """Canonical 1-Ayah segment containing aligned words, subsegments, and metadata."""
     segment_number: int
     surah_number: int = 1
     start_time: float = 0.0
@@ -297,7 +274,7 @@ class PipelineProfiling:
 
 @dataclass
 class PipelineResult:
-    """Consolidated result of the entire offline pipeline execution."""
+    """Consolidated result of the entire pipeline execution."""
     audio_duration_seconds: float
     raw_phonemes: List[PhonemeToken]
     recovered_phonemes: List[PhonemeToken]
@@ -315,11 +292,8 @@ class PipelineResult:
         }
 
 
-from enum import Enum
-
-
 class PipelineStage(Enum):
-    """Processing stages for the full transcription & alignment pipeline."""
+    """Processing stages for real-time progress callbacks."""
     idle = "idle"
     loading = "loading"
     transcribing = "transcribing"
@@ -358,4 +332,3 @@ class PipelineProgressEvent:
     @property
     def stage_name(self) -> str:
         return self.stage.stage_name_ar
-
