@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import logging
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Tuple
 import numpy as np
 
 from config import (
@@ -17,6 +17,78 @@ from config import (
 from src.models import PhonemeToken
 
 logger = logging.getLogger(__name__)
+
+try:
+    from numba import njit
+except ImportError:
+    def njit(*args, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
+
+
+@njit(fastmath=True)
+def _ctc_viterbi_forward(
+    lp: np.ndarray,
+    s_array: np.ndarray,
+    skip_mask: np.ndarray,
+    total_frames: int,
+    l: int,
+    b_id: int,
+    blank_penalty: float,
+) -> Tuple[np.ndarray, np.ndarray]:
+    backtrack = np.zeros((total_frames, l), dtype=np.uint8)
+    v_prev = np.full(l, -1e30, dtype=np.float32)
+    v_curr = np.full(l, -1e30, dtype=np.float32)
+
+    v_prev[0] = lp[0, s_array[0]]
+    if l > 1:
+        v_prev[1] = lp[0, s_array[1]]
+
+    for t in range(1, total_frames):
+        s_min = max(0, l - 2 * (total_frames - t) - 2)
+        s_max = min(l, 2 * t + 2)
+        v_curr.fill(-1e30)
+
+        for s in range(s_min, s_max):
+            c0 = v_prev[s]
+            c1 = v_prev[s - 1] if s > 0 else -1e30
+            c2 = v_prev[s - 2] if (skip_mask[s] == 1 and s >= 2) else -1e30
+
+            max_v = c0
+            best_step = 0
+
+            if c1 > max_v:
+                max_v = c1
+                best_step = 1
+
+            if c2 > max_v:
+                max_v = c2
+                best_step = 2
+
+            backtrack[t, s] = best_step
+
+            if max_v > -1e29:
+                tok_class = s_array[s]
+                emit = lp[t, tok_class]
+                if tok_class == b_id:
+                    emit -= blank_penalty
+                v_curr[s] = max_v + emit
+
+        v_prev, v_curr = v_curr, v_prev
+
+    return backtrack, v_prev
+
+
+def warmup_aligner_jit() -> None:
+    """Pre-compiles JIT functions with dummy arrays so first audio run is instant."""
+    try:
+        lp = np.zeros((2, 251), dtype=np.float32)
+        s_arr = np.zeros(3, dtype=np.int32)
+        sk_m = np.zeros(3, dtype=np.uint8)
+        _ctc_viterbi_forward(lp, s_arr, sk_m, 2, 3, 250, 0.5)
+    except Exception:
+        pass
 
 
 class CtcViterbiAligner:
@@ -78,55 +150,16 @@ class CtcViterbiAligner:
             if s_array[s] != s_array[s - 2]:
                 skip_mask[s] = 1
 
-        # 4. Viterbi Trellis with Reachability Bounds & Rolling 2 Rows
-        backtrack = np.zeros((total_frames, l), dtype=np.uint8)
-        v_prev = np.full(l, -1e30, dtype=np.float32)
-        v_curr = np.full(l, -1e30, dtype=np.float32)
-
-        v_prev[0] = lp[0, s_array[0]]
-        if l > 1:
-            v_prev[1] = lp[0, s_array[1]]
-
-        for t in range(1, total_frames):
-            s_min = max(0, l - 2 * (total_frames - t) - 2)
-            s_max = min(l, 2 * t + 2)
-            v_curr.fill(-1e30)
-
-            span = s_max - s_min
-            if span > 0:
-                s_range = np.arange(s_min, s_max, dtype=np.int32)
-                c0 = v_prev[s_range]
-
-                c1 = np.full(span, -1e30, dtype=np.float32)
-                valid_step = s_range > 0
-                c1[valid_step] = v_prev[s_range[valid_step] - 1]
-
-                c2 = np.full(span, -1e30, dtype=np.float32)
-                valid_skip = (skip_mask[s_range] == 1)
-                c2[valid_skip] = v_prev[s_range[valid_skip] - 2]
-
-                max_v = c0.copy()
-                best_step = np.zeros(span, dtype=np.uint8)
-
-                step1_better = c1 > max_v
-                max_v[step1_better] = c1[step1_better]
-                best_step[step1_better] = 1
-
-                step2_better = c2 > max_v
-                max_v[step2_better] = c2[step2_better]
-                best_step[step2_better] = 2
-
-                backtrack[t, s_min:s_max] = best_step
-
-                reachable = max_v > -1e29
-                if np.any(reachable):
-                    tok_classes = s_array[s_range[reachable]]
-                    emit_logprob = lp[t, tok_classes].copy()
-                    is_blank = (tok_classes == b_id)
-                    emit_logprob[is_blank] -= CTC_BLANK_PENALTY
-                    v_curr[s_range[reachable]] = max_v[reachable] + emit_logprob
-
-            v_prev, v_curr = v_curr, v_prev
+        # 4. Fast Viterbi Trellis with Reachability Bounds & Rolling 2 Rows (JIT Accelerated)
+        backtrack, v_prev = _ctc_viterbi_forward(
+            lp=lp,
+            s_array=s_array,
+            skip_mask=skip_mask,
+            total_frames=total_frames,
+            l=l,
+            b_id=b_id,
+            blank_penalty=CTC_BLANK_PENALTY,
+        )
 
         # 5. Backtracking
         curr_s = l - 1

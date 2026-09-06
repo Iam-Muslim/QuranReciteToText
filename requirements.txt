@@ -3,3 +3,5 @@ librosa
 pyloudnorm
 onnxruntime
 kaldi-native-fbank
+numba
+

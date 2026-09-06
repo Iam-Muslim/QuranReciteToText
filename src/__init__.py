@@ -39,8 +39,8 @@ from src.models import (
 )
 from src.audio import AudioDecoder
 from src.transcriber import ZipformerONNX, SpeechRecoveryEngine
-from src.aligner import CtcViterbiAligner
-from src.matcher import QuranWordMatcher, MatcherConfig
+from src.aligner import CtcViterbiAligner, warmup_aligner_jit
+from src.matcher import QuranWordMatcher, MatcherConfig, warmup_matcher_jit
 from src.exporter import QuranJsonExporter
 
 logger = logging.getLogger(__name__)
@@ -68,6 +68,8 @@ class AudioPipeline:
                 ref_norm_ph_path=ref_norm_ph_path,
                 ph_index_path=ph_index_path,
             )
+        warmup_aligner_jit()
+        warmup_matcher_jit()
 
     def process_audio_file(
         self,

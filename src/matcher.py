@@ -23,6 +23,17 @@ from src.models import PhonemeToken, QuranWord, QuranSegment
 logger = logging.getLogger(__name__)
 
 
+try:
+    from numba import njit
+    HAS_NUMBA = True
+except ImportError:
+    HAS_NUMBA = False
+    def njit(*args, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
+
+
 # ─── 1. Gene Myers' 64-bit Bit-Parallel Substring Search ───
 
 @dataclass
@@ -35,6 +46,170 @@ class FuzzyMatch:
         return f"FuzzyMatch(start: {self.start}, end: {self.end}, dist: {self.dist})"
 
 
+@njit(fastmath=True)
+def _bit_parallel_search_fast(query_codes: np.ndarray, text_codes: np.ndarray, max_dist: int):
+    n = len(query_codes)
+    m = len(text_codes)
+    char_mask = np.zeros(2048, dtype=np.uint64)
+    for i in range(n):
+        c = query_codes[i]
+        if c < 2048:
+            char_mask[c] |= (np.uint64(1) << np.uint64(i))
+
+    full_mask = (np.uint64(1) << np.uint64(n)) - np.uint64(1)
+    top_mask = np.uint64(1) << np.uint64(n - 1)
+    vp = full_mask
+    vn = np.uint64(0)
+    curr_dist = n
+
+    match_starts = []
+    match_ends = []
+    match_dists = []
+
+    for j in range(m):
+        code = text_codes[j]
+        pm = char_mask[code] if code < 2048 else np.uint64(0)
+        x = pm | vn
+        d0 = (((pm & vp) + vp) ^ vp) | x
+        hn = vp & d0
+        hp = vn | (~(vp | d0) & full_mask)
+
+        if (hp & top_mask) != 0:
+            curr_dist += 1
+        if (hn & top_mask) != 0:
+            curr_dist -= 1
+
+        hp = (hp << 1) & full_mask
+        hn = (hn << 1) & full_mask
+        vp = (hn | (~(d0 | hp) & full_mask)) & full_mask
+        vn = hp & d0
+
+        if curr_dist <= max_dist:
+            match_end = j + 1
+            estimated_start = max(0, min(match_end, match_end - n - curr_dist))
+            match_starts.append(estimated_start)
+            match_ends.append(match_end)
+            match_dists.append(curr_dist)
+
+    return match_starts, match_ends, match_dists
+
+
+@njit(fastmath=True)
+def _sub_cost_fast(a: int, b: int, confusion_cost: float) -> float:
+    if a == 0 or b == 0:
+        return 1.0
+    if a == b:
+        return 0.0
+    is_a_hamza = (a == 0x0621 or a == 0x0622 or a == 0x0623 or a == 0x0625 or a == 0x0672)
+    is_b_hamza = (b == 0x0621 or b == 0x0622 or b == 0x0623 or b == 0x0625 or b == 0x0672)
+    if is_a_hamza and is_b_hamza:
+        return 0.0
+    if (a == 0x0645 and b == 0x06FE) or (a == 0x06FE and b == 0x0645):
+        return 0.0
+    if (a == 0x0646 and b == 0x06BA) or (a == 0x06BA and b == 0x0646):
+        return 0.0
+    if (a == 0x0648 and b == 0x06E5) or (a == 0x06E5 and b == 0x0648):
+        return 0.0
+    if (a == 0x064A and b == 0x06E6) or (a == 0x06E6 and b == 0x064A):
+        return 0.0
+    if (a == 0x0629 and b == 0x0647) or (a == 0x0647 and b == 0x0629):
+        return 0.0
+    if (a == 0x0629 and b == 0x062A) or (a == 0x062A and b == 0x0629):
+        return 0.0
+
+    if (a == 0x0627 and b == 0x064E) or (a == 0x064E and b == 0x0627):
+        return confusion_cost
+    if (a == 0x0648 and b == 0x064F) or (a == 0x064F and b == 0x0648):
+        return confusion_cost
+    if (a == 0x064F and b == 0x06E5) or (a == 0x06E5 and b == 0x064F):
+        return confusion_cost
+    if (a == 0x064A and b == 0x0650) or (a == 0x0650 and b == 0x064A):
+        return confusion_cost
+    if (a == 0x0650 and b == 0x06E6) or (a == 0x06E6 and b == 0x0650):
+        return confusion_cost
+    if (a == 0x062A and b == 0x0637) or (a == 0x0637 and b == 0x062A):
+        return confusion_cost
+    if (a == 0x062C and b == 0x0632) or (a == 0x0632 and b == 0x062C):
+        return confusion_cost
+    if (a == 0x062E and b == 0x0638) or (a == 0x0638 and b == 0x062E):
+        return confusion_cost
+    if (a == 0x062F and b == 0x0636) or (a == 0x0636 and b == 0x062F):
+        return confusion_cost
+
+    return 1.0
+
+
+@njit(fastmath=True)
+def _dtw_fill_fast(
+    a_codes: np.ndarray,
+    r_codes: np.ndarray,
+    ins_costs: np.ndarray,
+    del_costs: np.ndarray,
+    confusion_cost: float,
+    dp: np.ndarray,
+    bt: np.ndarray,
+    stride: int,
+):
+    m = len(a_codes)
+    n = len(r_codes)
+    dp[0] = 0.0
+    bt[0] = 0
+    for j in range(1, n + 1):
+        dp[j] = dp[j - 1] + del_costs[j - 1]
+        bt[j] = 1
+
+    for i in range(1, m + 1):
+        dp[i * stride] = 0.0
+        bt[i * stride] = 2
+
+    for i in range(1, m + 1):
+        a_code = a_codes[i - 1]
+        row = i * stride
+        prev = (i - 1) * stride
+        ins_cost = ins_costs[i - 1]
+
+        for j in range(1, n + 1):
+            r_code = r_codes[j - 1]
+            sub_c = _sub_cost_fast(a_code, r_code, confusion_cost)
+            del_c = del_costs[j - 1]
+
+            sub = dp[prev + j - 1] + sub_c
+            del_val = dp[row + j - 1] + del_c
+            ins = dp[prev + j] + ins_cost
+
+            if sub < del_val and sub <= ins:
+                dp[row + j] = sub
+                bt[row + j] = 0
+            elif del_val <= ins:
+                dp[row + j] = del_val
+                bt[row + j] = 1
+            else:
+                dp[row + j] = ins
+                bt[row + j] = 2
+
+
+def warmup_matcher_jit() -> None:
+    """Pre-compiles Myers & DTW JIT functions with dummy arrays so first audio run is instant."""
+    if not HAS_NUMBA:
+        return
+    try:
+        _bit_parallel_search_fast(np.array([1575], dtype=np.int32), np.array([1575, 1576], dtype=np.int32), 1)
+        dp = np.zeros(4, dtype=np.float64)
+        bt = np.zeros(4, dtype=np.uint8)
+        _dtw_fill_fast(
+            np.array([1575], dtype=np.int32),
+            np.array([1576], dtype=np.int32),
+            np.array([0.75], dtype=np.float64),
+            np.array([1.0], dtype=np.float64),
+            0.25,
+            dp,
+            bt,
+            2,
+        )
+    except Exception:
+        pass
+
+
 def find_near_matches(query: str, text: str, max_dist: int) -> List[FuzzyMatch]:
     n = len(query)
     m = len(text)
@@ -42,6 +217,11 @@ def find_near_matches(query: str, text: str, max_dist: int) -> List[FuzzyMatch]:
         return []
     if n > 64:
         query = query[:64]
+    if HAS_NUMBA:
+        q_codes = np.array([ord(c) for c in query], dtype=np.int32)
+        t_codes = np.array([ord(c) for c in text], dtype=np.int32)
+        starts, ends, dists = _bit_parallel_search_fast(q_codes, t_codes, max_dist)
+        return _filter_overlapping([FuzzyMatch(int(s), int(e), int(d)) for s, e, d in zip(starts, ends, dists)])
     return _bit_parallel_search(query, text, max_dist)
 
 
@@ -50,10 +230,9 @@ def _bit_parallel_search(query: str, text: str, max_dist: int) -> List[FuzzyMatc
     m = len(text)
     matches: List[FuzzyMatch] = []
 
-    char_mask: Dict[int, int] = {}
+    char_mask: Dict[str, int] = {}
     for i, ch in enumerate(query):
-        code = ord(ch)
-        char_mask[code] = char_mask.get(code, 0) | (1 << i)
+        char_mask[ch] = char_mask.get(ch, 0) | (1 << i)
 
     full_mask = (1 << n) - 1
     top_mask = 1 << (n - 1)
@@ -62,7 +241,7 @@ def _bit_parallel_search(query: str, text: str, max_dist: int) -> List[FuzzyMatc
     curr_dist = n
 
     for j, ch in enumerate(text):
-        pm = char_mask.get(ord(ch), 0)
+        pm = char_mask.get(ch, 0)
         x = pm | vn
         d0 = (((pm & vp) + vp) ^ vp) | x
         hn = vp & d0
@@ -287,6 +466,7 @@ class PhoneticSearch:
     def __init__(self):
         self._index_array: Optional[np.ndarray] = None
         self._ref_ph_norm: Optional[str] = None
+        self._ref_codes: Optional[np.ndarray] = None
         self._is_loaded: bool = False
 
     @property
@@ -304,6 +484,7 @@ class PhoneticSearch:
 
         with open(ref_path, "r", encoding="utf-8") as f:
             self._ref_ph_norm = f.read().strip()
+        self._ref_codes = np.array([ord(c) for c in self._ref_ph_norm], dtype=np.int32)
 
         arr = np.load(npy_path)
         if arr.ndim == 1:
@@ -337,8 +518,17 @@ class PhoneticSearch:
         if not norm_query:
             return []
 
+        if len(norm_query) > 64:
+            norm_query = norm_query[:64]
         max_edits = int(len(norm_query) * error_ratio)
-        outs = find_near_matches(norm_query, self._ref_ph_norm, max_edits)
+
+        if self._ref_codes is not None and HAS_NUMBA:
+            q_codes = np.array([ord(c) for c in norm_query], dtype=np.int32)
+            starts, ends, dists = _bit_parallel_search_fast(q_codes, self._ref_codes, max_edits)
+            outs = _filter_overlapping([FuzzyMatch(int(s), int(e), int(d)) for s, e, d in zip(starts, ends, dists)])
+        else:
+            outs = find_near_matches(norm_query, self._ref_ph_norm, max_edits)
+
         results = [
             SurahSearchResult(
                 start=self._ref_idx_to_span(out.start, is_end=False),
@@ -419,42 +609,55 @@ class QuranDictationMatcher:
 
         dp, bt = self._dp, self._bt
 
-        dp[0] = 0.0
-        bt[0] = 0
-        for j in range(1, n + 1):
-            del_cost = PhoneticCostEngine.get_deletion_cost(full_phonemes, ref_start + j - 1, config.standard_deletion_cost, config.acoustic_confusion_cost)
-            dp[j] = dp[j - 1] + del_cost
-            bt[j] = 1
-
-        for i in range(1, m + 1):
-            dp[i * stride] = 0.0
-            bt[i * stride] = 2
-
-        for i in range(1, m + 1):
-            a_code = ord(asr_text[i - 1])
-            row = i * stride
-            prev = (i - 1) * stride
-            ins_cost = PhoneticCostEngine.get_insertion_cost(asr_text, i - 1, config.standard_insertion_cost, config.acoustic_confusion_cost)
-
+        if HAS_NUMBA:
+            a_codes = np.array([ord(c) for c in asr_text], dtype=np.int32)
+            r_codes = np.array([ord(c) for c in full_phonemes[ref_start:ref_end]], dtype=np.int32)
+            ins_costs = np.array([
+                PhoneticCostEngine.get_insertion_cost(asr_text, i, config.standard_insertion_cost, config.acoustic_confusion_cost)
+                for i in range(m)
+            ], dtype=np.float64)
+            del_costs = np.array([
+                PhoneticCostEngine.get_deletion_cost(full_phonemes, ref_start + j, config.standard_deletion_cost, config.acoustic_confusion_cost)
+                for j in range(n)
+            ], dtype=np.float64)
+            _dtw_fill_fast(a_codes, r_codes, ins_costs, del_costs, config.acoustic_confusion_cost, dp, bt, stride)
+        else:
+            dp[0] = 0.0
+            bt[0] = 0
             for j in range(1, n + 1):
-                r_ref = ref_start + j - 1
-                r_code = ord(full_phonemes[r_ref])
-                sub_cost = PhoneticCostEngine.get_substitution_cost(a_code, r_code, config.acoustic_confusion_cost)
-                del_cost = PhoneticCostEngine.get_deletion_cost(full_phonemes, r_ref, config.standard_deletion_cost, config.acoustic_confusion_cost)
+                del_cost = PhoneticCostEngine.get_deletion_cost(full_phonemes, ref_start + j - 1, config.standard_deletion_cost, config.acoustic_confusion_cost)
+                dp[j] = dp[j - 1] + del_cost
+                bt[j] = 1
 
-                sub = dp[prev + j - 1] + sub_cost
-                del_val = dp[row + j - 1] + del_cost
-                ins = dp[prev + j] + ins_cost
+            for i in range(1, m + 1):
+                dp[i * stride] = 0.0
+                bt[i * stride] = 2
 
-                if sub < del_val and sub <= ins:
-                    dp[row + j] = sub
-                    bt[row + j] = 0
-                elif del_val <= ins:
-                    dp[row + j] = del_val
-                    bt[row + j] = 1
-                else:
-                    dp[row + j] = ins
-                    bt[row + j] = 2
+            for i in range(1, m + 1):
+                a_code = ord(asr_text[i - 1])
+                row = i * stride
+                prev = (i - 1) * stride
+                ins_cost = PhoneticCostEngine.get_insertion_cost(asr_text, i - 1, config.standard_insertion_cost, config.acoustic_confusion_cost)
+
+                for j in range(1, n + 1):
+                    r_ref = ref_start + j - 1
+                    r_code = ord(full_phonemes[r_ref])
+                    sub_cost = PhoneticCostEngine.get_substitution_cost(a_code, r_code, config.acoustic_confusion_cost)
+                    del_cost = PhoneticCostEngine.get_deletion_cost(full_phonemes, r_ref, config.standard_deletion_cost, config.acoustic_confusion_cost)
+
+                    sub = dp[prev + j - 1] + sub_cost
+                    del_val = dp[row + j - 1] + del_cost
+                    ins = dp[prev + j] + ins_cost
+
+                    if sub < del_val and sub <= ins:
+                        dp[row + j] = sub
+                        bt[row + j] = 0
+                    elif del_val <= ins:
+                        dp[row + j] = del_val
+                        bt[row + j] = 1
+                    else:
+                        dp[row + j] = ins
+                        bt[row + j] = 2
 
         best_i = -1
         best_cost = float("inf")
