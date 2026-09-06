@@ -33,7 +33,7 @@ SPEECH_RECOVERY_MIN_PHONEMES_IN_GAP: int = 2
 # Streaming Zipformer State Reset on Silence
 # Resets internal recurrent states when silence is detected between Ayahs / Waqf pauses.
 # Default is True. Set to False to disable state reset.
-RESET_ENCODER_ON_SILENCE: bool = False
+RESET_ENCODER_ON_SILENCE: bool = True
 SILENCE_RESET_CONSECUTIVE_BLANK_CHUNKS: int = 2  # 2 chunks = 2 * 0.48s = 0.96s of silence
 
 # Runtime Performance & Profiling
