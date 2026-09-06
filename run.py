@@ -28,6 +28,7 @@ def main():
     parser.add_argument("--out", type=str, default="output.json", help="Path for main output JSON (default: output.json)")
     parser.add_argument("--threads", type=int, default=2, help="ONNX execution threads (default: 2)")
     parser.add_argument("--recovery", action="store_true", default=False, help="Enable Phase 1.1 Speech Recovery")
+    parser.add_argument("--no-reset", action="store_true", default=False, help="Disable silence state reset in transcriber")
     parser.add_argument("--export-all", action="store_true", default=True, help="Export all 4 JSON artifacts")
     args = parser.parse_args()
 
@@ -39,6 +40,8 @@ def main():
     os.environ["ONNX_NUM_THREADS"] = str(args.threads)
 
     import config
+    if args.no_reset:
+        config.RESET_ENCODER_ON_SILENCE = False
     if args.recovery:
         config.ENABLE_SPEECH_RECOVERY = True
 

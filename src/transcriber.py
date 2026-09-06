@@ -13,6 +13,7 @@ import numpy as np
 import kaldi_native_fbank as knf
 import onnxruntime as ort
 
+import config
 from config import (
     SAMPLE_RATE,
     BLANK_ID,
@@ -23,6 +24,8 @@ from config import (
     SPEECH_RECOVERY_MIN_HOLE_DURATION_S,
     SPEECH_RECOVERY_PADDING_S,
     SPEECH_RECOVERY_MIN_PHONEMES_IN_GAP,
+    RESET_ENCODER_ON_SILENCE,
+    SILENCE_RESET_CONSECUTIVE_BLANK_CHUNKS,
 )
 from src.models import (
     PhonemeToken,
@@ -136,10 +139,22 @@ class ZipformerONNX:
         sample_rate: int = SAMPLE_RATE,
         silence_pad_frames: int = 105,
         on_progress=None,
+        reset_on_silence: Optional[bool] = None,
+        min_blank_chunks: Optional[int] = None,
     ) -> RawTranscriptionResult:
-        """Transcribes audio array into phoneme tokens and valid emission log-probabilities."""
+        """Transcribes audio array into phoneme tokens and valid emission log-probabilities.
+        
+        If reset_on_silence is True (default from config), the recurrent encoder state is
+        cleared when consecutive silence chunks are detected, matching the per-Ayah
+        independent context the model was trained on and preventing blank-attractor drift.
+        """
         if self.session is None or len(audio) == 0:
             return RawTranscriptionResult(vocab_size=len(self.vocab))
+
+        if reset_on_silence is None:
+            reset_on_silence = getattr(config, "RESET_ENCODER_ON_SILENCE", True)
+        if min_blank_chunks is None:
+            min_blank_chunks = getattr(config, "SILENCE_RESET_CONSECUTIVE_BLANK_CHUNKS", 2)
 
         feats = self._extract_fbank(audio.astype(np.float32))
         if len(feats) == 0:
@@ -157,6 +172,7 @@ class ZipformerONNX:
         pos = 0
         input_names = [inp.name for inp in self.session.get_inputs()]
         start_time = time.time()
+        consecutive_blank_chunks = 0
 
         while pos + T_LEN <= num_frames:
             chunk = padded_feats[pos:pos + T_LEN][None, :].astype(np.float32)
@@ -168,6 +184,16 @@ class ZipformerONNX:
 
             for out_idx in range(1, len(outputs)):
                 states[input_names[out_idx]] = outputs[out_idx]
+
+            if reset_on_silence:
+                if np.all(chunk_lp.argmax(axis=-1) == BLANK_ID):
+                    consecutive_blank_chunks += 1
+                    if consecutive_blank_chunks == min_blank_chunks:
+                        for name in input_names:
+                            if name != 'x':
+                                states[name].fill(0)
+                else:
+                    consecutive_blank_chunks = 0
 
             pos += CHUNK_LEN
 

@@ -9,6 +9,7 @@ import logging
 from typing import Optional, Callable, Dict, Any, List, Union, Tuple
 import numpy as np
 
+import config
 from config import (
     SAMPLE_RATE,
     BLANK_ID,
@@ -22,6 +23,7 @@ from config import (
     SPEECH_RECOVERY_MIN_HOLE_DURATION_S,
     SPEECH_RECOVERY_PADDING_S,
     SPEECH_RECOVERY_MIN_PHONEMES_IN_GAP,
+    RESET_ENCODER_ON_SILENCE,
 )
 from src.models import (
     PhonemeToken,
@@ -118,7 +120,7 @@ class AudioPipeline:
         recovery_summary = RecoverySummary(0.0, 0, 0, 0, 0)
         recovery_time = 0.0
 
-        if ENABLE_SPEECH_RECOVERY:
+        if getattr(config, "ENABLE_SPEECH_RECOVERY", ENABLE_SPEECH_RECOVERY):
             rec_start = time.time()
             rec_res = SpeechRecoveryEngine.recover_speech(
                 audio_pcm=audio_pcm,

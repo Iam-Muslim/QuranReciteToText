@@ -23,12 +23,18 @@ FRAME_STEP = 1.0 / FRAME_RATE  # 0.040s
 LOOKAHEAD_OFFSET_FRAMES = 1.5  # -60ms streaming lookahead delay compensation
 CTC_BLANK_PENALTY = 1.8  # Trellis blank prior regularization
 
-# Speech Recovery Controls
-ENABLE_SPEECH_RECOVERY = False
-SPEECH_RECOVERY_ENERGY_THRESHOLD_DB = -35.0
-SPEECH_RECOVERY_MIN_HOLE_DURATION_S = 0.40
-SPEECH_RECOVERY_PADDING_S = 0.20
-SPEECH_RECOVERY_MIN_PHONEMES_IN_GAP = 2
+# Speech Recovery Controls (Fallback)
+ENABLE_SPEECH_RECOVERY: bool = False
+SPEECH_RECOVERY_ENERGY_THRESHOLD_DB: float = -35.0
+SPEECH_RECOVERY_MIN_HOLE_DURATION_S: float = 0.40
+SPEECH_RECOVERY_PADDING_S: float = 0.20
+SPEECH_RECOVERY_MIN_PHONEMES_IN_GAP: int = 2
+
+# Streaming Zipformer State Reset on Silence
+# Resets internal recurrent states when silence is detected between Ayahs / Waqf pauses.
+# Default is True. Set to False to disable state reset.
+RESET_ENCODER_ON_SILENCE: bool = False
+SILENCE_RESET_CONSECUTIVE_BLANK_CHUNKS: int = 2  # 2 chunks = 2 * 0.48s = 0.96s of silence
 
 # Runtime Performance & Profiling
 DEFAULT_NUM_THREADS = 2
