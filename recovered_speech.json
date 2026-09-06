@@ -1,0 +1,13 @@
+{
+  "audio_duration_seconds": 614.136,
+  "recovery_summary": {
+    "recovery_time_seconds": 0.0,
+    "scanned_gaps_count": 0,
+    "speech_holes_detected": 0,
+    "recovered_events_count": 0,
+    "recovered_phonemes_count": 0,
+    "energy_threshold_db": -35.0,
+    "min_hole_duration_s": 0.4
+  },
+  "recovery_events": []
+}

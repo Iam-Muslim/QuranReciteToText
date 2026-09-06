@@ -26,50 +26,31 @@ class PhonemeToken:
         return self.end - self.start
 
     def to_dict(self) -> Dict[str, Any]:
-        d = {
-            "phoneme": self.phoneme,
-            "start": round(self.start, 2),
-            "end": round(self.end, 2),
-        }
+        d = {"phoneme": self.phoneme, "start": round(self.start, 2), "end": round(self.end, 2)}
         if self.is_recovered:
             d["is_recovered"] = True
         return d
 
     def to_raw_dict(self, index: int) -> Dict[str, Any]:
         d = {
-            "index": index,
-            "phoneme": self.phoneme,
-            "start": round(self.start, 3),
-            "end": round(self.end, 3),
-            "duration": round(self.duration, 3),
-            "confidence": round(self.confidence, 2),
+            "index": index, "phoneme": self.phoneme, "start": round(self.start, 3),
+            "end": round(self.end, 3), "duration": round(self.duration, 3), "confidence": round(self.confidence, 2)
         }
-        if self.start_frame is not None:
-            d["start_frame"] = self.start_frame
-        if self.end_frame is not None:
-            d["end_frame"] = self.end_frame
-        if self.peak_frame is not None:
-            d["peak_frame"] = self.peak_frame
-        if self.peak_timestamp is not None:
-            d["peak_timestamp"] = round(self.peak_timestamp, 3)
-        if self.is_recovered:
-            d["is_recovered"] = True
+        if self.start_frame is not None: d["start_frame"] = self.start_frame
+        if self.end_frame is not None: d["end_frame"] = self.end_frame
+        if self.peak_frame is not None: d["peak_frame"] = self.peak_frame
+        if self.peak_timestamp is not None: d["peak_timestamp"] = round(self.peak_timestamp, 3)
+        if self.is_recovered: d["is_recovered"] = True
         return d
 
     def to_aligned_dict(self, index: int) -> Dict[str, Any]:
         d = {
-            "index": index,
-            "phoneme": self.phoneme,
-            "start_seconds": round(self.start, 3),
-            "end_seconds": round(self.end, 3),
-            "duration_seconds": round(self.duration, 3),
-            "confidence": round(self.confidence, 2),
-            "is_recovered": self.is_recovered,
+            "index": index, "phoneme": self.phoneme, "start_seconds": round(self.start, 3),
+            "end_seconds": round(self.end, 3), "duration_seconds": round(self.duration, 3),
+            "confidence": round(self.confidence, 2), "is_recovered": self.is_recovered
         }
-        if self.start_frame is not None:
-            d["start_frame"] = self.start_frame
-        if self.end_frame is not None:
-            d["end_frame"] = self.end_frame
+        if self.start_frame is not None: d["start_frame"] = self.start_frame
+        if self.end_frame is not None: d["end_frame"] = self.end_frame
         return d
 
 
@@ -113,13 +94,7 @@ class RecoveryEvent:
             "recovered_text": self.recovered_text,
             "phoneme_count": len(self.recovered_phonemes),
             "recovered_phonemes": [
-                {
-                    "phoneme": p.phoneme,
-                    "start": round(p.start, 3),
-                    "end": round(p.end, 3),
-                    "duration": round(p.duration, 3),
-                    "confidence": round(p.confidence, 2),
-                }
+                {"phoneme": p.phoneme, "start": round(p.start, 3), "end": round(p.end, 3), "duration": round(p.duration, 3), "confidence": round(p.confidence, 2)}
                 for p in self.recovered_phonemes
             ],
         }
@@ -170,18 +145,12 @@ class QuranWord:
 
     def to_dict(self) -> Dict[str, Any]:
         d = {"word": self.word}
-        if self.location is not None:
-            d["location"] = self.location
-        if self.start is not None:
-            d["start"] = round(self.start, 2)
-        if self.end is not None:
-            d["end"] = round(self.end, 2)
-        if self.score is not None:
-            d["score"] = round(self.score, 2)
-        if self.pause_after_seconds is not None:
-            d["pause_after"] = round(self.pause_after_seconds, 2)
-        if self.phonemes:
-            d["phonemes"] = self.phonemes
+        if self.location is not None: d["location"] = self.location
+        if self.start is not None: d["start"] = round(self.start, 2)
+        if self.end is not None: d["end"] = round(self.end, 2)
+        if self.score is not None: d["score"] = round(self.score, 2)
+        if self.pause_after_seconds is not None: d["pause_after"] = round(self.pause_after_seconds, 2)
+        if self.phonemes: d["phonemes"] = self.phonemes
         return d
 
 
@@ -198,15 +167,11 @@ class AyahSubSegment:
 
     def to_dict(self) -> Dict[str, Any]:
         d = {
-            "sub_segment": self.sub_segment_number,
-            "start_time": round(self.start_time, 2),
-            "end_time": round(self.end_time, 2),
-            "text": self.text,
-            "words_range": self.words_range,
+            "sub_segment": self.sub_segment_number, "start_time": round(self.start_time, 2),
+            "end_time": round(self.end_time, 2), "text": self.text, "words_range": self.words_range,
+            "words": [w.to_dict() for w in self.words]
         }
-        if self.is_repetition:
-            d["is_repetition"] = True
-        d["words"] = [w.to_dict() for w in self.words]
+        if self.is_repetition: d["is_repetition"] = True
         return d
 
 
@@ -232,22 +197,15 @@ class QuranSegment:
 
     def to_dict(self) -> Dict[str, Any]:
         d = {
-            "segment_number": self.segment_number,
-            "start_time": round(self.start_time, 2),
-            "end_time": round(self.end_time, 2),
-            "transcribed_text": self.transcribed_text,
-            "matched_text": self.matched_text,
-            "matched_ref": self.matched_ref,
-            "match_score": round(self.match_score, 3),
-            "has_missing_words": self.has_missing_words,
+            "segment_number": self.segment_number, "start_time": round(self.start_time, 2),
+            "end_time": round(self.end_time, 2), "transcribed_text": self.transcribed_text,
+            "matched_text": self.matched_text, "matched_ref": self.matched_ref,
+            "match_score": round(self.match_score, 3), "has_missing_words": self.has_missing_words,
             "has_repeated_words": self.has_repeated_words,
         }
-        if self.error is not None:
-            d["error"] = self.error
-        if self.prologue is not None:
-            d["prologue"] = self.prologue
-        if self.sub_segments:
-            d["sub_segments"] = [s.to_dict() for s in self.sub_segments]
+        if self.error is not None: d["error"] = self.error
+        if self.prologue is not None: d["prologue"] = self.prologue
+        if self.sub_segments: d["sub_segments"] = [s.to_dict() for s in self.sub_segments]
         return d
 
 
