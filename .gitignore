@@ -1,0 +1,21 @@
+# Ignore ONNX models
+*.onnx
+data/onnx/*.onnx
+
+# Ignore python caches
+__pycache__/
+*.pyc
+.env
+.venv/
+venv/
+
+# Ignore test audio & output files
+*.mp3
+*.wav
+*.m4a
+*.json
+
+# Ignore IDE files
+.vscode/
+.idea/
+benchmark
