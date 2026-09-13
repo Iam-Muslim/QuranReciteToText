@@ -537,37 +537,39 @@ def _align_and_package_ayahs(
 # 5. PREAMBLE EXTRACTION & CANONICAL MATCHING FACADE
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# Canonical Hafs phonemes from quran-transcript
-PHONEMES_BASMALAH = "بِسمِللَااهِرَرَحمَاانِرَرَحِۦۦۦۦم"
-BASMALAH_WORDS = [
-    ("بِسْمِ", "بِسمِ"),
-    ("ٱللَّهِ", "للَااهِ"),
-    ("ٱلرَّحْمَـٰنِ", "رَرَحمَاانِ"),
-    ("ٱلرَّحِيمِ", "رَرَحِۦۦۦۦم"),
-]
-
-PHONEMES_ISTIAATHA = "ءَعُۥۥذُبِللَااهِمِنَششَيطَاانِررَجِۦۦۦۦم"
-ISTIAATHA_WORDS = [
-    ("أَعُوذُ", "ءَعُۥۥذُ"),
-    ("بِٱللَّهِ", "بِللَااهِ"),
-    ("مِنَ", "مِنَ"),
-    ("ٱلشَّيْطَـٰنِ", "ششَيطَاانِ"),
-    ("ٱلرَّجِيمِ", "ررَجِۦۦۦۦم"),
-]
+ISTIAADHA_TEXT = "أَعُوذُ بِٱللَّهِ مِنَ ٱلشَّيْطَـٰنِ ٱلرَّجِيمِ"
+ISTIAADHA_PH = "ءَعُۥۥذُبِللَااهِمِنَششَيطَاانِررَجِۦۦۦۦم"
 
 
 def _slice_preamble_match(
-    pattern: str, tokens: List[PhonemeToken], max_dist: int
-) -> Tuple[Optional[List[PhonemeToken]], List[PhonemeToken]]:
+    pattern: str, tokens: List[PhonemeToken], max_error_ratio: float = 0.28
+) -> Tuple[Optional[Tuple[float, float, List[PhonemeToken]]], List[PhonemeToken]]:
     """Fast bit-parallel slice for opening preamble using Gene Myers' kernel."""
-    head = "".join(t.phoneme for t in tokens[:min(len(tokens), len(pattern) + 12)])
-    matches = find_near_matches(pattern, head, max_l_dist=max_dist)
-    if matches and matches[0].start == 0 and matches[0].dist <= max_dist:
-        consumed, k = 0, 0
-        while k < len(tokens) and consumed < matches[0].end:
-            consumed += len(tokens[k].phoneme)
-            k += 1
-        return tokens[:k], tokens[k:]
+    if not tokens:
+        return None, tokens
+
+    head_len = min(len(tokens), len(pattern) + 30)
+    head_str = "".join(t.phoneme for t in tokens[:head_len])
+    max_dist = max(3, int(len(pattern) * max_error_ratio))
+
+    matches = find_near_matches(pattern, head_str, max_l_dist=max_dist)
+    if matches and matches[0].start <= 6:
+        m = matches[0]
+        consumed, k = 0, len(tokens)
+        start_t, end_t = None, None
+        for idx, tok in enumerate(tokens):
+            consumed += len(tok.phoneme)
+            if start_t is None and consumed > m.start:
+                start_t = tok.start
+            if consumed >= m.end:
+                end_t = tok.end
+                k = idx + 1
+                break
+        matched_toks = tokens[:k]
+        st = start_t if start_t is not None else matched_toks[0].start
+        et = end_t if end_t is not None else matched_toks[-1].end
+        return (st, et, matched_toks), tokens[k:]
+
     return None, tokens
 
 
@@ -575,53 +577,42 @@ def _extract_opening_preamble(
     aligned_tokens: List[PhonemeToken],
     surah: int,
     start_ayah: int,
+    ref_surah_1: SurahReferenceData,
 ) -> Tuple[Optional[Dict[str, Any]], List[PhonemeToken]]:
-    """Detects and isolates recited Isti'adha and/or pre-verse Basmalah before Ayah 1.
-
-    Guarantees:
-    - Only checks at t=0 when start_ayah == 1.
-    - Surah 1: Basmalah is Ayah 1, so Basmalah extraction is disabled.
-    - Surah 9: Basmalah is canonically absent, so Basmalah extraction is disabled.
-    - Surah 27 (An-Naml:30): Basmalah is inside Ayah 30, so untouched.
-    """
-    if start_ayah != 1 or not aligned_tokens:
+    """Detects and isolates recited Isti'adha and/or pre-verse Basmalah before Ayah 1."""
+    if not aligned_tokens:
         return None, aligned_tokens
 
     curr = aligned_tokens
     preamble: Dict[str, Any] = {}
 
-    # 1. Isti'adha
-    ist_toks, curr = _slice_preamble_match(PHONEMES_ISTIAATHA, curr, max_dist=5)
-    if ist_toks:
+    # 1. Isti'adha (can precede any recitation)
+    ist_res, curr = _slice_preamble_match(ISTIAADHA_PH, curr)
+    if ist_res:
+        st, et, _ = ist_res
         preamble["istiaatha"] = {
-            "text": "أَعُوذُ بِٱللَّهِ مِنَ ٱلشَّيْطَانِ ٱلرَّجِيمِ",
-            "start": round(ist_toks[0].start, 2),
-            "end": round(ist_toks[-1].end, 2),
+            "text": ISTIAADHA_TEXT,
+            "start": round(st, 2),
+            "end": round(et, 2),
         }
 
-    # 2. Basmalah (Surahs 2-114 except 9)
-    if surah not in (1, 9):
-        bas_toks, curr = _slice_preamble_match(PHONEMES_BASMALAH, curr, max_dist=4)
-        if bas_toks:
-            words, ptr = [], 0
-            for w_uth, w_ph in BASMALAH_WORDS:
-                w_toks, acc = [], ""
-                while ptr < len(bas_toks) and len(acc) < len(w_ph):
-                    w_toks.append(bas_toks[ptr])
-                    acc += bas_toks[ptr].phoneme
-                    ptr += 1
-                if w_toks:
-                    words.append({
-                        "word": w_uth,
-                        "ref": w_ph,
-                        "start": round(w_toks[0].start, 2),
-                        "end": round(w_toks[-1].end, 2),
-                        "phonemes": [t.to_dict() for t in w_toks],
-                    })
+    # 2. Basmalah (Surahs 2-114 except 9, only before Ayah 1)
+    if start_ayah == 1 and surah not in (1, 9):
+        basmalah_ph = "".join(w.phoneme for w in ref_surah_1.ayah_to_words[1])
+        bas_res, curr = _slice_preamble_match(basmalah_ph, curr)
+        if bas_res:
+            st, et, bas_toks = bas_res
+            bas_segs = _align_and_package_ayahs(
+                aligned_tokens=bas_toks,
+                ref_data=ref_surah_1,
+                start_word_index=0,
+                target_end_ayah=1,
+            )
+            words = [w.to_dict() for w in bas_segs[0].words] if bas_segs else []
             preamble["basmalah"] = {
-                "text": "بِسْمِ ٱللَّهِ ٱلرَّحْمَـٰنِ ٱلرَّحِيمِ",
-                "start": round(bas_toks[0].start, 2),
-                "end": round(bas_toks[-1].end, 2),
+                "text": ref_surah_1.ayah_texts.get(1, "بِسْمِ ٱللَّهِ ٱلرَّحْمَـٰنِ ٱلرَّحِيمِ"),
+                "start": round(st, 2),
+                "end": round(et, 2),
                 "words": words,
             }
 
@@ -703,7 +694,7 @@ class QuranMatcher:
 
         # 2. Opening Preamble Extraction (Isti'adha & pre-verse Basmalah)
         prologue, remaining_tokens = _extract_opening_preamble(
-            aligned_phonemes, detected_surah, detected_start_ayah or 1
+            aligned_phonemes, detected_surah, detected_start_ayah or 1, self._get_surah_ref(1)
         )
 
         ref_data = self._get_surah_ref(detected_surah)
@@ -720,6 +711,12 @@ class QuranMatcher:
 
         if prologue and segments:
             segments[0].prologue = prologue
+            p_starts = [
+                v["start"] for v in prologue.values()
+                if isinstance(v, dict) and "start" in v
+            ]
+            if p_starts:
+                segments[0].start_time = min(segments[0].start_time, min(p_starts))
 
         return segments
 

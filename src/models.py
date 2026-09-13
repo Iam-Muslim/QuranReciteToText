@@ -185,20 +185,31 @@ class QuranSegment:
     error: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        d = {
-            "segment_number": self.segment_number, "start_time": round(self.start_time, 2),
-            "end_time": round(self.end_time, 2), "transcribed_text": self.transcribed_text,
-            "matched_text": self.matched_text, "matched_ref": self.matched_ref,
-            "match_score": round(self.match_score, 3), "has_missing_words": self.has_missing_words,
-            "has_repeated_words": self.has_repeated_words,
+        d: Dict[str, Any] = {
+            "segment_number": self.segment_number,
+            "start_time": round(self.start_time, 2),
+            "end_time": round(self.end_time, 2),
         }
+        if self.prologue is not None:
+            d["prologue"] = self.prologue
+        d.update({
+            "transcribed_text": self.transcribed_text,
+            "matched_text": self.matched_text,
+            "matched_ref": self.matched_ref,
+            "match_score": round(self.match_score, 3),
+            "has_missing_words": self.has_missing_words,
+            "has_repeated_words": self.has_repeated_words,
+        })
         if not self.sub_segments:
             d["words"] = [w.to_dict() for w in self.words]
-        if self.error is not None: d["error"] = self.error
-        if self.prologue is not None: d["prologue"] = self.prologue
-        if self.repeated_ranges: d["repeated_ranges"] = self.repeated_ranges
-        if self.repeated_text: d["repeated_text"] = self.repeated_text
-        if self.sub_segments: d["sub_segments"] = [s.to_dict() for s in self.sub_segments]
+        if self.error is not None:
+            d["error"] = self.error
+        if self.repeated_ranges:
+            d["repeated_ranges"] = self.repeated_ranges
+        if self.repeated_text:
+            d["repeated_text"] = self.repeated_text
+        if self.sub_segments:
+            d["sub_segments"] = [s.to_dict() for s in self.sub_segments]
         return d
 
 
