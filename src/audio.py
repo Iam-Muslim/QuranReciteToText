@@ -128,9 +128,14 @@ class AudioDecoder:
 
         do_clip = CLIP_AUDIO_PEAKS if clip_peaks is None else clip_peaks
         if do_clip and len(audio) > 0:
-            peak = float(np.max(np.abs(audio)))
+            min_val = float(np.min(audio))
+            max_val = float(np.max(audio))
+            peak = max(abs(min_val), abs(max_val))
             if peak > 1.0:
-                audio = audio / peak
+                if audio.flags.writeable:
+                    audio /= peak
+                else:
+                    audio = audio / peak
 
         return audio.astype(np.float32, copy=False)
 
@@ -173,9 +178,14 @@ class AudioDecoder:
 
         do_clip = CLIP_AUDIO_PEAKS if clip_peaks is None else clip_peaks
         if do_clip and len(audio) > 0:
-            peak = float(np.max(np.abs(audio)))
+            min_val = float(np.min(audio))
+            max_val = float(np.max(audio))
+            peak = max(abs(min_val), abs(max_val))
             if peak > 1.0:
-                audio = audio / peak
+                if audio.flags.writeable:
+                    audio /= peak
+                else:
+                    audio = audio / peak
 
         return audio.astype(np.float32, copy=False)
 

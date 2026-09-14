@@ -178,6 +178,9 @@ class AudioPipeline:
             if live_profile:
                 print(f"Phase 1.1 Recovery  : {recovery_time:.2f}s", flush=True)
 
+        # Release raw PCM audio buffer to reclaim memory before Phase 2 CTC Alignment
+        audio_pcm = None
+
         # Phase 2: CTC Viterbi Trellis Alignment
         align_start = time.time()
         aligned_phonemes = CtcViterbiAligner.align_phonemes(
@@ -191,6 +194,11 @@ class AudioPipeline:
         align_time = time.time() - align_start
         if live_profile:
             print(f"Phase 2 CTC Align   : {align_time:.2f}s", flush=True)
+
+        # Release large emission logprobs matrix before Phase 3 to reclaim physical RAM
+        raw_result.logprobs_matrix = None
+        import gc
+        gc.collect()
 
         # Phase 3: Quran Text Matcher & Sequencer
         match_start = time.time()

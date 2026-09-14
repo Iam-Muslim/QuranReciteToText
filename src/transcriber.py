@@ -276,6 +276,7 @@ class ZipformerONNX:
 
         sess_opts = ort.SessionOptions()
         sess_opts.log_severity_level = 3
+        sess_opts.enable_cpu_mem_arena = False
         num_threads = int(os.environ.get("ONNX_NUM_THREADS", "2"))
         sess_opts.intra_op_num_threads = num_threads
         sess_opts.inter_op_num_threads = 2
@@ -358,7 +359,11 @@ class ZipformerONNX:
         fbank = knf.OnlineFbank(opts)
         if not audio.flags.c_contiguous or audio.dtype != np.float32:
             audio = np.ascontiguousarray(audio, dtype=np.float32)
-        fbank.accept_waveform(SAMPLE_RATE, audio)
+
+        # Chunked ingestion avoids buffering entire multi-hour waveforms in C++
+        chunk_samples = SAMPLE_RATE * 30
+        for pos in range(0, len(audio), chunk_samples):
+            fbank.accept_waveform(SAMPLE_RATE, audio[pos:pos + chunk_samples])
         fbank.input_finished()
 
         num_frames = fbank.num_frames_ready
@@ -368,6 +373,8 @@ class ZipformerONNX:
         feats = np.empty((num_frames, 80), dtype=np.float32)
         for i in range(num_frames):
             feats[i] = fbank.get_frame(i)
+
+        del fbank
         return feats
 
     def _transcribe_fbank_segment(
@@ -498,7 +505,7 @@ class ZipformerONNX:
         if self.session is None or len(audio) == 0:
             return RawTranscriptionResult(vocab_size=len(self.vocab))
 
-        audio_pcm = audio.astype(np.float32)
+        audio_pcm = audio.astype(np.float32, copy=False)
         audio_duration = len(audio_pcm) / sample_rate
 
         # 1. Segment audio on natural Waqf pauses
@@ -510,6 +517,8 @@ class ZipformerONNX:
         total_fbank_frames = len(global_feats)
         if total_fbank_frames == 0:
             return RawTranscriptionResult(vocab_size=len(self.vocab))
+
+        del audio_pcm
 
         total_frames = int(math.ceil(audio_duration / FRAME_TIME_STEP))
         vocab_size = len(self.vocab)
