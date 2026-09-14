@@ -277,7 +277,7 @@ class ZipformerONNX:
 
         sess_opts = ort.SessionOptions()
         sess_opts.log_severity_level = 3
-        sess_opts.enable_cpu_mem_arena = False
+        sess_opts.enable_cpu_mem_arena = os.environ.get("ONNX_ENABLE_ARENA", "1") == "1"
         num_threads = int(os.environ.get("ONNX_NUM_THREADS", "2"))
         sess_opts.intra_op_num_threads = num_threads
         sess_opts.inter_op_num_threads = 2
