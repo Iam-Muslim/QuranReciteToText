@@ -407,7 +407,7 @@ class ZipformerONNX:
         pos = 0
 
         while pos + T_LEN <= num_frames:
-            self._state_buffers['x'] = padded_feats[pos:pos + T_LEN][None, :].astype(np.float32)
+            self._state_buffers['x'] = padded_feats[pos:pos + T_LEN][None, :]
             outs = self.session.run(None, self._state_buffers)
             for idx in range(1, len(outs)):
                 self._state_buffers[self._input_names[idx]] = outs[idx]
