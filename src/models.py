@@ -131,15 +131,20 @@ class QuranWord:
     confidence: Optional[float] = None
     score: Optional[float] = None
     phonemes: Optional[List[Dict[str, Any]]] = None
+    is_missing: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
-        d = {"word": self.word}
-        if self.location is not None: d["location"] = self.location
-        if self.ref is not None: d["ref"] = self.ref
-        if self.start is not None: d["start"] = round(self.start, 2)
-        if self.end is not None: d["end"] = round(self.end, 2)
-        if self.score is not None: d["score"] = round(self.score, 2)
-        if self.phonemes: d["phonemes"] = self.phonemes
+        d = {
+            "word": self.word,
+            "location": self.location,
+            "ref": self.ref,
+            "start": round(self.start, 2) if self.start is not None else None,
+            "end": round(self.end, 2) if self.end is not None else None,
+            "score": round(self.score, 2) if self.score is not None else 0.0,
+            "phonemes": self.phonemes if self.phonemes is not None else [],
+        }
+        if self.is_missing or (self.start is None):
+            d["is_missing"] = True
         return d
 
 
@@ -156,11 +161,14 @@ class AyahSubSegment:
 
     def to_dict(self) -> Dict[str, Any]:
         d = {
-            "sub_segment": self.sub_segment_number, "start_time": round(self.start_time, 2),
-            "end_time": round(self.end_time, 2), "text": self.text, "words_range": self.words_range,
-            "words": [w.to_dict() for w in self.words]
+            "segment": self.sub_segment_number,
+            "start": round(self.start_time, 2),
+            "end": round(self.end_time, 2),
+            "transcribed_text": self.text,
+            "words": [w.to_dict() for w in self.words],
         }
-        if self.is_repetition: d["is_repetition"] = True
+        if self.is_repetition:
+            d["is_repetition"] = True
         return d
 
 
@@ -168,6 +176,7 @@ class AyahSubSegment:
 class QuranSegment:
     """Canonical 1-Ayah segment containing aligned words, subsegments, and metadata."""
     segment_number: int
+    ayah: int = 1
     surah_number: int = 1
     start_time: float = 0.0
     end_time: float = 0.0
@@ -182,34 +191,44 @@ class QuranSegment:
     repeated_text: Optional[List[str]] = None
     sub_segments: Optional[List[AyahSubSegment]] = None
     prologue: Optional[Dict[str, Any]] = None
+    intro: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
+        real_ayah = self.ayah if self.ayah is not None else self.segment_number
+        if self.matched_ref and ":" in self.matched_ref:
+            try:
+                real_ayah = int(self.matched_ref.split(":")[1])
+            except Exception:
+                pass
+
         d: Dict[str, Any] = {
-            "segment_number": self.segment_number,
-            "start_time": round(self.start_time, 2),
-            "end_time": round(self.end_time, 2),
-        }
-        if self.prologue is not None:
-            d["prologue"] = self.prologue
-        d.update({
-            "transcribed_text": self.transcribed_text,
-            "matched_text": self.matched_text,
+            "ayah": real_ayah,
+            "start": round(self.start_time, 2),
+            "end": round(self.end_time, 2),
+            "transcribed_text": self.transcribed_text or self.matched_text,
             "matched_ref": self.matched_ref,
-            "match_score": round(self.match_score, 3),
-            "has_missing_words": self.has_missing_words,
-            "has_repeated_words": self.has_repeated_words,
-        })
-        if not self.sub_segments:
-            d["words"] = [w.to_dict() for w in self.words]
-        if self.error is not None:
-            d["error"] = self.error
+        }
         if self.repeated_ranges:
             d["repeated_ranges"] = self.repeated_ranges
         if self.repeated_text:
             d["repeated_text"] = self.repeated_text
+        if self.error is not None:
+            d["error"] = self.error
+
+        # segments level (sub-segments if repetitions exist, or 1 single segment if no repetition)
         if self.sub_segments:
-            d["sub_segments"] = [s.to_dict() for s in self.sub_segments]
+            d["segments"] = [s.to_dict() for s in self.sub_segments]
+        else:
+            d["segments"] = [
+                {
+                    "segment": 1,
+                    "start": round(self.start_time, 2),
+                    "end": round(self.end_time, 2),
+                    "transcribed_text": self.transcribed_text or self.matched_text,
+                    "words": [w.to_dict() for w in self.words],
+                }
+            ]
         return d
 
 
@@ -249,7 +268,7 @@ class PipelineResult:
     pause_timestamps: List[float] = field(default_factory=list)
 
     def to_output_dict(self) -> Dict[str, Any]:
-        return {"total_segments": len(self.segments), "segments": [s.to_dict() for s in self.segments]}
+        return {"total_ayahs": len(self.segments), "ayahs": [s.to_dict() for s in self.segments]}
 
     def export_json(self, output_dir: str = ".") -> Dict[str, str]:
         """Exports all 4 canonical JSON artifacts into the specified directory."""
@@ -283,9 +302,12 @@ class PipelineResult:
             },
             "output.json": {
                 "total_surahs": len(by_surah),
-                "total_segments": len(self.segments),
                 "surahs": [
-                    {"surah_number": k, "total_segments": len(v), "segments": [s.to_dict() for s in v]}
+                    {
+                        "surah": k,
+                        **({"intro": v[0].intro} if v and getattr(v[0], "intro", None) else {}),
+                        "ayahs": [s.to_dict() for s in v],
+                    }
                     for k, v in by_surah.items()
                 ],
             },

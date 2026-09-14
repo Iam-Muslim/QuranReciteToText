@@ -246,6 +246,7 @@ def _align_and_package_ayahs(
                     score=0.0,
                     confidence=0.0,
                     phonemes=[],
+                    is_missing=True,
                 ))
 
         # Build sub_segments and repetition details if the verse was recited multiple times
@@ -333,6 +334,7 @@ def _align_and_package_ayahs(
 
         segments.append(QuranSegment(
             segment_number=seg_number,
+            ayah=ay,
             surah_number=ref_data.surah,
             start_time=round(seg_start, 2),
             end_time=round(seg_end, 2),
@@ -403,17 +405,35 @@ def _extract_opening_preamble(
         return None, aligned_tokens
 
     curr = aligned_tokens
-    preamble: Dict[str, Any] = {}
+    intro_words: List[Dict[str, Any]] = []
+    intro_texts: List[str] = []
+    intro_starts: List[float] = []
+    intro_ends: List[float] = []
 
     # 1. Isti'adha (can precede any recitation)
     ist_res, curr = _slice_preamble_match(ISTIAADHA_PH, curr)
     if ist_res:
-        st, et, _ = ist_res
-        preamble["istiaatha"] = {
-            "text": ISTIAADHA_TEXT,
-            "start": round(st, 2),
-            "end": round(et, 2),
-        }
+        st, et, ist_toks = ist_res
+        intro_starts.append(st)
+        intro_ends.append(et)
+        intro_texts.append(ISTIAADHA_TEXT)
+        ist_words_text = ISTIAADHA_TEXT.split()
+        if ist_toks and ist_words_text:
+            n_w = len(ist_words_text)
+            toks_per_word = max(1, len(ist_toks) // n_w)
+            for w_i, w_txt in enumerate(ist_words_text):
+                s_idx = w_i * toks_per_word
+                e_idx = (w_i + 1) * toks_per_word if w_i < n_w - 1 else len(ist_toks)
+                w_toks = ist_toks[s_idx:e_idx]
+                w_st = w_toks[0].start if w_toks else st
+                w_et = w_toks[-1].end if w_toks else et
+                intro_words.append({
+                    "word": w_txt,
+                    "start": round(w_st, 2),
+                    "end": round(w_et, 2),
+                    "score": 1.0,
+                    "phonemes": [t.to_dict() for t in w_toks],
+                })
 
     # 2. Basmalah (Surahs 2-114 except 9, only before Ayah 1)
     if start_ayah == 1 and surah not in (1, 9):
@@ -421,21 +441,33 @@ def _extract_opening_preamble(
         bas_res, curr = _slice_preamble_match(basmalah_ph, curr)
         if bas_res:
             st, et, bas_toks = bas_res
+            intro_starts.append(st)
+            intro_ends.append(et)
+            intro_texts.append(ref_surah_1.ayah_texts.get(1, "بِسْمِ ٱللَّهِ ٱلرَّحْمَـٰنِ ٱلرَّحِيمِ"))
             bas_segs = _align_and_package_ayahs(
                 aligned_tokens=bas_toks,
                 ref_data=ref_surah_1,
                 start_word_index=0,
                 target_end_ayah=1,
             )
-            words = [w.to_dict() for w in bas_segs[0].words] if bas_segs else []
-            preamble["basmalah"] = {
-                "text": ref_surah_1.ayah_texts.get(1, "بِسْمِ ٱللَّهِ ٱلرَّحْمَـٰنِ ٱلرَّحِيمِ"),
-                "start": round(st, 2),
-                "end": round(et, 2),
-                "words": words,
-            }
+            if bas_segs:
+                for sub in (bas_segs[0].sub_segments or []):
+                    for w in sub.words:
+                        intro_words.append(w.to_dict())
+                if not bas_segs[0].sub_segments and bas_segs[0].words:
+                    for w in bas_segs[0].words:
+                        intro_words.append(w.to_dict())
 
-    return (preamble or None), curr
+    if intro_texts:
+        intro_dict = {
+            "start": round(min(intro_starts), 2),
+            "end": round(max(intro_ends), 2),
+            "transcribed_text": " ".join(intro_texts),
+            "words": intro_words,
+        }
+        return intro_dict, curr
+
+    return None, curr
 
 
 class QuranMatcher:
@@ -529,13 +561,7 @@ class QuranMatcher:
         )
 
         if prologue and segments:
-            segments[0].prologue = prologue
-            p_starts = [
-                v["start"] for v in prologue.values()
-                if isinstance(v, dict) and "start" in v
-            ]
-            if p_starts:
-                segments[0].start_time = min(segments[0].start_time, min(p_starts))
+            segments[0].intro = prologue
 
         return segments
 

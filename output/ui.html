@@ -163,6 +163,12 @@
     color: #fff7e6;
   }
 
+  .word-block.missing .word-ar {
+    color: #cf7070 !important;
+    text-decoration: line-through rgba(207, 112, 112, 0.45);
+    opacity: 0.7;
+  }
+
   .phonemes {
     direction: rtl;
     display: flex;
@@ -772,6 +778,15 @@ PASTE_FULL_OUTPUT_JSON_HERE
       }
 
       model = buildModel(segments);
+
+      const intro = findIntro(normalized);
+      if (intro && Array.isArray(intro.words) && intro.words.length) {
+        const introSeg = buildIntroModel(intro);
+        if (introSeg) {
+          model.unshift(introSeg);
+        }
+      }
+
       buildStrip();
 
       if (model.length > 0) {
@@ -804,9 +819,8 @@ PASTE_FULL_OUTPUT_JSON_HERE
     function findSurahNumber(obj) {
       if (!obj || typeof obj !== "object") return "";
 
-      if (obj.surah_number !== undefined) {
-        return obj.surah_number;
-      }
+      if (obj.surah !== undefined) return obj.surah;
+      if (obj.surah_number !== undefined) return obj.surah_number;
 
       if (Array.isArray(obj)) {
         for (const item of obj) {
@@ -829,19 +843,112 @@ PASTE_FULL_OUTPUT_JSON_HERE
       return "";
     }
 
+    function findIntro(obj) {
+      if (!obj || typeof obj !== "object") return null;
+      if (obj.intro && typeof obj.intro === "object") return obj.intro;
+      if (Array.isArray(obj.surahs) && obj.surahs[0]?.intro) return obj.surahs[0].intro;
+      for (const value of Object.values(obj)) {
+        if (value && typeof value === "object") {
+          const found = findIntro(value);
+          if (found) return found;
+        }
+      }
+      return null;
+    }
+
+    function buildIntroModel(intro) {
+      const iStart = num(intro.start);
+      const iEnd = num(intro.end);
+      const iText = str(intro.transcribed_text || intro.text || "Intro");
+
+      const words = (Array.isArray(intro.words) ? intro.words : []).map((w, wIdx) => {
+        const wStart = num(w.start, iStart);
+        const wEnd = num(w.end, iEnd);
+        let phs = Array.isArray(w.phonemes)
+          ? w.phonemes.map((p, pIdx) => ({
+              index: pIdx,
+              text: str(p.phoneme || p.text),
+              start: num(p.start, wStart),
+              end: num(p.end, wEnd)
+            }))
+          : [];
+        if (phs.length === 0) {
+          phs = [{ index: 0, text: str(w.word), start: wStart, end: wEnd }];
+        }
+        return {
+          index: wIdx,
+          text: str(w.word || "•"),
+          location: str(w.location),
+          start: wStart,
+          end: wEnd,
+          score: num(w.score, 1),
+          is_missing: false,
+          phonemes: phs
+        };
+      });
+
+      return {
+        index: 0,
+        number: "Intro",
+        start: iStart,
+        end: iEnd,
+        text: iText,
+        ref: "Intro",
+        repeated: false,
+        missing: false,
+        sub_segments: [
+          {
+            index: 0,
+            number: "Intro",
+            start: iStart,
+            end: iEnd,
+            text: iText,
+            range: "",
+            repeated: false,
+            missing: false,
+            words: words
+          }
+        ]
+      };
+    }
+
     function findSegments(obj) {
       if (!obj) return [];
 
+      if (Array.isArray(obj.surahs)) {
+        let all = [];
+        for (const s of obj.surahs) {
+          if (Array.isArray(s.ayahs)) all.push(...s.ayahs);
+          else if (Array.isArray(s.segments)) all.push(...s.segments);
+        }
+        if (all.length) return all;
+      }
+
+      if (Array.isArray(obj.ayahs)) {
+        return obj.ayahs;
+      }
+
+      if (Array.isArray(obj.segments)) {
+        return obj.segments;
+      }
+
       if (Array.isArray(obj)) {
+        if (obj.length && Array.isArray(obj[0]?.ayahs)) {
+          return obj.flatMap((s) => s.ayahs || []);
+        }
         if (obj.length && Array.isArray(obj[0]?.segments)) {
-          return obj[0].segments;
+          return obj.flatMap((s) => s.segments || []);
         }
 
         if (
           obj.length &&
           (
+            obj[0]?.ayah !== undefined ||
+            obj[0]?.ayah_number !== undefined ||
             obj[0]?.sub_segments !== undefined ||
+            obj[0]?.segments !== undefined ||
             obj[0]?.words !== undefined ||
+            obj[0]?.start !== undefined ||
             obj[0]?.start_time !== undefined
           )
         ) {
@@ -856,15 +963,6 @@ PASTE_FULL_OUTPUT_JSON_HERE
         return [];
       }
 
-      if (Array.isArray(obj.segments)) {
-        return obj.segments;
-      }
-
-      if (obj.surahs) {
-        const found = findSegments(obj.surahs);
-        if (found.length) return found;
-      }
-
       for (const value of Object.values(obj)) {
         if (value && typeof value === "object") {
           const found = findSegments(value);
@@ -877,24 +975,29 @@ PASTE_FULL_OUTPUT_JSON_HERE
 
     function buildModel(segments) {
       return segments.map((segment, segmentIndex) => {
-        const segStart = num(segment.start_time);
-        const segEnd = num(segment.end_time);
-        const segText = str(segment.matched_text || segment.transcribed_text);
+        const segStart = num(segment.start !== undefined ? segment.start : segment.start_time);
+        const segEnd = num(segment.end !== undefined ? segment.end : segment.end_time);
+        const segText = str(segment.transcribed_text || segment.matched_text || segment.text);
 
-        const repeated = bool(segment.has_repeated_words);
+        const repeated = bool(
+          segment.has_repeated_words ||
+          (Array.isArray(segment.repeated_ranges) && segment.repeated_ranges.length > 0)
+        );
         const missingSegment = bool(segment.has_missing_words);
 
-        let rawSubs = Array.isArray(segment.sub_segments)
+        let rawSubs = Array.isArray(segment.segments)
+          ? segment.segments
+          : Array.isArray(segment.sub_segments)
           ? segment.sub_segments
           : [];
 
         if (rawSubs.length === 0) {
           rawSubs = [
             {
-              sub_segment: 1,
-              start_time: segStart,
-              end_time: segEnd,
-              text: segText,
+              segment: 1,
+              start: segStart,
+              end: segEnd,
+              transcribed_text: segText,
               words_range: str(segment.matched_ref),
               words: Array.isArray(segment.words) ? segment.words : []
             }
@@ -902,10 +1005,13 @@ PASTE_FULL_OUTPUT_JSON_HERE
         }
 
         const subCount = rawSubs.length;
+        const ayahNum = segment.ayah !== undefined
+          ? segment.ayah
+          : (segment.ayah_number !== undefined ? segment.ayah_number : segment.segment_number);
 
         return {
           index: segmentIndex,
-          number: num(segment.segment_number, segmentIndex + 1),
+          number: ayahNum !== undefined ? ayahNum : segmentIndex + 1,
           start: segStart,
           end: segEnd,
           text: segText,
@@ -914,10 +1020,11 @@ PASTE_FULL_OUTPUT_JSON_HERE
           missing: missingSegment,
 
           sub_segments: rawSubs.map((sub, subIndex) => {
-            const subStart = num(sub.start_time, segStart);
-            const subEnd = num(sub.end_time, segEnd);
-            const subText = str(sub.text || segText);
-            const subRange = str(sub.words_range);
+            const subStart = num(sub.start !== undefined ? sub.start : sub.start_time, segStart);
+            const subEnd = num(sub.end !== undefined ? sub.end : sub.end_time, segEnd);
+            const subText = str(sub.transcribed_text || sub.text || segText);
+            const subRange = str(sub.words_range || segment.matched_ref);
+            const subRepeated = bool(sub.is_repetition || (repeated && subIndex > 0));
 
             let rawWords = Array.isArray(sub.words) ? sub.words : [];
 
@@ -935,21 +1042,22 @@ PASTE_FULL_OUTPUT_JSON_HERE
             }
 
             const words = rawWords.map((word, wordIndex) => {
-              const wordText = str(word.word || subText);
-              const wordStart = num(word.start, subStart);
-              const wordEnd = num(word.end, subEnd);
-              const score = num(word.score, 1);
+              const wordText = str(word.word || word.text || subText);
+              const isMissingWord = bool(word.is_missing || (word.start === null && word.end === null) || word.score <= 0);
+              const wordStart = isMissingWord ? subStart : num(word.start, subStart);
+              const wordEnd = isMissingWord ? subStart : num(word.end, subEnd);
+              const score = isMissingWord ? 0 : num(word.score, 1);
 
               let phonemes = Array.isArray(word.phonemes)
                 ? word.phonemes.map((phoneme, phonemeIndex) => ({
                     index: phonemeIndex,
-                    text: str(phoneme.phoneme),
+                    text: str(phoneme.phoneme || phoneme.text),
                     start: num(phoneme.start, wordStart),
                     end: num(phoneme.end, wordEnd)
                   }))
                 : [];
 
-              if (phonemes.length === 0 && score > 0) {
+              if (phonemes.length === 0 && score > 0 && !isMissingWord) {
                 phonemes = [
                   {
                     index: 0,
@@ -967,21 +1075,25 @@ PASTE_FULL_OUTPUT_JSON_HERE
                 start: wordStart,
                 end: wordEnd,
                 score,
+                is_missing: isMissingWord,
                 phonemes
               };
             });
 
-            const localMissing = words.some((w) => w.score <= 0);
+            const localMissing = words.some((w) => w.is_missing || w.score <= 0);
             const missing = localMissing || (missingSegment && subCount === 1);
+            const segNum = sub.segment !== undefined
+              ? sub.segment
+              : (sub.segment_number !== undefined ? sub.segment_number : sub.sub_segment);
 
             return {
               index: subIndex,
-              number: num(sub.sub_segment, subIndex + 1),
+              number: segNum !== undefined ? segNum : subIndex + 1,
               start: subStart,
               end: subEnd,
               text: subText,
               range: subRange,
-              repeated,
+              repeated: subRepeated,
               missing,
               words
             };
@@ -996,6 +1108,7 @@ PASTE_FULL_OUTPUT_JSON_HERE
       activeChip = null;
 
       model.forEach((segment, segmentIndex) => {
+        const subCount = segment.sub_segments.length;
         segment.sub_segments.forEach((sub, subIndex) => {
           const chip = document.createElement("div");
           chip.className = "chip";
@@ -1010,10 +1123,17 @@ PASTE_FULL_OUTPUT_JSON_HERE
           metaLine.className = "chip-meta";
 
           const metaParts = [
-            "Surah " + (surahNumber || "?"),
-            "Segment " + segment.number,
-            "Sub " + sub.number
+            "Surah " + (surahNumber || "?")
           ];
+
+          if (segment.number === "Intro") {
+            metaParts.push("Intro");
+          } else {
+            metaParts.push("Ayah " + segment.number);
+            if (subCount > 1) {
+              metaParts.push("Seg " + sub.number);
+            }
+          }
 
           if (sub.range) {
             metaParts.push(sub.range);
@@ -1117,9 +1237,14 @@ PASTE_FULL_OUTPUT_JSON_HERE
       renderWords.forEach((word) => {
         const block = document.createElement("div");
         block.className = "word-block future";
+        if (word.is_missing) {
+          block.classList.add("missing");
+        }
 
         block.addEventListener("click", () => {
-          seekTo(word.start + 0.0001);
+          if (!word.is_missing && word.start !== null) {
+            seekTo(word.start + 0.0001);
+          }
         });
 
         const ar = document.createElement("div");
@@ -1154,11 +1279,13 @@ PASTE_FULL_OUTPUT_JSON_HERE
         } else {
           const ph = document.createElement("span");
           ph.className = "ph missing";
-          ph.textContent = word.score <= 0 ? "missing" : "—";
+          ph.textContent = word.is_missing || word.score <= 0 ? "missing" : "—";
 
           ph.addEventListener("click", (e) => {
             e.stopPropagation();
-            seekTo(word.start + 0.0001);
+            if (!word.is_missing && word.start !== null) {
+              seekTo(word.start + 0.0001);
+            }
           });
 
           phRow.appendChild(ph);
