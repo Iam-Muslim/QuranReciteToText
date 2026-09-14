@@ -5,11 +5,10 @@ from __future__ import annotations
 import os
 import math
 import subprocess
-import warnings
 from typing import Optional
 import numpy as np
 
-from config import SAMPLE_RATE, ENABLE_AUDIO_NORMALIZATION, CLIP_AUDIO_PEAKS
+from config import SAMPLE_RATE, CLIP_AUDIO_PEAKS
 
 
 def _miniaudio_decode(file_path: str, sample_rate: int) -> np.ndarray:
@@ -80,38 +79,11 @@ class AudioDecoder:
         rms = math.sqrt(max(0.0, float(np.mean(np.square(samples[start_idx:end])))))
         return float(20.0 * math.log10(max(rms, 1e-8)))
 
-    @staticmethod
-    def normalize_audio(audio: np.ndarray, sample_rate: int = SAMPLE_RATE, target_lufs: float = -23.0, safe_lufs: bool = True) -> np.ndarray:
-        """Optional loudness normalization. Note: Disabled by default to preserve model training distribution."""
-        if len(audio) == 0:
-            return audio
-        audio_float = audio.astype(np.float32)
-        peak = float(np.max(np.abs(audio_float)))
-        rms = math.sqrt(float(np.sum(np.square(audio_float))) / len(audio_float))
-        if safe_lufs and rms < 1e-4:
-            return audio_float
-
-        gain = 1.0
-        try:
-            import pyloudnorm as pyln
-            loudness = pyln.Meter(sample_rate).integrated_loudness(audio_float)
-            if np.isfinite(loudness) and loudness < 0.0:
-                gain = float(math.pow(10.0, (target_lufs - loudness) / 20.0))
-        except Exception:
-            if rms > 0.0:
-                gain = 0.07 / rms
-
-        gain = min(4.0, max(0.25, gain))
-        if peak * gain > 0.98:
-            gain = 0.98 / max(peak, 1e-6)
-        return audio_float if (abs(gain - 1.0) < 0.01 and peak <= 1.0) else (audio_float * gain).astype(np.float32)
-
     @classmethod
     def load_audio_file(
         cls,
         file_path: str,
         sample_rate: int = SAMPLE_RATE,
-        normalize: Optional[bool] = None,
         clip_peaks: Optional[bool] = None,
     ) -> np.ndarray:
         if not os.path.exists(file_path):
@@ -154,12 +126,8 @@ class AudioDecoder:
         if audio is None or len(audio) == 0:
             raise RuntimeError(f"Failed to decode audio file: {file_path}")
 
-        do_norm = ENABLE_AUDIO_NORMALIZATION if normalize is None else normalize
         do_clip = CLIP_AUDIO_PEAKS if clip_peaks is None else clip_peaks
-
-        if do_norm:
-            audio = cls.normalize_audio(audio, sample_rate=sample_rate)
-        elif do_clip and len(audio) > 0:
+        if do_clip and len(audio) > 0:
             peak = float(np.max(np.abs(audio)))
             if peak > 1.0:
                 audio = audio / peak
@@ -171,7 +139,6 @@ class AudioDecoder:
         cls,
         audio_bytes: bytes,
         sample_rate: int = SAMPLE_RATE,
-        normalize: Optional[bool] = None,
         clip_peaks: Optional[bool] = None,
     ) -> np.ndarray:
         audio = None
@@ -204,12 +171,8 @@ class AudioDecoder:
         if audio is None or len(audio) == 0:
             raise RuntimeError("Failed to decode audio bytes")
 
-        do_norm = ENABLE_AUDIO_NORMALIZATION if normalize is None else normalize
         do_clip = CLIP_AUDIO_PEAKS if clip_peaks is None else clip_peaks
-
-        if do_norm:
-            audio = cls.normalize_audio(audio, sample_rate=sample_rate)
-        elif do_clip and len(audio) > 0:
+        if do_clip and len(audio) > 0:
             peak = float(np.max(np.abs(audio)))
             if peak > 1.0:
                 audio = audio / peak

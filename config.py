@@ -30,7 +30,6 @@ SAMPLE_RATE: int = 16000
 BLANK_ID: int = 250
 FRAME_RATE: float = 25.0                    # 40ms per encoder frame (25 Hz)
 FRAME_STEP: float = 1.0 / FRAME_RATE        # 0.040s
-ENABLE_AUDIO_NORMALIZATION: bool = False     # Match model training: feed unscaled raw audio
 CLIP_AUDIO_PEAKS: bool = True               # Soft guard against clipping > 1.0
 
 
@@ -44,16 +43,9 @@ COST_DELETION: float = 1.00                 # Standard deletion penalty
 COST_INSERTION: float = 0.75                # Standard insertion penalty
 ACOUSTIC_CONFUSION_COST: float = 0.25       # Cost for acoustically similar pairs (ت/ط, د/ض, Madd vs Harakat)
 
-# Wraparound & Repetition Parameters
-MAX_WRAPS: int = 3                          # Maximum backward rewinds/repetitions allowed per window
+# Repetition Penalties
 WRAP_PENALTY: float = 0.80                  # Regularization penalty to prevent false backward jumps
 WRAP_SPAN_WEIGHT: float = 0.05              # Additional cost per word spanned in backward jump
-START_PRIOR_WEIGHT: float = 0.02            # Prior weight penalizing deviation from expected word pointer
-
-# Search Window Slicing & Acceptance
-LOOKBACK_WORDS: int = 4                     # Reference words to include before current pointer
-LOOKAHEAD_WORDS: int = 25                   # Reference words to include ahead of expected span
-MAX_EDIT_DISTANCE: float = 0.35             # Base acceptance threshold (max 35% normalized error)
 
 
 # ==============================================================================
@@ -84,9 +76,6 @@ FLUSH_PAD_FRAMES: int = 28                  # Optimal tail flush padding (280ms 
 
 # Encoder state reset at Waqf boundaries (prevents repetition skipping / attention saturation)
 RESET_ENCODER_ON_SILENCE: bool = True
-SILENCE_ENERGY_THRESHOLD_DB: float = -28.0
-SILENCE_LOW_MEL_THRESHOLD: float = -5.0
-SILENCE_RESET_CONSECUTIVE_BLANK_CHUNKS: int = 2
 
 
 # ==============================================================================

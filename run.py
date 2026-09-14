@@ -25,6 +25,7 @@ def main():
     parser = argparse.ArgumentParser(description="Quran Recitation Transcription & Forced Alignment Pipeline")
     parser.add_argument("--audio", type=str, required=True, help="Path to input audio file")
     parser.add_argument("--threads", type=int, default=2, help="ONNX execution threads (default: 2)")
+    parser.add_argument("--fast", action="store_true", default=False, help="Fast parallel mode (sets 4 CPU threads)")
     parser.add_argument("--progress", action="store_true", default=False, help="Emit JSON progress lines for frontend apps")
     args = parser.parse_args()
 
@@ -32,8 +33,9 @@ def main():
         print(f"[!] Error: Audio file not found at: {args.audio}", file=sys.stderr)
         sys.exit(1)
 
-    os.environ["OMP_NUM_THREADS"] = str(args.threads)
-    os.environ["ONNX_NUM_THREADS"] = str(args.threads)
+    threads = 4 if (args.fast and args.threads == 2) else args.threads
+    os.environ["OMP_NUM_THREADS"] = str(threads)
+    os.environ["ONNX_NUM_THREADS"] = str(threads)
 
     import config
 
@@ -44,7 +46,7 @@ def main():
         print("[*] Initializing pipeline and decoding audio...", flush=True)
 
     pipeline = AudioPipeline()
-    pipeline.initialize(num_threads=args.threads)
+    pipeline.initialize(num_threads=threads)
     audio_pcm = AudioDecoder.load_audio_file(args.audio)
 
     output_dir = getattr(config, "DEFAULT_OUTPUT_DIR", "output")

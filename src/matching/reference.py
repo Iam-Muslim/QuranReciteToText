@@ -78,26 +78,3 @@ class SurahReferenceData:
 
         self.avg_phones_per_word = max(1.0, len(self.full_phonemes) / max(1, self.num_words))
 
-
-def compute_reading_sequence(
-    ref_from: str,
-    ref_to: str,
-    wrap_word_ranges: list,
-) -> list[list[str]]:
-    """Reconstructs the full reading sequence showing how text was read (including repeats)."""
-    if not wrap_word_ranges:
-        return [[ref_from, ref_to]]
-
-    if len(wrap_word_ranges[0]) >= 3:
-        # 3-element format: (jump_to, jump_from, repeat_end)
-        sections = [[ref_from, wrap_word_ranges[0][1]]]
-        for wr in wrap_word_ranges:
-            sections.append([wr[0], wr[2]])
-        return sections
-
-    # 2-element format: (jump_to, jump_from)
-    sections = [[ref_from, wrap_word_ranges[0][1]]]
-    for i in range(len(wrap_word_ranges) - 1):
-        sections.append([wrap_word_ranges[i][0], wrap_word_ranges[i + 1][1]])
-    sections.append([wrap_word_ranges[-1][0], ref_to])
-    return sections

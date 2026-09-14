@@ -23,7 +23,7 @@ The resulting `output.json` contains full Ayah segments, word timestamps, and le
 
 ### 2. View in the Modern UI Viewer
 
-Double-click or open ui.html
+Double-click or open `output/ui.html`
 1. Load your generated `output.json` (or drag and drop it anywhere).
 2. Load your audio file (`audio.mp3` / `.wav`).
 3. Enjoy smooth letter-by-letter and word-by-word  synchronization!

@@ -27,11 +27,10 @@ from src.models import (
     AyahSubSegment,
 )
 from src.matching.phonetics import PhoneticCostEngine, get_sub_cost_table
-from src.matching.kernels import _dp_wraparound_fast, warmup_matcher_jit
+from src.matching.kernels import warmup_matcher_jit
 from src.matching.reference import (
     ContinuousQuranWord,
     SurahReferenceData,
-    compute_reading_sequence,
 )
 from src.matching.detector import (
     MultiSurahFinder,
@@ -44,210 +43,30 @@ logger = logging.getLogger(__name__)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 1. WRAPAROUND CONFIGURATION (DEFAULTS CONSUMED FROM CONFIG.PY)
+# 1. MATCHER CONFIGURATION (DEFAULTS CONSUMED FROM CONFIG.PY)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @dataclass(frozen=True)
-class WraparoundConfig:
-    """Hyperparameter configuration for 3D Wraparound DP alignment."""
+class MatcherConfig:
+    """Hyperparameter configuration for recitation alignment."""
     # Edit Costs
     cost_substitution: float = getattr(config, "COST_SUBSTITUTION", 1.00)
     cost_deletion: float = getattr(config, "COST_DELETION", 1.00)
     cost_insertion: float = getattr(config, "COST_INSERTION", 0.75)
     acoustic_confusion_cost: float = getattr(config, "ACOUSTIC_CONFUSION_COST", 0.25)
 
-    # Wraparound & Repetition Parameters
-    max_wraps: int = getattr(config, "MAX_WRAPS", 3)
+    # Repetition Penalties
     wrap_penalty: float = getattr(config, "WRAP_PENALTY", 0.80)
     wrap_span_weight: float = getattr(config, "WRAP_SPAN_WEIGHT", 0.05)
-    start_prior_weight: float = getattr(config, "START_PRIOR_WEIGHT", 0.02)
-
-    # Window & Search Slicing
-    lookback_words: int = getattr(config, "LOOKBACK_WORDS", 4)
-    lookahead_words: int = getattr(config, "LOOKAHEAD_WORDS", 25)
-    max_edit_distance: float = getattr(config, "MAX_EDIT_DISTANCE", 0.35)
 
 
 # Aliases for backward compatibility
-TrackerConfig = WraparoundConfig
-MatcherConfig = WraparoundConfig
+WraparoundConfig = MatcherConfig
+TrackerConfig = MatcherConfig
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 2. ALIGNMENT RESULT
-# ═══════════════════════════════════════════════════════════════════════════════
-
-@dataclass
-class AlignmentResult:
-    """Result of aligning a speech segment against the Quran reference."""
-    start_word_idx: int
-    end_word_idx: int
-    edit_cost: float
-    confidence: float
-    j_start: int
-    best_j: int
-    consumed_chars: int = 0
-    word_instances: List[Tuple[int, int, int]] = field(default_factory=list)
-    n_wraps: int = 0
-    max_j_reached: int = 0
-    wrap_word_ranges: list = field(default_factory=list)
-    reading_sequence: list = field(default_factory=list)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# 3. 3D WRAPAROUND WINDOW MATCHER
-# ═══════════════════════════════════════════════════════════════════════════════
-
-class WraparoundDpMatcher:
-    """Matches continuous ASR speech phonemes against the Quran using 3D Wraparound DP."""
-
-    def __init__(self, config: Optional[WraparoundConfig] = None):
-        self.config = config or WraparoundConfig()
-
-    def align_window(
-        self,
-        asr_phonemes_str: str,
-        ref_data: SurahReferenceData,
-        pointer: int,
-        config: Optional[WraparoundConfig] = None,
-    ) -> Optional[AlignmentResult]:
-        cfg = config or self.config
-        m = len(asr_phonemes_str)
-        if m == 0 or ref_data.num_words == 0:
-            return None
-
-        # 1. Estimate word span and slice reference window around pointer
-        est_words = max(1, int(round(m / ref_data.avg_phones_per_word)))
-        win_start = max(0, pointer - cfg.lookback_words)
-        win_end = min(ref_data.num_words, pointer + est_words + cfg.lookahead_words)
-
-        if win_start >= ref_data.num_words:
-            return None
-
-        p_start = ref_data.word_boundaries[win_start]
-        p_end = ref_data.word_boundaries[win_end]
-
-        sub_r_str = ref_data.full_phonemes[p_start:p_end]
-        n = len(sub_r_str)
-        if n == 0:
-            return None
-
-        sub_phone_to_word = ref_data.flat_phone_to_word[p_start:p_end]
-
-        p_codes = np.array([ord(c) for c in asr_phonemes_str], dtype=np.int32)
-        r_codes = np.array([ord(c) for c in sub_r_str], dtype=np.int32)
-
-        # 2. Build word boundary masks
-        word_starts_mask = np.zeros(n + 1, dtype=np.bool_)
-        word_ends_mask = np.zeros(n + 1, dtype=np.bool_)
-
-        for j in range(n + 1):
-            if j == 0 or (j < n and sub_phone_to_word[j] != sub_phone_to_word[j - 1]):
-                word_starts_mask[j] = True
-            if j == n or (j > 0 and j < n and sub_phone_to_word[j] != sub_phone_to_word[j - 1]):
-                word_ends_mask[j] = True
-
-        ins_costs = np.array(
-            [PhoneticCostEngine.get_insertion_cost(asr_phonemes_str, i, cfg.cost_insertion, cfg.acoustic_confusion_cost) for i in range(m)],
-            dtype=np.float64,
-        )
-        del_costs = np.array(
-            [PhoneticCostEngine.get_deletion_cost(sub_r_str, j, cfg.cost_deletion, cfg.acoustic_confusion_cost) for j in range(n)],
-            dtype=np.float64,
-        )
-
-        # 3. Execute 3D Wraparound DP with exact Viterbi backtracking
-        (
-            best_i,
-            best_k,
-            best_j,
-            best_cost,
-            norm_dist,
-            j_start,
-            max_j_reached,
-            char_word_map,
-            char_pass_map,
-        ) = _dp_wraparound_fast(
-            p_codes=p_codes,
-            r_codes=r_codes,
-            r_phone_to_word=sub_phone_to_word,
-            word_starts_mask=word_starts_mask,
-            word_ends_mask=word_ends_mask,
-            del_costs=del_costs,
-            ins_costs=ins_costs,
-            sub_table=get_sub_cost_table(cfg.acoustic_confusion_cost),
-            max_wraps=cfg.max_wraps,
-            cost_sub=cfg.cost_substitution,
-            cost_del=cfg.cost_deletion,
-            cost_ins=cfg.cost_insertion,
-            wrap_penalty=cfg.wrap_penalty,
-            wrap_span_weight=cfg.wrap_span_weight,
-            confusion_cost=cfg.acoustic_confusion_cost,
-            prior_weight=cfg.start_prior_weight,
-            expected_word=pointer,
-        )
-
-        if best_j < 0 or norm_dist > cfg.max_edit_distance:
-            return None
-
-        # Map to global word indices
-        start_word_idx = sub_phone_to_word[j_start]
-        end_word_idx = sub_phone_to_word[best_j - 1]
-
-        if best_k > 0 and max_j_reached > best_j:
-            end_word_idx = sub_phone_to_word[max_j_reached - 1]
-
-        confidence = max(0.0, min(1.0, 1.0 - norm_dist))
-
-        # Extract strictly partitioned word instances from Viterbi character maps
-        word_instances: List[Tuple[int, int, int]] = []
-        curr_w = -1
-        curr_k = -1
-        span_s = -1
-
-        for ci in range(int(best_i)):
-            w = int(char_word_map[ci])
-            k = int(char_pass_map[ci])
-            if w != curr_w or k != curr_k:
-                if curr_w >= 0 and span_s >= 0:
-                    word_instances.append((curr_w, span_s, ci))
-                curr_w = w
-                curr_k = k
-                span_s = ci if w >= 0 else -1
-
-        if curr_w >= 0 and span_s >= 0:
-            word_instances.append((curr_w, span_s, int(best_i)))
-
-        # Wrap word ranges
-        wrap_word_ranges = []
-        if best_k > 0:
-            jump_to = ref_data.words[start_word_idx].location
-            jump_from = ref_data.words[end_word_idx].location
-            repeat_end = ref_data.words[sub_phone_to_word[best_j - 1]].location
-            wrap_word_ranges.append((jump_to, jump_from, repeat_end))
-
-        ref_from = ref_data.words[start_word_idx].location
-        ref_to = ref_data.words[end_word_idx].location
-        reading_seq = compute_reading_sequence(ref_from, ref_to, wrap_word_ranges)
-
-        return AlignmentResult(
-            start_word_idx=start_word_idx,
-            end_word_idx=end_word_idx,
-            edit_cost=best_cost,
-            confidence=confidence,
-            j_start=j_start,
-            best_j=best_j,
-            consumed_chars=int(best_i),
-            word_instances=word_instances,
-            n_wraps=best_k,
-            max_j_reached=max_j_reached,
-            wrap_word_ranges=wrap_word_ranges,
-            reading_sequence=reading_seq,
-        )
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# 4. SEQUENTIAL PASS & SEGMENT BUILDER
+# 2. SEQUENTIAL PASS & SEGMENT BUILDER
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _align_and_package_ayahs(
@@ -622,14 +441,14 @@ def _extract_opening_preamble(
 class QuranMatcher:
     """Consolidated Quran Recitation Alignment Engine."""
 
-    def __init__(self, config: Optional[WraparoundConfig] = None):
-        self.config = config or WraparoundConfig()
+    def __init__(self, config: Optional[MatcherConfig] = None):
+        self.config = config or MatcherConfig()
         self.detector = MultiSurahFinder()
-        self.window_matcher = WraparoundDpMatcher(self.config)
         self._verses: Dict[str, Any] = {}
         self._surah_refs: Dict[int, SurahReferenceData] = {}
         self._is_initialized = False
 
+    @property
     def is_initialized(self) -> bool:
         return self._is_initialized
 

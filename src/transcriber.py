@@ -325,7 +325,6 @@ class ZipformerONNX:
         self._input_names = [inp.name for inp in self.session.get_inputs()]
         self._state_names = [name for name in self._input_names if name != 'x']
         self._state_buffers = self._create_initial_states()
-        self._tail_pad = np.zeros((14, 80), dtype=np.float32)
 
     def _create_initial_states(self) -> dict:
         states = {}
