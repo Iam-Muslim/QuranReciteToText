@@ -25,7 +25,7 @@ def main():
     parser = argparse.ArgumentParser(description="Quran Recitation Transcription & Forced Alignment Pipeline")
     parser.add_argument("--audio", type=str, required=True, help="Path to input audio file")
     parser.add_argument("--threads", type=int, default=2, help="ONNX execution threads (default: 2)")
-    parser.add_argument("--fast", action="store_true", default=False, help="Fast parallel mode (sets 4 CPU threads)")
+    parser.add_argument("--workers", type=int, default=1, help="Parallel segment workers (default: 1 for lowest CPU/RAM)")
     parser.add_argument("--progress", action="store_true", default=False, help="Emit JSON progress lines for frontend apps")
     args = parser.parse_args()
 
@@ -33,7 +33,9 @@ def main():
         print(f"[!] Error: Audio file not found at: {args.audio}", file=sys.stderr)
         sys.exit(1)
 
-    threads = 4 if (args.fast and args.threads == 2) else args.threads
+    workers = args.workers
+    threads = args.threads
+    os.environ["ONNX_SEGMENT_WORKERS"] = str(workers)
     os.environ["OMP_NUM_THREADS"] = str(threads)
     os.environ["ONNX_NUM_THREADS"] = str(threads)
 

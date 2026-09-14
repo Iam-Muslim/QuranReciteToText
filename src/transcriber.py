@@ -14,6 +14,7 @@ import urllib.request
 import logging
 from dataclasses import dataclass
 from typing import Optional, List, Dict, Tuple, Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
 import kaldi_native_fbank as knf
 import onnxruntime as ort
@@ -382,6 +383,7 @@ class ZipformerONNX:
         feats: np.ndarray,
         silence_pad_frames: Optional[int] = None,
         reset_states: bool = True,
+        state_buffers: Optional[dict] = None,
     ) -> Tuple[np.ndarray, List[PhonemeToken]]:
         """Core streaming neural chunk loop on a pre-extracted Fbank feature slice."""
         if self.session is None or len(feats) == 0:
@@ -399,18 +401,25 @@ class ZipformerONNX:
         else:
             padded_feats = feats
 
+        states = state_buffers if state_buffers is not None else self._state_buffers
         # Fast in-place zero state reset only when explicitly requested (e.g. at Waqf boundaries)
         if reset_states:
-            self._reset_states()
+            if state_buffers is not None:
+                for k in self._state_names:
+                    states[k].fill(0)
+                states['processed_lens'].fill(0)
+            else:
+                self._reset_states()
+
         num_frames = len(padded_feats)
         chunk_logprobs = []
         pos = 0
 
         while pos + T_LEN <= num_frames:
-            self._state_buffers['x'] = padded_feats[pos:pos + T_LEN][None, :]
-            outs = self.session.run(None, self._state_buffers)
+            states['x'] = padded_feats[pos:pos + T_LEN][None, :]
+            outs = self.session.run(None, states)
             for idx in range(1, len(outs)):
-                self._state_buffers[self._input_names[idx]] = outs[idx]
+                states[self._input_names[idx]] = outs[idx]
             chunk_logprobs.append(outs[0][0])
             pos += CHUNK_LEN
 
@@ -539,20 +548,57 @@ class ZipformerONNX:
         num_segments = len(segments)
         do_reset_on_silence = getattr(config, "RESET_ENCODER_ON_SILENCE", True) if reset_on_silence is None else reset_on_silence
 
-        for s_idx, seg in enumerate(segments):
-            # Zero-copy slice directly from global Fbank matrix (avoids re-running Kaldi Fbank 50+ times)
+        num_workers = int(os.environ.get("ONNX_SEGMENT_WORKERS", getattr(config, "NUM_SEGMENT_WORKERS", 1)))
+        use_parallel = (num_workers > 1) and (num_segments > 2) and do_reset_on_silence
+
+        results_by_idx: List[Optional[Tuple[np.ndarray, List[PhonemeToken]]]] = [None] * num_segments
+
+        def _transcribe_single_segment(s_idx: int, states: Optional[dict] = None) -> Tuple[int, np.ndarray, List[PhonemeToken]]:
+            seg = segments[s_idx]
             s_fb = max(0, int(round(seg.padded_start_sec * 100.0)))
             e_fb = min(total_fbank_frames, int(round(seg.padded_end_sec * 100.0)))
             seg_feats = global_feats[s_fb:e_fb]
-
             if len(seg_feats) == 0:
-                continue
-
+                return s_idx, np.empty((0, vocab_size), dtype=np.float32), []
             seg_lp, seg_phonemes = self._transcribe_fbank_segment(
                 seg_feats,
                 silence_pad_frames=silence_pad_frames,
                 reset_states=do_reset_on_silence,
+                state_buffers=states,
             )
+            return s_idx, seg_lp, seg_phonemes
+
+        if use_parallel:
+            completed_count = 0
+            with ThreadPoolExecutor(max_workers=num_workers) as executor:
+                futures = [executor.submit(_transcribe_single_segment, i, self._create_initial_states()) for i in range(num_segments)]
+                for fut in as_completed(futures):
+                    s_idx, seg_lp, seg_phonemes = fut.result()
+                    results_by_idx[s_idx] = (seg_lp, seg_phonemes)
+                    if on_progress is not None:
+                        completed_count += 1
+                        pct = min(100.0, (completed_count / max(1, num_segments)) * 100.0)
+                        elp = max(0.001, time.time() - start_time)
+                        spd = (completed_count / max(1, num_segments) * audio_duration) / elp
+                        on_progress(pct, spd, elp)
+        else:
+            # Single-worker mode: 100% zero extra heap allocation with in-place buffer reuse
+            for s_idx in range(num_segments):
+                _, seg_lp, seg_phonemes = _transcribe_single_segment(s_idx, None)
+                results_by_idx[s_idx] = (seg_lp, seg_phonemes)
+                if on_progress is not None:
+                    pct = min(100.0, ((s_idx + 1) / max(1, num_segments)) * 100.0)
+                    elp = max(0.001, time.time() - start_time)
+                    spd = (segments[s_idx].padded_end_sec) / elp
+                    on_progress(pct, spd, elp)
+
+        # Deterministic chronological re-assembly into global timeline
+        for s_idx in range(num_segments):
+            seg = segments[s_idx]
+            seg_data = results_by_idx[s_idx]
+            if seg_data is None:
+                continue
+            seg_lp, seg_phonemes = seg_data
 
             if len(seg_lp) > 0:
                 start_frame = int(round(seg.padded_start_sec / FRAME_TIME_STEP))
@@ -597,12 +643,6 @@ class ZipformerONNX:
                 gap = next_seg.raw_start_sec - seg.raw_end_sec
                 if gap >= 0.40:
                     pause_timestamps.append(round(seg.raw_end_sec, 2))
-
-            if on_progress is not None:
-                pct = min(100.0, ((s_idx + 1) / max(1, num_segments)) * 100.0)
-                elp = max(0.001, time.time() - start_time)
-                spd = (seg.padded_end_sec) / elp
-                on_progress(pct, spd, elp)
 
         global_phonemes.sort(key=lambda p: p.start)
 

@@ -92,6 +92,7 @@ SPEECH_RECOVERY_MIN_PHONEMES_IN_GAP: int = 1
 # 8. RUNTIME PERFORMANCE & SYSTEM SETTINGS
 # ==============================================================================
 DEFAULT_NUM_THREADS: int = 2
+NUM_SEGMENT_WORKERS: int = 1
 ENABLE_PROFILING: bool = True
 
 # Backward compatibility alias

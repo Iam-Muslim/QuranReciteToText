@@ -14,8 +14,8 @@ An automated, high-performance, lightweight CPU pipeline for transcribing and fo
 Place your recitation audio (`audio.mp3`) in the project directory and run:
 
 ```bash
-# High-speed parallel mode (recommended, defaults to 4 CPU workers)
-python run.py --audio audio.mp3  --fast
+# High-speed parallel mode (defaults to 4 workers)
+python run.py --audio audio.mp3 --workers 4
 
 ```
 
