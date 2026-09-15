@@ -215,7 +215,7 @@ class AudioPipeline:
         # Phase 4: Construct Consolidated Result & JSON Export
         export_start = time.time()
         for seg in segments:
-            if not seg.has_repeated_words or not seg.sub_segments:
+            if not seg.sub_segments:
                 seg.sub_segments = None
             else:
                 for idx, sub in enumerate(seg.sub_segments):

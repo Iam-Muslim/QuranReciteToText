@@ -76,5 +76,3 @@ class SurahReferenceData:
             e = self.word_boundaries[w_idx + 1]
             self.flat_phone_to_word[s:e] = w_idx
 
-        self.avg_phones_per_word = max(1.0, len(self.full_phonemes) / max(1, self.num_words))
-

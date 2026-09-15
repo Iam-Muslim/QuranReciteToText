@@ -38,12 +38,8 @@ def _global_viterbi_fast(
     del_costs: np.ndarray,
     ins_costs: np.ndarray,
     sub_table: np.ndarray,
-    cost_sub: float,
-    cost_del: float,
-    cost_ins: float,
     wrap_penalty: float,
     wrap_span_weight: float,
-    confusion_cost: float = 0.25,
 ) -> Tuple[int, int, float, np.ndarray, np.ndarray]:
     m = len(p_codes)
     n = len(r_codes)
@@ -53,7 +49,7 @@ def _global_viterbi_fast(
     dp_curr = np.full(n + 1, INF, dtype=np.float64)
 
     backtrack_op = np.zeros((m + 1, n + 1), dtype=np.uint8)
-    wrap_from_j = np.zeros((m + 1, n + 1), dtype=np.uint16)
+    wrap_from_j = np.zeros((m + 1, n + 1), dtype=np.int32)
     
     dp_prev[0] = 0.0
 
@@ -249,12 +245,8 @@ def warmup_matcher_jit() -> None:
             del_costs=del_c,
             ins_costs=ins_c,
             sub_table=tbl_dummy,
-            cost_sub=1.0,
-            cost_del=1.0,
-            cost_ins=0.75,
             wrap_penalty=0.8,
             wrap_span_weight=0.05,
-            confusion_cost=0.25,
         )
     except Exception:
         pass

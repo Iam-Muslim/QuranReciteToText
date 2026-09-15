@@ -131,10 +131,9 @@ class QuranWord:
     confidence: Optional[float] = None
     score: Optional[float] = None
     phonemes: Optional[List[Dict[str, Any]]] = None
-    is_missing: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
-        d = {
+        return {
             "word": self.word,
             "location": self.location,
             "ref": self.ref,
@@ -143,9 +142,6 @@ class QuranWord:
             "score": round(self.score, 2) if self.score is not None else 0.0,
             "phonemes": self.phonemes if self.phonemes is not None else [],
         }
-        if self.is_missing or (self.start is None):
-            d["is_missing"] = True
-        return d
 
 
 @dataclass
@@ -185,12 +181,9 @@ class QuranSegment:
     matched_ref: str = ""
     match_score: float = 1.0
     words: List[QuranWord] = field(default_factory=list)
-    has_missing_words: bool = False
-    has_repeated_words: bool = False
     repeated_ranges: Optional[List[Any]] = None
     repeated_text: Optional[List[str]] = None
     sub_segments: Optional[List[AyahSubSegment]] = None
-    prologue: Optional[Dict[str, Any]] = None
     intro: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
 

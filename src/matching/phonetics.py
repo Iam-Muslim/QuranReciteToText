@@ -148,27 +148,10 @@ def get_sub_cost_table(confusion_cost: float = 0.25) -> np.ndarray:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class PhoneticCostEngine:
-    """Evaluates phonetic edit costs including insertions, deletions, and substitutions."""
+    """Evaluates phonetic edit costs for deletions and insertions."""
 
     @staticmethod
-    def is_zero_cost_marker(code_unit: int) -> bool:
-        return code_unit in ZERO_COST_MARKERS
-
-    @staticmethod
-    def is_hamza_variant(code: int) -> bool:
-        return code in HAMZA_VARIANTS
-
-    @staticmethod
-    def is_tashkeel(code: int) -> bool:
-        return code in TASHKEEL_CODES
-
-    @classmethod
-    def get_substitution_cost(cls, asr_code: int, ref_code: int, confusion_cost: float = 0.25) -> float:
-        return _sub_cost_fast(asr_code, ref_code, confusion_cost)
-
-    @classmethod
     def get_deletion_cost(
-        cls,
         full_phonemes: str,
         g_ref_idx: int,
         standard_deletion_cost: float = 1.0,
@@ -177,17 +160,16 @@ class PhoneticCostEngine:
         if g_ref_idx < 0 or g_ref_idx >= len(full_phonemes):
             return standard_deletion_cost
         code = ord(full_phonemes[g_ref_idx])
-        if cls.is_zero_cost_marker(code):
+        if code in ZERO_COST_MARKERS:
             return 0.0
-        if cls.is_hamza_variant(code):
+        if code in HAMZA_VARIANTS:
             return acoustic_confusion_cost
         if g_ref_idx > 0 and code == ord(full_phonemes[g_ref_idx - 1]):
             return acoustic_confusion_cost
         return standard_deletion_cost
 
-    @classmethod
+    @staticmethod
     def get_insertion_cost(
-        cls,
         asr_text: str,
         asr_idx: int,
         standard_insertion_cost: float = 0.75,
@@ -196,7 +178,7 @@ class PhoneticCostEngine:
         if asr_idx < 0 or asr_idx >= len(asr_text):
             return standard_insertion_cost
         code = ord(asr_text[asr_idx])
-        if cls.is_zero_cost_marker(code):
+        if code in ZERO_COST_MARKERS:
             return 0.0
         if asr_idx > 0 and code == ord(asr_text[asr_idx - 1]):
             if code in MADD_VOWEL_CODES:

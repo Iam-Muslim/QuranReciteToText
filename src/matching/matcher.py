@@ -27,7 +27,7 @@ from src.models import (
     AyahSubSegment,
 )
 from src.matching.phonetics import PhoneticCostEngine, get_sub_cost_table
-from src.matching.kernels import warmup_matcher_jit
+from src.matching.kernels import _global_viterbi_fast, warmup_matcher_jit
 from src.matching.reference import (
     ContinuousQuranWord,
     SurahReferenceData,
@@ -136,7 +136,6 @@ def _align_and_package_ayahs(
         dtype=np.float64,
     )
 
-    from src.matching.kernels import _global_viterbi_fast
     sub_table = get_sub_cost_table(cfg.acoustic_confusion_cost)
     
     _, _, _, char_word_map, char_j_map = _global_viterbi_fast(
@@ -148,12 +147,8 @@ def _align_and_package_ayahs(
         del_costs=del_costs,
         ins_costs=ins_costs,
         sub_table=sub_table,
-        cost_sub=cfg.cost_substitution,
-        cost_del=cfg.cost_deletion,
-        cost_ins=cfg.cost_insertion,
         wrap_penalty=cfg.wrap_penalty,
         wrap_span_weight=cfg.wrap_span_weight,
-        confusion_cost=cfg.acoustic_confusion_cost,
     )
 
 
@@ -191,9 +186,12 @@ def _align_and_package_ayahs(
                 w_conf = sum(t.confidence for t in w_toks) / len(w_toks)
                 matched_word_scores[w] = round(min(1.0, w_conf), 2)
 
+    if not matched_word_tokens:
+        return []
+
     # Build canonical Ayah segments
-    min_w = min(matched_word_tokens.keys()) if matched_word_tokens else 0
-    max_w = max(matched_word_tokens.keys()) if matched_word_tokens else (word_count - 1)
+    min_w = min(matched_word_tokens.keys())
+    max_w = max(matched_word_tokens.keys())
 
     start_ay = ref_data.words[min_w].ayah if min_w < word_count else 1
     end_ay = ref_data.words[max_w].ayah if max_w < word_count else ref_data.words[-1].ayah
@@ -207,7 +205,6 @@ def _align_and_package_ayahs(
             continue
 
         qwords: List[QuranWord] = []
-        has_missing = False
         has_repeated = False
 
         for rw in ay_words:
@@ -234,19 +231,6 @@ def _align_and_package_ayahs(
                     score=round(score, 2),
                     confidence=round(avg_conf, 2),
                     phonemes=ph_dicts,
-                ))
-            else:
-                has_missing = True
-                qwords.append(QuranWord(
-                    word=rw.uthmani,
-                    location=rw.location,
-                    ref=rw.phoneme,
-                    start=None,
-                    end=None,
-                    score=0.0,
-                    confidence=0.0,
-                    phonemes=[],
-                    is_missing=True,
                 ))
 
         # Build sub_segments and repetition details if the verse was recited multiple times
@@ -341,10 +325,8 @@ def _align_and_package_ayahs(
             transcribed_text=ayah_text,
             matched_text=ayah_text,
             matched_ref=matched_ref_str,
-            match_score=1.0 if not has_missing else 0.85,
+            match_score=1.0,
             words=qwords,
-            has_missing_words=has_missing,
-            has_repeated_words=has_repeated,
             repeated_ranges=repeated_ranges,
             repeated_text=repeated_text,
             sub_segments=sub_segments,
@@ -499,7 +481,6 @@ class QuranMatcher:
             self._verses = data.get("verses", data)
 
         self.detector.initialize(
-            quran_json_path=path,
             ref_norm_ph_path=ref_norm_ph_path,
             ph_index_path=ph_index_path,
         )
@@ -544,7 +525,7 @@ class QuranMatcher:
                 detected_start_ayah = 1
 
         # 2. Opening Preamble Extraction (Isti'adha & pre-verse Basmalah)
-        prologue, remaining_tokens = _extract_opening_preamble(
+        intro_dict, remaining_tokens = _extract_opening_preamble(
             aligned_phonemes, detected_surah, detected_start_ayah or 1, self._get_surah_ref(1)
         )
 
@@ -560,8 +541,8 @@ class QuranMatcher:
             config=self.config,
         )
 
-        if prologue and segments:
-            segments[0].intro = prologue
+        if intro_dict and segments:
+            segments[0].intro = intro_dict
 
         return segments
 
