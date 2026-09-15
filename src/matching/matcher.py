@@ -1,7 +1,7 @@
-"""Phase 3 Matcher: 3D Wraparound Dynamic Programming Quran Recitation Aligner.
+"""Phase 3 Matcher: 3D JumpDTW Dynamic Programming Quran Recitation Aligner.
 
-Orchestrates forward Quran recitation matching, multi-pass repetition tracking,
-and canonical Ayah segment construction. All tunable parameters are read from config.py.
+Orchestrates forward recitation matching, repetition tracking,
+and canonical Ayah segment construction from Medina Mushaf reference.
 """
 
 from __future__ import annotations
@@ -22,110 +22,110 @@ from src.models import (
     QuranSegment,
     AyahSubSegment,
 )
-from src.matching.phonetics import PhoneticCostEngine, get_sub_cost_table
-from src.matching.kernels import _global_viterbi_fast, warmup_matcher_jit
-from src.matching.reference import SurahReferenceData
-from src.matching.detector import MultiSurahFinder, find_near_matches
+from src.matching.phonetics import (
+    get_sub_cost_table,
+    _compute_insertion_costs_fast,
+    _compute_deletion_costs_fast,
+)
+from src.matching.kernels import _global_viterbi_fast
+from src.matching.reference import RefWord, SurahReferenceData
+from src.matching.detector import SurahDetector, find_near_matches
 
 logger = logging.getLogger(__name__)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 1. MATCHER CONFIGURATION (DEFAULTS CONSUMED FROM CONFIG.PY)
+# 1. MATCHER CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class MatcherConfig:
     """Hyperparameter configuration for recitation alignment."""
-    # Edit Costs
     cost_substitution: float = getattr(config, "COST_SUBSTITUTION", 1.00)
     cost_deletion: float = getattr(config, "COST_DELETION", 1.00)
     cost_insertion: float = getattr(config, "COST_INSERTION", 0.75)
     acoustic_confusion_cost: float = getattr(config, "ACOUSTIC_CONFUSION_COST", 0.25)
-
-    # Repetition Penalties
     wrap_penalty: float = getattr(config, "WRAP_PENALTY", 0.80)
     wrap_span_weight: float = getattr(config, "WRAP_SPAN_WEIGHT", 0.05)
 
 
-# Aliases for backward compatibility
-WraparoundConfig = MatcherConfig
-TrackerConfig = MatcherConfig
+WraparoundConfig = MatcherConfig  # Backward compatibility alias
+TrackerConfig = MatcherConfig     # Backward compatibility alias
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 2. SEQUENTIAL PASS & SEGMENT BUILDER
+# 2. WORD & SEGMENT BUILDERS
 # ═══════════════════════════════════════════════════════════════════════════════
+
+def _build_qword(rw: RefWord, tokens: List[PhonemeToken], score: float) -> QuranWord:
+    """Creates a unified QuranWord instance with phoneme breakdown."""
+    return QuranWord(
+        word=rw.uthmani,
+        location=rw.location,
+        ref=rw.phoneme,
+        start=round(tokens[0].start, 2),
+        end=round(tokens[-1].end, 2),
+        score=round(score, 2),
+        phonemes=[t.to_dict() for t in tokens],
+    )
+
 
 def _align_and_package_ayahs(
     aligned_tokens: List[PhonemeToken],
     ref_data: SurahReferenceData,
     start_word_index: int = 0,
     target_end_ayah: Optional[int] = None,
-    config: Optional[WraparoundConfig] = None,
+    matcher_cfg: Optional[MatcherConfig] = None,
 ) -> List[QuranSegment]:
-    """Aligns speech tokens against Surah reference using Global Graph DP."""
+    """Aligns speech tokens against Surah reference using JumpDTW Dynamic Programming."""
     if not aligned_tokens or ref_data.num_words == 0:
         return []
 
-    cfg = config or WraparoundConfig()
-
+    cfg = matcher_cfg or MatcherConfig()
     total_tokens = len(aligned_tokens)
     asr_str = "".join(t.phoneme for t in aligned_tokens)
 
-    # Build exact char-to-token index lookup table
+    # Fast char-to-token index lookup
     char_to_tok: List[int] = []
     for tok_idx, t in enumerate(aligned_tokens):
-        for _ in t.phoneme:
-            char_to_tok.append(tok_idx)
+        char_to_tok.extend([tok_idx] * len(t.phoneme))
     char_to_tok.append(total_tokens)
 
     word_count = ref_data.num_words
-    win_start = max(0, start_word_index - 50)  # Safe 50 words lookback for repetitions
-    
+    win_start = max(0, start_word_index - 50)
+
     if target_end_ayah is not None and target_end_ayah in ref_data.ayah_to_words:
-        # Generous safe buffer of 15 Ayahs beyond the detected end
         max_ay = min(max(ref_data.ayah_to_words.keys()), target_end_ayah + 15)
         win_end = min(word_count, ref_data.ayah_to_words[max_ay][-1].global_index + 1)
     else:
-        # Fallback word estimation: average phonemes per word is ~8, use safe 4.0 ratio + 150 buffer
         est_words = int(len(asr_str) / 4.0) + 150
         win_end = min(word_count, start_word_index + est_words)
-    
+
     p_start = ref_data.word_boundaries[win_start]
     p_end = ref_data.word_boundaries[win_end] if win_end < word_count else len(ref_data.full_phonemes)
-    
+
     sub_r_str = ref_data.full_phonemes[p_start:p_end]
     n = len(sub_r_str)
     if n == 0:
         return []
 
     sub_phone_to_word = ref_data.flat_phone_to_word[p_start:p_end]
-
     p_codes = np.array([ord(c) for c in asr_str], dtype=np.int32)
     r_codes = np.array([ord(c) for c in sub_r_str], dtype=np.int32)
 
     word_starts_mask = np.zeros(n + 1, dtype=np.bool_)
     word_ends_mask = np.zeros(n + 1, dtype=np.bool_)
-
     for j in range(n + 1):
         if j == 0 or (j < n and sub_phone_to_word[j] != sub_phone_to_word[j - 1]):
             word_starts_mask[j] = True
         if j == n or (j > 0 and j < n and sub_phone_to_word[j] != sub_phone_to_word[j - 1]):
             word_ends_mask[j] = True
 
-    m = len(asr_str)
-    ins_costs = np.array(
-        [PhoneticCostEngine.get_insertion_cost(asr_str, i, cfg.cost_insertion, cfg.acoustic_confusion_cost) for i in range(m)],
-        dtype=np.float64,
-    )
-    del_costs = np.array(
-        [PhoneticCostEngine.get_deletion_cost(sub_r_str, j, cfg.cost_deletion, cfg.acoustic_confusion_cost) for j in range(n)],
-        dtype=np.float64,
-    )
-
+    # Fast JIT-vectorized edit costs
+    ins_costs = _compute_insertion_costs_fast(p_codes, cfg.cost_insertion, cfg.acoustic_confusion_cost)
+    del_costs = _compute_deletion_costs_fast(r_codes, cfg.cost_deletion, cfg.acoustic_confusion_cost)
     sub_table = get_sub_cost_table(cfg.acoustic_confusion_cost)
-    
+
     _, _, _, char_word_map, char_j_map = _global_viterbi_fast(
         p_codes=p_codes,
         r_codes=r_codes,
@@ -139,28 +139,23 @@ def _align_and_package_ayahs(
         wrap_span_weight=cfg.wrap_span_weight,
     )
 
-
     matched_word_tokens: Dict[int, List[List[PhonemeToken]]] = defaultdict(list)
     matched_word_scores: Dict[int, float] = {}
 
-    word_passes = []
+    word_passes: List[Tuple[int, int, int]] = []
     curr_w = -1
     span_s = -1
+    m = len(asr_str)
 
     for i in range(m):
         w = int(char_word_map[i])
-        
-        is_jump = False
-        if i > 0 and char_j_map[i] >= 0 and char_j_map[i-1] >= 0:
-            if char_j_map[i] < char_j_map[i-1]:
-                is_jump = True
-                
+        is_jump = (i > 0 and char_j_map[i] >= 0 and char_j_map[i - 1] >= 0 and char_j_map[i] < char_j_map[i - 1])
         if w != curr_w or is_jump:
             if curr_w >= 0 and span_s >= 0:
                 word_passes.append((curr_w, span_s, i))
             curr_w = w
             span_s = i if w >= 0 else -1
-            
+
     if curr_w >= 0 and span_s >= 0:
         word_passes.append((curr_w, span_s, m))
 
@@ -180,7 +175,6 @@ def _align_and_package_ayahs(
     # Build canonical Ayah segments
     min_w = min(matched_word_tokens.keys())
     max_w = max(matched_word_tokens.keys())
-
     start_ay = ref_data.words[min_w].ayah if min_w < word_count else 1
     end_ay = ref_data.words[max_w].ayah if max_w < word_count else ref_data.words[-1].ayah
 
@@ -197,33 +191,17 @@ def _align_and_package_ayahs(
 
         for rw in ay_words:
             w_idx = rw.global_index
-            if w_idx in matched_word_tokens and matched_word_tokens[w_idx]:
-                passes = matched_word_tokens[w_idx]
+            passes = matched_word_tokens.get(w_idx)
+            if passes:
                 if len(passes) > 1:
                     has_repeated = True
-
-                # Use the canonical final recitation pass
                 chosen_pass = passes[-1]
-                w_start = chosen_pass[0].start
-                w_end = chosen_pass[-1].end
-                avg_conf = sum(t.confidence for t in chosen_pass) / len(chosen_pass)
-                ph_dicts = [t.to_dict() for t in chosen_pass]
                 score = matched_word_scores.get(w_idx, 1.0)
-
-                qwords.append(QuranWord(
-                    word=rw.uthmani,
-                    location=rw.location,
-                    ref=rw.phoneme,
-                    start=round(w_start, 2),
-                    end=round(w_end, 2),
-                    score=round(score, 2),
-                    phonemes=ph_dicts,
-                ))
+                qwords.append(_build_qword(rw, chosen_pass, score))
 
         if not qwords:
             continue
 
-        # Build sub_segments and repetition details if the verse was recited multiple times
         sub_segments: Optional[List[AyahSubSegment]] = None
         repeated_ranges: Optional[List[str]] = None
         repeated_text: Optional[List[str]] = None
@@ -234,21 +212,10 @@ def _align_and_package_ayahs(
                 w_idx = rw.global_index
                 for p in matched_word_tokens.get(w_idx, []):
                     if p:
-                        all_word_instances.append((
-                            w_idx,
-                            rw,
-                            QuranWord(
-                                word=rw.uthmani,
-                                location=rw.location,
-                                ref=rw.phoneme,
-                                start=round(p[0].start, 2),
-                                end=round(p[-1].end, 2),
-                                score=round(matched_word_scores.get(w_idx, 1.0), 2),
-                                phonemes=[t.to_dict() for t in p],
-                            ),
-                        ))
+                        score = matched_word_scores.get(w_idx, 1.0)
+                        all_word_instances.append((w_idx, _build_qword(rw, p, score)))
 
-            all_word_instances.sort(key=lambda x: x[2].start)
+            all_word_instances.sort(key=lambda x: x[1].start or 0.0)
 
             def _build_sub(pass_words: List[QuranWord], seg_num: int) -> AyahSubSegment:
                 sub_asr = " ".join("".join(p["phoneme"] for p in (w.phonemes or [])) for w in pass_words if w.phonemes)
@@ -266,11 +233,10 @@ def _align_and_package_ayahs(
             current_pass: List[QuranWord] = []
             prev_w_idx = -1
 
-            for w_idx, rw, q_inst in all_word_instances:
+            for w_idx, q_inst in all_word_instances:
                 if current_pass and w_idx <= prev_w_idx:
                     sub_segs_list.append(_build_sub(current_pass, len(sub_segs_list) + 1))
                     current_pass = []
-
                 current_pass.append(q_inst)
                 prev_w_idx = w_idx
 
@@ -282,11 +248,9 @@ def _align_and_package_ayahs(
                 repeated_ranges = [s.words_range for s in sub_segments if s.is_repetition]
                 repeated_text = [s.text for s in sub_segments if s.is_repetition]
 
-        # The Ayah segment spans from the start of the first matched pass to the end of the last matched pass
         all_ay_passes = [p for rw in ay_words for p in matched_word_tokens.get(rw.global_index, []) if p]
         seg_start = min(p[0].start for p in all_ay_passes)
         seg_end = max(p[-1].end for p in all_ay_passes)
-
         matched_ref_str = f"{ref_data.surah}:{ay}:1-{ref_data.surah}:{ay}:{len(ay_words)}"
 
         segments.append(QuranSegment(
@@ -307,7 +271,7 @@ def _align_and_package_ayahs(
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 5. PREAMBLE EXTRACTION & CANONICAL MATCHING FACADE
+# 3. OPENING PREAMBLE EXTRACTION
 # ═══════════════════════════════════════════════════════════════════════════════
 
 ISTIAADHA_TEXT = "أَعُوذُ بِٱللَّهِ مِنَ ٱلشَّيْطَـٰنِ ٱلرَّجِيمِ"
@@ -372,7 +336,7 @@ def _extract_opening_preamble(
     intro_starts: List[float] = []
     intro_ends: List[float] = []
 
-    def _match_and_align(pattern: str, ref: SurahReferenceData, fallback_text: str) -> None:
+    def _match_and_align(pattern: str, ref: SurahReferenceData) -> None:
         nonlocal curr
         res, curr = _slice_preamble_match(pattern, curr)
         if res:
@@ -397,12 +361,12 @@ def _extract_opening_preamble(
                         intro_words.append(w.to_dict())
 
     # 1. Isti'adha (can precede any recitation)
-    _match_and_align(ISTIAADHA_PH, ISTIAADHA_REF_DATA, ISTIAADHA_TEXT)
+    _match_and_align(ISTIAADHA_PH, ISTIAADHA_REF_DATA)
 
     # 2. Basmalah (Surahs 2-114 except 9, only before Ayah 1)
     if start_ayah == 1 and surah not in (1, 9):
         basmalah_ph = "".join(w.phoneme for w in ref_surah_1.ayah_to_words[1])
-        _match_and_align(basmalah_ph, ref_surah_1, ref_surah_1.ayah_texts.get(1, "بِسْمِ ٱللَّهِ ٱلرَّحْمَـٰنِ ٱلرَّحِيمِ"))
+        _match_and_align(basmalah_ph, ref_surah_1)
 
     if intro_texts:
         return {
@@ -415,12 +379,16 @@ def _extract_opening_preamble(
     return None, curr
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# 4. CONSOLIDATED QURAN RECITATION MATCHER FACADE
+# ═══════════════════════════════════════════════════════════════════════════════
+
 class QuranMatcher:
-    """Consolidated Quran Recitation Alignment Engine."""
+    """Unified Quran Recitation Alignment Engine."""
 
     def __init__(self, config: Optional[MatcherConfig] = None):
         self.config = config or MatcherConfig()
-        self.detector = MultiSurahFinder()
+        self.detector = SurahDetector()
         self._verses: Dict[str, Any] = {}
         self._surah_refs: Dict[int, SurahReferenceData] = {}
         self._is_initialized = False
@@ -466,7 +434,7 @@ class QuranMatcher:
         if not aligned_phonemes or not self._verses:
             return []
 
-        # 1. Single Surah & Start Ayah Detection
+        # 1. Automatic Surah & Start Ayah Detection
         detected_surah = target_surah
         detected_start_ayah = start_ayah
         detected_end_ayah = None
@@ -495,13 +463,13 @@ class QuranMatcher:
         ref_data = self._get_surah_ref(detected_surah)
         start_word_idx = ref_data.ayah_start_word_index.get(detected_start_ayah or 1, 0)
 
-        # 3. 3D Wraparound Alignment & Segment Construction
+        # 3. 3D JumpDTW Alignment & Segment Construction
         segments = _align_and_package_ayahs(
             aligned_tokens=remaining_tokens,
             ref_data=ref_data,
             start_word_index=start_word_idx,
             target_end_ayah=detected_end_ayah,
-            config=self.config,
+            matcher_cfg=self.config,
         )
 
         if intro_dict and segments:
@@ -510,5 +478,4 @@ class QuranMatcher:
         return segments
 
 
-
-QuranWordMatcher = QuranMatcher
+QuranWordMatcher = QuranMatcher  # Backward compatibility alias

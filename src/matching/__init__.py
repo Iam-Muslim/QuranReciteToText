@@ -1,24 +1,22 @@
-"""Matching Subsystem Package.
+"""Unified Quran Recitation Matching Subsystem Package."""
 
-Exposes the unified Quran recitation matching, dynamic programming,
-linguistic rules, and global detection engines.
-"""
-
+from src.matching.reference import (
+    RefWord,
+    ContinuousQuranWord,
+    SurahReferenceData,
+)
 from src.matching.phonetics import (
     ZERO_COST_MARKERS,
     HAMZA_VARIANTS,
     MADD_VOWEL_CODES,
     PhoneticCostEngine,
     normalize_phoneme_query,
+    get_sub_cost_table,
 )
 from src.matching.kernels import (
     warmup_matcher_jit,
     warmup_detector_jit,
-)
-from src.matching.reference import (
-    ContinuousQuranWord,
-    RefWord,
-    SurahReferenceData,
+    warmup_matching_kernels,
 )
 from src.matching.detector import (
     FuzzyMatch,
@@ -31,24 +29,26 @@ from src.matching.detector import (
     find_near_matches,
 )
 from src.matching.matcher import (
+    MatcherConfig,
     WraparoundConfig,
     TrackerConfig,
-    MatcherConfig,
     QuranMatcher,
     QuranWordMatcher,
 )
 
 __all__ = [
+    "RefWord",
+    "ContinuousQuranWord",
+    "SurahReferenceData",
     "ZERO_COST_MARKERS",
     "HAMZA_VARIANTS",
     "MADD_VOWEL_CODES",
     "PhoneticCostEngine",
     "normalize_phoneme_query",
+    "get_sub_cost_table",
     "warmup_matcher_jit",
     "warmup_detector_jit",
-    "ContinuousQuranWord",
-    "RefWord",
-    "SurahReferenceData",
+    "warmup_matching_kernels",
     "FuzzyMatch",
     "SurahMatchSpan",
     "SurahSearchResult",
@@ -57,9 +57,9 @@ __all__ = [
     "SurahDetector",
     "MultiSurahFinder",
     "find_near_matches",
+    "MatcherConfig",
     "WraparoundConfig",
     "TrackerConfig",
-    "MatcherConfig",
     "QuranMatcher",
     "QuranWordMatcher",
 ]

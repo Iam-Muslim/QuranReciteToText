@@ -10,10 +10,7 @@ from typing import Optional, List, Tuple
 import numpy as np
 
 import config
-from config import (
-    DEFAULT_REF_NORM_PH_PATH,
-    DEFAULT_PH_INDEX_PATH,
-)
+from config import DEFAULT_REF_NORM_PH_PATH, DEFAULT_PH_INDEX_PATH
 from src.models import PhonemeToken
 from src.matching.phonetics import normalize_phoneme_query
 from src.matching.kernels import _bit_parallel_search_fast
@@ -25,7 +22,7 @@ logger = logging.getLogger(__name__)
 # 1. FUZZY BIT-PARALLEL SUBSTRING MATCHER
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@dataclass
+@dataclass(slots=True)
 class FuzzyMatch:
     start: int
     end: int
@@ -48,7 +45,10 @@ def _filter_overlapping(matches: List[FuzzyMatch]) -> List[FuzzyMatch]:
 
 
 def find_near_matches(
-    query: str, text: str | np.ndarray, max_dist: int = 0, max_l_dist: Optional[int] = None
+    query: str,
+    text: str | np.ndarray,
+    max_dist: int = 0,
+    max_l_dist: Optional[int] = None,
 ) -> List[FuzzyMatch]:
     """Finds near-matches using Gene Myers' 64-bit bit-parallel DP search."""
     effective_dist = max_dist if max_l_dist is None else max_l_dist
@@ -64,27 +64,30 @@ def find_near_matches(
 # 2. PHONETIC SEARCH OVER BINARY NPY INDEX
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@dataclass
-class SurahMatchSpan:
-    surah_idx: int
-    ayah_idx: int
-
-
-@dataclass
+@dataclass(slots=True)
 class SurahSearchResult:
-    start: SurahMatchSpan
+    surah_number: int
+    ayah_number: int
     distance: int
 
+    # Backward-compatibility properties
     @property
-    def surah_number(self) -> int:
-        return self.start.surah_idx
+    def start(self) -> SurahSearchResult:
+        return self
 
     @property
-    def ayah_number(self) -> int:
-        return self.start.ayah_idx
+    def surah_idx(self) -> int:
+        return self.surah_number
+
+    @property
+    def ayah_idx(self) -> int:
+        return self.ayah_number
 
 
-@dataclass
+SurahMatchSpan = SurahSearchResult  # Backward-compatibility alias
+
+
+@dataclass(slots=True)
 class SurahDetectionResult:
     surah: int
     start_ayah: int
@@ -123,19 +126,16 @@ class PhoneticSearch:
         arr = np.load(npy_path)
         if arr.ndim == 1:
             arr = arr.reshape(-1, 7)
-        self._index_array = arr.astype(np.uint16)
+        # Store only Surah (col 0) and Ayah (col 1) to conserve RAM
+        self._index_array = arr[:, :2].astype(np.uint16)
         self._is_loaded = True
 
     @staticmethod
     def normalize_query(query: str) -> str:
         return normalize_phoneme_query(query)
 
-    def _ref_idx_to_span(self, ref_idx: int) -> SurahMatchSpan:
-        row = self._index_array[ref_idx]
-        return SurahMatchSpan(surah_idx=int(row[0]), ayah_idx=int(row[1]))
-
     def search(self, query: str, error_ratio: Optional[float] = None) -> List[SurahSearchResult]:
-        if not self._is_loaded or not self._ref_ph_norm:
+        if not self._is_loaded or self._ref_codes is None or self._index_array is None:
             return []
         norm_query = self.normalize_query(query)
         if not norm_query:
@@ -143,16 +143,16 @@ class PhoneticSearch:
 
         ratio = error_ratio if error_ratio is not None else getattr(config, "DETECTOR_ERROR_RATIO", 0.20)
         max_edits = int(min(len(norm_query), 64) * ratio)
-        target = self._ref_codes if self._ref_codes is not None else self._ref_ph_norm
-        outs = find_near_matches(norm_query, target, max_edits)
+        outs = find_near_matches(norm_query, self._ref_codes, max_edits)
 
-        results = [
-            SurahSearchResult(
-                start=self._ref_idx_to_span(out.start),
+        results = []
+        for out in outs:
+            row = self._index_array[out.start]
+            results.append(SurahSearchResult(
+                surah_number=int(row[0]),
+                ayah_number=int(row[1]),
                 distance=out.dist,
-            )
-            for out in outs
-        ]
+            ))
         results.sort(key=lambda r: r.distance)
         return results
 
@@ -191,9 +191,8 @@ class SurahDetector:
 
         total_toks = len(aligned_phonemes)
 
-        # Probe initial offsets across opening window to be immune to preamble, Isti'adha, Basmalah, or noise
-        probe_offsets = [0, 8, 16, 24, 32, 48, 64, 80, 100, 120]
-        probe_offsets = [off for off in probe_offsets if off + 15 <= total_toks]
+        # Probe opening window offsets to be robust to Isti'adha, Basmalah, or intro silence
+        probe_offsets = [off for off in (0, 8, 16, 24, 32, 48, 64, 80, 100, 120) if off + 15 <= total_toks]
 
         surah_scores: Dict[int, float] = defaultdict(float)
         surah_counts: Dict[int, int] = defaultdict(int)
@@ -213,7 +212,7 @@ class SurahDetector:
                     surah_candidates[b.surah_number].append((b.distance, norm_dist, b.ayah_number, offset))
 
         if surah_candidates:
-            # If 1:1 (Basmalah) matched but non-1 exists with strong votes, exclude 1:1 if it was just Basmalah
+            # If Surah 1:1 (Basmalah) matched but a non-1 Surah exists with strong votes, select non-1
             non_1_surahs = {s: sc for s, sc in surah_scores.items() if s != 1}
             if non_1_surahs and surah_counts[1] <= 2 and all(c[2] == 1 for c in surah_candidates[1]):
                 best_surah = max(non_1_surahs.keys(), key=lambda s: (surah_counts[s], surah_scores[s]))
@@ -222,16 +221,20 @@ class SurahDetector:
 
             best_list = surah_candidates[best_surah]
             best_list.sort(key=lambda c: (c[0], c[1]))
-            best_dist, best_norm, _, best_offset = best_list[0]
+            _, best_norm, _, best_offset = best_list[0]
 
-            # Determine start ayah: find the minimum ayah probed for this surah
             min_ayah = min(c[2] for c in best_list)
             start_ayah = max(1, min_ayah - 1) if best_offset > 0 and min_ayah > 1 else min_ayah
 
-            # Determine end ayah: probe near the end of recitation
+            # Determine end Ayah by probing near the recitation tail
             end_ayah = start_ayah
             if total_toks > sample_length:
-                for end_offset in (total_toks - sample_length, total_toks - sample_length - 20, total_toks - sample_length - 45, total_toks - sample_length - 80):
+                for end_offset in (
+                    total_toks - sample_length,
+                    total_toks - sample_length - 20,
+                    total_toks - sample_length - 45,
+                    total_toks - sample_length - 80,
+                ):
                     if end_offset > best_offset and end_offset >= 0:
                         slice_tokens = aligned_phonemes[end_offset:end_offset + sample_length]
                         q = "".join(p.phoneme for p in slice_tokens)
@@ -265,5 +268,4 @@ class SurahDetector:
         )
 
 
-# Backward compatibility alias
-MultiSurahFinder = SurahDetector
+MultiSurahFinder = SurahDetector  # Backward compatibility alias

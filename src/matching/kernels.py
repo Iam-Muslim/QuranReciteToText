@@ -1,8 +1,8 @@
-"""Pure Numba JIT Accelerated Dynamic Programming Math Kernels.
+"""Numba JIT Accelerated Dynamic Programming Kernels for Quran Recitation Alignment.
 
 Contains:
-1. 3D Wraparound Dynamic Programming with exact Viterbi backtracking.
-2. Gene Myers 64-bit Bit-Parallel Substring Search kernel.
+1. JumpDTW 3D Wraparound Dynamic Programming with exact Viterbi backtracking.
+2. Gene Myers' 64-bit Bit-Parallel Substring Search kernel.
 3. JIT warmup routines.
 """
 
@@ -25,7 +25,7 @@ except ImportError:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 1. GLOBAL GRAPH VITERBI DECODER (JumpDTW)
+# 1. JUMPDTW 3D WRAPAROUND VITERBI DECODER
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @njit(fastmath=True, cache=True)
@@ -41,6 +41,7 @@ def _global_viterbi_fast(
     wrap_penalty: float,
     wrap_span_weight: float,
 ) -> Tuple[int, int, float, np.ndarray, np.ndarray]:
+    """JumpDTW Viterbi DP with backward jumps in O(M*N) time via suffix-minimum tracking."""
     m = len(p_codes)
     n = len(r_codes)
     INF = 1e9
@@ -50,13 +51,13 @@ def _global_viterbi_fast(
 
     backtrack_op = np.zeros((m + 1, n + 1), dtype=np.uint8)
     wrap_from_j = np.zeros((m + 1, n + 1), dtype=np.int32)
-    
+
     dp_prev[0] = 0.0
 
     for j in range(1, n + 1):
         dp_prev[j] = dp_prev[j - 1] + del_costs[j - 1]
         backtrack_op[0, j] = 3  # REF DEL
-        
+
     min_C_after = np.empty(n + 2, dtype=np.float64)
     best_j_after = np.empty(n + 2, dtype=np.int32)
 
@@ -70,7 +71,7 @@ def _global_viterbi_fast(
         for j in range(1, n + 1):
             asr_ins_opt = dp_prev[j] + ins_c
             ref_del_opt = dp_curr[j - 1] + del_costs[j - 1]
-            
+
             r_code = r_codes[j - 1]
             sub_c = sub_table[p_code, r_code]
             sub_opt = dp_prev[j - 1] + sub_c
@@ -87,11 +88,12 @@ def _global_viterbi_fast(
             dp_curr[j] = best
             backtrack_op[i, j] = choice
 
+        # O(N) backward jump calculation using suffix minimums
         min_C_after[n + 1] = INF
         best_j_after[n + 1] = -1
         current_min_C = INF
         current_best_j = -1
-        
+
         for j in range(n, -1, -1):
             if word_ends_mask[j] and dp_curr[j] < INF:
                 w_end = r_phone_to_word[j - 1]
@@ -111,7 +113,7 @@ def _global_viterbi_fast(
                     new_cost = c_after + wrap_penalty - (wrap_span_weight * w_start)
                     if new_cost < dp_curr[j_start]:
                         dp_curr[j_start] = new_cost
-                        backtrack_op[i, j_start] = 4
+                        backtrack_op[i, j_start] = 4  # WRAPAROUND JUMP
                         wrap_from_j[i, j_start] = best_j_after[j_start + 1]
                         has_wrap = True
 
@@ -124,6 +126,7 @@ def _global_viterbi_fast(
 
         dp_prev[:] = dp_curr[:]
 
+    # Best endpoint among word boundaries
     best_score = INF
     best_j = -1
     for j in range(1, n + 1):
@@ -131,11 +134,12 @@ def _global_viterbi_fast(
             best_score = dp_curr[j]
             best_j = j
 
+    # Exact Backtracking
     char_word_map = np.full(m, -1, dtype=np.int32)
     char_j_map = np.full(m, -1, dtype=np.int32)
     ci = m
     cj = best_j
-    
+
     while ci > 0 or cj > 0:
         op = backtrack_op[ci, cj]
         if op == 1:
@@ -154,15 +158,18 @@ def _global_viterbi_fast(
         elif op == 4:
             cj = int(wrap_from_j[ci, cj])
         else:
-            if cj > 0: cj -= 1
-            elif ci > 0: ci -= 1
-            else: break
-            
+            if cj > 0:
+                cj -= 1
+            elif ci > 0:
+                ci -= 1
+            else:
+                break
+
     return m, best_j, best_score, char_word_map, char_j_map
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 2. GENE MYERS' 64-BIT BIT-PARALLEL SEARCH KERNEL (JIT ACCELERATED)
+# 2. GENE MYERS' 64-BIT BIT-PARALLEL SEARCH KERNEL
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @njit(fastmath=True, cache=True)
@@ -233,7 +240,6 @@ def warmup_matcher_jit() -> None:
         w_ends = np.array([False, False, False, True], dtype=np.bool_)
         del_c = np.array([1.0, 1.0, 1.0], dtype=np.float64)
         ins_c = np.array([0.75, 0.75, 0.75], dtype=np.float64)
-
         tbl_dummy = get_sub_cost_table(0.25)
 
         _global_viterbi_fast(
@@ -252,12 +258,21 @@ def warmup_matcher_jit() -> None:
         pass
 
 
-
 def warmup_detector_jit() -> None:
-    """Pre-compiles Myers bit-parallel search with dummy arrays so first query is instant."""
+    """Pre-compiles Myers bit-parallel search so first query is instant."""
     if not HAS_NUMBA:
         return
     try:
-        _bit_parallel_search_fast(np.array([1575], dtype=np.int32), np.array([1575, 1576], dtype=np.int32), 1)
+        _bit_parallel_search_fast(
+            np.array([1575], dtype=np.int32),
+            np.array([1575, 1576], dtype=np.int32),
+            1,
+        )
     except Exception:
         pass
+
+
+def warmup_matching_kernels() -> None:
+    """Consolidated warmup for all matching subsystem JIT kernels."""
+    warmup_matcher_jit()
+    warmup_detector_jit()

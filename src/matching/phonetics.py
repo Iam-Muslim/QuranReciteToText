@@ -1,6 +1,6 @@
 """Fixed Arabic, Tajweed, and Phonetic Linguistic Rules & Cost Functions.
 
-This module defines immutable linguistic constants and phonetic cost rules
+Defines immutable linguistic constants and phonetic cost rules
 for Arabic recitation, including Tajweed marker handling, Hamza variants,
 Tashkeel classifications, and acoustic confusion lookups.
 """
@@ -10,7 +10,6 @@ from __future__ import annotations
 import re
 from typing import Dict
 import numpy as np
-
 
 try:
     from numba import njit
@@ -67,8 +66,6 @@ def _sub_cost_fast(a: int, b: int, confusion_cost: float = 0.25) -> float:
         return 0.0
 
     # 2. Interchangeable Quranic Glyphs (cost = 0.0)
-    # م/۾ (0x0645, 0x06FE), ن/ں (0x0646, 0x06BA), و/ۥ (0x0648, 0x06E5), ي/ۦ (0x064A, 0x06E6)
-    # ة/ه (0x0629, 0x0647), ت/ة (0x062A, 0x0629)
     if (mn == 0x0645 and mx == 0x06FE) or \
        (mn == 0x0646 and mx == 0x06BA) or \
        (mn == 0x0648 and mx == 0x06E5) or \
@@ -87,12 +84,7 @@ def _sub_cost_fast(a: int, b: int, confusion_cost: float = 0.25) -> float:
     if (a in (0x064B, 0x064C, 0x064D) and b == 0x0646) or (b in (0x064B, 0x064C, 0x064D) and a == 0x0646):
         return 0.0
 
-    # Vowels vs Harakat (cost = confusion_cost):
-    # ا/َ (0x0627, 0x064E), و/ُ (0x0648, 0x064F), ُ/ۥ (0x064F, 0x06E5), ي/ِ (0x064A, 0x0650), ِ/ۦ (0x0650, 0x06E6)
-    # Consonants:
-    # ت/ط (0x062A, 0x0637), ج/ز (0x062C, 0x0632), خ/غ (0x062E, 0x063A), د/ض (0x062F, 0x0636)
-    # ذ/ز (0x0630, 0x0632), ذ/ظ (0x0630, 0x0638), س/ص (0x0633, 0x0635), ق/ك (0x0642, 0x0643)
-    # ء/ل (0x0621, 0x0644) Wasl / fast recitation confusion
+    # Vowels vs Harakat & Consonants (cost = confusion_cost):
     if (mn == 0x0627 and mx == 0x064E) or \
        (mn == 0x0648 and mx == 0x064F) or \
        (mn == 0x064F and mx == 0x06E5) or \
@@ -108,7 +100,7 @@ def _sub_cost_fast(a: int, b: int, confusion_cost: float = 0.25) -> float:
        (mn == 0x0621 and mx == 0x0644):
         return confusion_cost
 
-    # 4. Strict Harakat Penalty: if either is Tashkeel but wasn't in the matrix above
+    # 4. Strict Harakat Penalty
     if (a in (0x064E, 0x064F, 0x0650)) or (b in (0x064E, 0x064F, 0x0650)):
         return 1.0
 
@@ -138,14 +130,45 @@ def get_sub_cost_table(confusion_cost: float = 0.25) -> np.ndarray:
     return table
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# 3. JIT VECTORIZED EDIT COST EVALUATORS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@njit(fastmath=True, cache=True)
+def _compute_insertion_costs_fast(
+    p_codes: np.ndarray, standard_cost: float, confusion_cost: float
+) -> np.ndarray:
+    m = len(p_codes)
+    costs = np.full(m, standard_cost, dtype=np.float64)
+    for i in range(m):
+        code = p_codes[i]
+        if code in (0x0686, 0x06DC, 0x0619, 0x06EA, 0x0640):
+            costs[i] = 0.0
+        elif i > 0 and code == p_codes[i - 1]:
+            if code in (0x0627, 0x0648, 0x064A, 0x06E5, 0x06E6):
+                costs[i] = confusion_cost
+    return costs
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# 3. HIGH LEVEL PHONETIC COST ENGINE
-# ═══════════════════════════════════════════════════════════════════════════════
+@njit(fastmath=True, cache=True)
+def _compute_deletion_costs_fast(
+    r_codes: np.ndarray, standard_cost: float, confusion_cost: float
+) -> np.ndarray:
+    n = len(r_codes)
+    costs = np.full(n, standard_cost, dtype=np.float64)
+    for j in range(n):
+        code = r_codes[j]
+        if code in (0x0686, 0x06DC, 0x0619, 0x06EA, 0x0640):
+            costs[j] = 0.0
+        elif code in (0x0621, 0x0622, 0x0623, 0x0625, 0x0672):
+            costs[j] = confusion_cost
+        elif j > 0 and code == r_codes[j - 1]:
+            costs[j] = confusion_cost
+    return costs
+
 
 class PhoneticCostEngine:
-    """Evaluates phonetic edit costs for deletions and insertions."""
+    """Evaluates phonetic edit costs for deletions and insertions (backward compatible)."""
 
     @staticmethod
     def get_deletion_cost(
