@@ -217,11 +217,55 @@ def _bit_parallel_search_fast(
 
         if curr_dist <= max_dist:
             match_end = j + 1
-            match_starts.append(max(0, min(match_end, match_end - n - curr_dist)))
+            match_starts.append(max(0, match_end - n))
             match_ends.append(match_end)
             match_dists.append(curr_dist)
 
     return match_starts, match_ends, match_dists
+
+
+@njit(fastmath=True, cache=True)
+def _refine_match_start(q_codes: np.ndarray, t_codes: np.ndarray, end_idx: int, max_d: int) -> int:
+    """Finds exact match start by running backward Myers on the local window preceding end_idx."""
+    n = len(q_codes)
+    win_len = min(end_idx, n + max_d + 4)
+    char_mask = np.zeros(2048, dtype=np.uint64)
+    for i in range(n):
+        c = q_codes[n - 1 - i]
+        if c < 2048:
+            char_mask[c] |= (np.uint64(1) << np.uint64(i))
+
+    full_mask = (np.uint64(1) << np.uint64(n)) - np.uint64(1)
+    top_mask = np.uint64(1) << np.uint64(n - 1)
+    vp = full_mask
+    vn = np.uint64(0)
+    curr_dist = n
+    best_dist = 999
+    best_len = n
+
+    for k in range(win_len):
+        code = t_codes[end_idx - 1 - k]
+        pm = char_mask[code] if code < 2048 else np.uint64(0)
+        x = pm | vn
+        d0 = (((pm & vp) + vp) ^ vp) | x
+        hn = vp & d0
+        hp = vn | (~(vp | d0) & full_mask)
+
+        if (hp & top_mask) != 0:
+            curr_dist += 1
+        if (hn & top_mask) != 0:
+            curr_dist -= 1
+
+        hp = (hp << 1) & full_mask
+        hn = (hn << 1) & full_mask
+        vp = (hn | (~(d0 | hp) & full_mask)) & full_mask
+        vn = hp & d0
+
+        if curr_dist <= max_d and curr_dist <= best_dist:
+            best_dist = curr_dist
+            best_len = k + 1
+
+    return end_idx - best_len
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -263,11 +307,10 @@ def warmup_detector_jit() -> None:
     if not HAS_NUMBA:
         return
     try:
-        _bit_parallel_search_fast(
-            np.array([1575], dtype=np.int32),
-            np.array([1575, 1576], dtype=np.int32),
-            1,
-        )
+        q_d = np.array([1575], dtype=np.int32)
+        t_d = np.array([1575, 1576], dtype=np.int32)
+        _bit_parallel_search_fast(q_d, t_d, 1)
+        _refine_match_start(q_d, t_d, 1, 1)
     except Exception:
         pass
 
@@ -279,3 +322,4 @@ def warmup_matching() -> None:
 
 
 warmup_matching_kernels = warmup_matching
+

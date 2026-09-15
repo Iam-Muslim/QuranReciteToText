@@ -88,7 +88,7 @@ def _align_and_package_ayahs(
     char_to_tok.append(total_tokens)
 
     word_count = ref_data.num_words
-    win_start = max(0, start_word_index - 50)
+    win_start = max(0, start_word_index - 2)
 
     # Robust window bounds: never truncate below acoustic length estimate
     est_words = int(len(asr_str) / 4.0) + 150

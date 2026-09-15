@@ -13,7 +13,7 @@ import config
 from config import DEFAULT_REF_NORM_PH_PATH, DEFAULT_PH_INDEX_PATH
 from src.models import PhonemeToken
 from src.matching.phonetics import normalize_phoneme_query
-from src.matching.kernels import _bit_parallel_search_fast
+from src.matching.kernels import _bit_parallel_search_fast, _refine_match_start
 
 logger = logging.getLogger(__name__)
 
@@ -50,14 +50,15 @@ def find_near_matches(
     max_dist: int = 0,
     max_l_dist: Optional[int] = None,
 ) -> List[FuzzyMatch]:
-    """Finds near-matches using Gene Myers' 64-bit bit-parallel DP search."""
+    """Finds near-matches using Gene Myers' 64-bit bit-parallel DP search with exact start refinement."""
     effective_dist = max_dist if max_l_dist is None else max_l_dist
     if not query or len(text) == 0 or effective_dist < 0:
         return []
     q_codes = np.array([ord(c) for c in query[:64]], dtype=np.int32)
     t_codes = text if isinstance(text, np.ndarray) else np.array([ord(c) for c in text], dtype=np.int32)
     starts, ends, dists = _bit_parallel_search_fast(q_codes, t_codes, effective_dist)
-    return _filter_overlapping([FuzzyMatch(int(s), int(e), int(d)) for s, e, d in zip(starts, ends, dists)])
+    raw = _filter_overlapping([FuzzyMatch(int(s), int(e), int(d)) for s, e, d in zip(starts, ends, dists)])
+    return [FuzzyMatch(int(_refine_match_start(q_codes, t_codes, m.end, m.dist)), m.end, m.dist) for m in raw]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -172,7 +173,9 @@ class SurahDetector:
         total_toks = len(aligned_phonemes)
 
         # Probe opening window offsets to be robust to Isti'adha, Basmalah, or intro silence
-        probe_offsets = [off for off in (0, 8, 16, 24, 32, 48, 64, 80, 100, 120) if off + 15 <= total_toks]
+        probe_offsets = [off for off in (0, 8, 16, 24, 32, 48, 64, 80, 100, 120, 150, 180) if off + 15 <= total_toks]
+        if not probe_offsets and total_toks >= 6:
+            probe_offsets = [0]
 
         surah_scores: Dict[int, float] = defaultdict(float)
         surah_counts: Dict[int, int] = defaultdict(int)
@@ -181,20 +184,27 @@ class SurahDetector:
         for offset in probe_offsets:
             slice_tokens = aligned_phonemes[offset:offset + sample_length]
             q = "".join(p.phoneme for p in slice_tokens)
-            if len(q) >= 6:
+            norm_q = normalize_phoneme_query(q)
+            q_len = min(len(norm_q), 64)
+            if q_len >= 6:
                 res = self._phonetic_search.search(q, error_ratio=0.25)
                 if res:
-                    b = res[0]
-                    norm_dist = b.distance / max(1, len(q))
-                    w = max(0.01, 1.0 - norm_dist)
-                    surah_scores[b.surah_number] += w
-                    surah_counts[b.surah_number] += 1
-                    surah_candidates[b.surah_number].append((b.distance, norm_dist, b.ayah_number, offset))
+                    best_d = res[0].distance
+                    for b in res:
+                        if b.distance > best_d + 1:
+                            break
+                        norm_dist = b.distance / max(1, q_len)
+                        w = max(0.01, 1.0 - norm_dist)
+                        if b.distance > best_d:
+                            w *= 0.6
+                        surah_scores[b.surah_number] += w
+                        surah_counts[b.surah_number] += 1
+                        surah_candidates[b.surah_number].append((b.distance, norm_dist, b.ayah_number, offset))
 
         if surah_candidates:
             # If Surah 1:1 (Basmalah) matched but a non-1 Surah exists with strong votes, select non-1
             non_1_surahs = {s: sc for s, sc in surah_scores.items() if s != 1}
-            if non_1_surahs and surah_counts[1] <= 2 and all(c[2] == 1 for c in surah_candidates[1]):
+            if non_1_surahs and surah_counts[1] <= 2 and all(c[2] == 1 for c in surah_candidates.get(1, [])):
                 best_surah = max(non_1_surahs.keys(), key=lambda s: (surah_counts[s], surah_scores[s]))
             else:
                 best_surah = max(surah_scores.keys(), key=lambda s: (surah_counts[s], surah_scores[s]))
@@ -203,25 +213,29 @@ class SurahDetector:
             best_list.sort(key=lambda c: (c[0], c[1]))
             _, best_norm, _, best_offset = best_list[0]
 
-            min_ayah = min(c[2] for c in best_list)
-            start_ayah = max(1, min_ayah - 1) if best_offset > 0 and min_ayah > 1 else min_ayah
+            # Start Ayah is the minimum ayah matched for best_surah across opening probes
+            start_ayah = min(c[2] for c in best_list)
 
             # Determine end Ayah by probing near the recitation tail
             confirmed_end_ayah: Optional[int] = None
             if total_toks > sample_length:
-                for end_offset in (
+                tail_offsets = [
                     total_toks - sample_length,
-                    total_toks - sample_length - 20,
-                    total_toks - sample_length - 45,
-                    total_toks - sample_length - 80,
-                ):
+                    total_toks - sample_length - 15,
+                    total_toks - sample_length - 35,
+                    total_toks - sample_length - 60,
+                    total_toks - sample_length - 90,
+                    total_toks - sample_length - 120,
+                ]
+                for end_offset in tail_offsets:
                     if end_offset > best_offset and end_offset >= 0:
                         slice_tokens = aligned_phonemes[end_offset:end_offset + sample_length]
                         q = "".join(p.phoneme for p in slice_tokens)
-                        if len(q) >= 6:
+                        norm_q = normalize_phoneme_query(q)
+                        if len(norm_q) >= 6:
                             res = self._phonetic_search.search(q, error_ratio=0.25)
                             for r in res:
-                                if r.surah_number == best_surah:
+                                if r.surah_number == best_surah and r.ayah_number >= start_ayah:
                                     confirmed_end_ayah = max(confirmed_end_ayah or start_ayah, r.ayah_number)
                                     break
                             if confirmed_end_ayah is not None:
