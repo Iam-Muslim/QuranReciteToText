@@ -128,7 +128,6 @@ class QuranWord:
     ref: Optional[str] = None
     start: Optional[float] = None
     end: Optional[float] = None
-    confidence: Optional[float] = None
     score: Optional[float] = None
     phonemes: Optional[List[Dict[str, Any]]] = None
 
@@ -177,15 +176,12 @@ class QuranSegment:
     start_time: float = 0.0
     end_time: float = 0.0
     transcribed_text: str = ""
-    matched_text: str = ""
     matched_ref: str = ""
-    match_score: float = 1.0
     words: List[QuranWord] = field(default_factory=list)
     repeated_ranges: Optional[List[Any]] = None
     repeated_text: Optional[List[str]] = None
     sub_segments: Optional[List[AyahSubSegment]] = None
     intro: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         real_ayah = self.ayah if self.ayah is not None else self.segment_number
@@ -199,17 +195,14 @@ class QuranSegment:
             "ayah": real_ayah,
             "start": round(self.start_time, 2),
             "end": round(self.end_time, 2),
-            "transcribed_text": self.transcribed_text or self.matched_text,
+            "transcribed_text": self.transcribed_text,
             "matched_ref": self.matched_ref,
         }
         if self.repeated_ranges:
             d["repeated_ranges"] = self.repeated_ranges
         if self.repeated_text:
             d["repeated_text"] = self.repeated_text
-        if self.error is not None:
-            d["error"] = self.error
 
-        # segments level (sub-segments if repetitions exist, or 1 single segment if no repetition)
         if self.sub_segments:
             d["segments"] = [s.to_dict() for s in self.sub_segments]
         else:
@@ -218,7 +211,7 @@ class QuranSegment:
                     "segment": 1,
                     "start": round(self.start_time, 2),
                     "end": round(self.end_time, 2),
-                    "transcribed_text": self.transcribed_text or self.matched_text,
+                    "transcribed_text": self.transcribed_text,
                     "words": [w.to_dict() for w in self.words],
                 }
             ]

@@ -6,7 +6,7 @@ import os
 import logging
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Optional, List, Dict, Tuple
+from typing import Optional, List, Tuple
 import numpy as np
 
 import config
@@ -16,7 +16,7 @@ from config import (
 )
 from src.models import PhonemeToken
 from src.matching.phonetics import normalize_phoneme_query
-from src.matching.kernels import _bit_parallel_search_fast, warmup_detector_jit
+from src.matching.kernels import _bit_parallel_search_fast
 
 logger = logging.getLogger(__name__)
 

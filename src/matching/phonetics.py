@@ -8,7 +8,7 @@ Tashkeel classifications, and acoustic confusion lookups.
 from __future__ import annotations
 
 import re
-from typing import Set, Dict
+from typing import Dict
 import numpy as np
 
 
@@ -30,9 +30,6 @@ ZERO_COST_MARKERS: frozenset[int] = frozenset({0x0686, 0x06DC, 0x0619, 0x06EA, 0
 
 # Hamza orthographic variants (ء, آ, أ, إ, ٲ)
 HAMZA_VARIANTS: frozenset[int] = frozenset({0x0621, 0x0622, 0x0623, 0x0625, 0x0672})
-
-# Short vowel Harakat (َ, ُ, ِ)
-TASHKEEL_CODES: frozenset[int] = frozenset({0x064E, 0x064F, 0x0650})
 
 # Madd long vowels and Quranic superscript vowels (ا, و, ي, ۥ, ۦ)
 MADD_VOWEL_CODES: frozenset[int] = frozenset({0x0627, 0x0648, 0x064A, 0x06E5, 0x06E6})

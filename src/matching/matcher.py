@@ -9,17 +9,13 @@ from __future__ import annotations
 import os
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional, List, Dict, Any, Tuple
 from collections import defaultdict
 import numpy as np
 
 import config
-from config import (
-    DEFAULT_QURAN_PHONEMES_PATH,
-    DEFAULT_REF_NORM_PH_PATH,
-    DEFAULT_PH_INDEX_PATH,
-)
+from config import DEFAULT_QURAN_PHONEMES_PATH
 from src.models import (
     PhonemeToken,
     QuranWord,
@@ -28,16 +24,8 @@ from src.models import (
 )
 from src.matching.phonetics import PhoneticCostEngine, get_sub_cost_table
 from src.matching.kernels import _global_viterbi_fast, warmup_matcher_jit
-from src.matching.reference import (
-    ContinuousQuranWord,
-    SurahReferenceData,
-)
-from src.matching.detector import (
-    MultiSurahFinder,
-    SurahDetectionResult,
-    find_near_matches,
-    warmup_detector_jit,
-)
+from src.matching.reference import SurahReferenceData
+from src.matching.detector import MultiSurahFinder, find_near_matches
 
 logger = logging.getLogger(__name__)
 
@@ -229,9 +217,11 @@ def _align_and_package_ayahs(
                     start=round(w_start, 2),
                     end=round(w_end, 2),
                     score=round(score, 2),
-                    confidence=round(avg_conf, 2),
                     phonemes=ph_dicts,
                 ))
+
+        if not qwords:
+            continue
 
         # Build sub_segments and repetition details if the verse was recited multiple times
         sub_segments: Optional[List[AyahSubSegment]] = None
@@ -244,21 +234,32 @@ def _align_and_package_ayahs(
                 w_idx = rw.global_index
                 for p in matched_word_tokens.get(w_idx, []):
                     if p:
-                        avg_c = sum(t.confidence for t in p) / len(p)
-                        score = matched_word_scores.get(w_idx, 1.0)
-                        q_inst = QuranWord(
-                            word=rw.uthmani,
-                            location=rw.location,
-                            ref=rw.phoneme,
-                            start=round(p[0].start, 2),
-                            end=round(p[-1].end, 2),
-                            score=round(score, 2),
-                            confidence=round(avg_c, 2),
-                            phonemes=[t.to_dict() for t in p],
-                        )
-                        all_word_instances.append((w_idx, rw, q_inst))
+                        all_word_instances.append((
+                            w_idx,
+                            rw,
+                            QuranWord(
+                                word=rw.uthmani,
+                                location=rw.location,
+                                ref=rw.phoneme,
+                                start=round(p[0].start, 2),
+                                end=round(p[-1].end, 2),
+                                score=round(matched_word_scores.get(w_idx, 1.0), 2),
+                                phonemes=[t.to_dict() for t in p],
+                            ),
+                        ))
 
             all_word_instances.sort(key=lambda x: x[2].start)
+
+            def _build_sub(pass_words: List[QuranWord], seg_num: int) -> AyahSubSegment:
+                return AyahSubSegment(
+                    sub_segment_number=seg_num,
+                    start_time=pass_words[0].start or 0.0,
+                    end_time=pass_words[-1].end or 0.0,
+                    text=" ".join(w.word for w in pass_words),
+                    words_range=f"{pass_words[0].location}-{pass_words[-1].location}",
+                    is_repetition=(seg_num > 1),
+                    words=pass_words,
+                )
 
             sub_segs_list: List[AyahSubSegment] = []
             current_pass: List[QuranWord] = []
@@ -266,38 +267,14 @@ def _align_and_package_ayahs(
 
             for w_idx, rw, q_inst in all_word_instances:
                 if current_pass and w_idx <= prev_w_idx:
-                    p_st = current_pass[0].start or 0.0
-                    p_et = current_pass[-1].end or 0.0
-                    p_txt = " ".join(w.word for w in current_pass)
-                    p_range = f"{current_pass[0].location}-{current_pass[-1].location}"
-                    sub_segs_list.append(AyahSubSegment(
-                        sub_segment_number=len(sub_segs_list) + 1,
-                        start_time=p_st,
-                        end_time=p_et,
-                        text=p_txt,
-                        words_range=p_range,
-                        is_repetition=(len(sub_segs_list) > 0),
-                        words=current_pass,
-                    ))
+                    sub_segs_list.append(_build_sub(current_pass, len(sub_segs_list) + 1))
                     current_pass = []
 
                 current_pass.append(q_inst)
                 prev_w_idx = w_idx
 
             if current_pass:
-                p_st = current_pass[0].start or 0.0
-                p_et = current_pass[-1].end or 0.0
-                p_txt = " ".join(w.word for w in current_pass)
-                p_range = f"{current_pass[0].location}-{current_pass[-1].location}"
-                sub_segs_list.append(AyahSubSegment(
-                    sub_segment_number=len(sub_segs_list) + 1,
-                    start_time=p_st,
-                    end_time=p_et,
-                    text=p_txt,
-                    words_range=p_range,
-                    is_repetition=(len(sub_segs_list) > 0),
-                    words=current_pass,
-                ))
+                sub_segs_list.append(_build_sub(current_pass, len(sub_segs_list) + 1))
 
             if sub_segs_list:
                 sub_segments = sub_segs_list
@@ -306,12 +283,8 @@ def _align_and_package_ayahs(
 
         # The Ayah segment spans from the start of the first matched pass to the end of the last matched pass
         all_ay_passes = [p for rw in ay_words for p in matched_word_tokens.get(rw.global_index, []) if p]
-        if all_ay_passes:
-            seg_start = min(p[0].start for p in all_ay_passes)
-            seg_end = max(p[-1].end for p in all_ay_passes)
-        else:
-            seg_start = 0.0
-            seg_end = 0.0
+        seg_start = min(p[0].start for p in all_ay_passes)
+        seg_end = max(p[-1].end for p in all_ay_passes)
 
         ayah_text = ref_data.ayah_texts.get(ay, " ".join(w.uthmani for w in ay_words))
         matched_ref_str = f"{ref_data.surah}:{ay}:1-{ref_data.surah}:{ay}:{len(ay_words)}"
@@ -323,9 +296,7 @@ def _align_and_package_ayahs(
             start_time=round(seg_start, 2),
             end_time=round(seg_end, 2),
             transcribed_text=ayah_text,
-            matched_text=ayah_text,
             matched_ref=matched_ref_str,
-            match_score=1.0,
             words=qwords,
             repeated_ranges=repeated_ranges,
             repeated_text=repeated_text,
@@ -342,6 +313,16 @@ def _align_and_package_ayahs(
 
 ISTIAADHA_TEXT = "أَعُوذُ بِٱللَّهِ مِنَ ٱلشَّيْطَـٰنِ ٱلرَّجِيمِ"
 ISTIAADHA_PH = "ءَعُۥۥذُبِللَااهِمِنَششَيطَاانِررَجِۦۦۦۦم"
+
+ISTIAADHA_REF_DATA = SurahReferenceData(
+    0,
+    {
+        "0:1": {
+            "aya_text": ISTIAADHA_TEXT,
+            "aya_phonemes_list": ["ءَعُۥۥذُ", "بِللَااهِ", "مِنَ", "ششَيطَاانِ", "ررَجِۦۦۦۦم"],
+        }
+    },
+)
 
 
 def _slice_preamble_match(
@@ -392,62 +373,43 @@ def _extract_opening_preamble(
     intro_starts: List[float] = []
     intro_ends: List[float] = []
 
+    def _match_and_align(pattern: str, ref: SurahReferenceData, fallback_text: str) -> None:
+        nonlocal curr
+        res, curr = _slice_preamble_match(pattern, curr)
+        if res:
+            st, et, toks = res
+            intro_starts.append(st)
+            intro_ends.append(et)
+            intro_texts.append(ref.ayah_texts.get(1, fallback_text))
+            segs = _align_and_package_ayahs(
+                aligned_tokens=toks,
+                ref_data=ref,
+                start_word_index=0,
+                target_end_ayah=1,
+            )
+            if segs:
+                for sub in (segs[0].sub_segments or []):
+                    for w in sub.words:
+                        intro_words.append(w.to_dict())
+                if not segs[0].sub_segments and segs[0].words:
+                    for w in segs[0].words:
+                        intro_words.append(w.to_dict())
+
     # 1. Isti'adha (can precede any recitation)
-    ist_res, curr = _slice_preamble_match(ISTIAADHA_PH, curr)
-    if ist_res:
-        st, et, ist_toks = ist_res
-        intro_starts.append(st)
-        intro_ends.append(et)
-        intro_texts.append(ISTIAADHA_TEXT)
-        ist_words_text = ISTIAADHA_TEXT.split()
-        if ist_toks and ist_words_text:
-            n_w = len(ist_words_text)
-            toks_per_word = max(1, len(ist_toks) // n_w)
-            for w_i, w_txt in enumerate(ist_words_text):
-                s_idx = w_i * toks_per_word
-                e_idx = (w_i + 1) * toks_per_word if w_i < n_w - 1 else len(ist_toks)
-                w_toks = ist_toks[s_idx:e_idx]
-                w_st = w_toks[0].start if w_toks else st
-                w_et = w_toks[-1].end if w_toks else et
-                intro_words.append({
-                    "word": w_txt,
-                    "start": round(w_st, 2),
-                    "end": round(w_et, 2),
-                    "score": 1.0,
-                    "phonemes": [t.to_dict() for t in w_toks],
-                })
+    _match_and_align(ISTIAADHA_PH, ISTIAADHA_REF_DATA, ISTIAADHA_TEXT)
 
     # 2. Basmalah (Surahs 2-114 except 9, only before Ayah 1)
     if start_ayah == 1 and surah not in (1, 9):
         basmalah_ph = "".join(w.phoneme for w in ref_surah_1.ayah_to_words[1])
-        bas_res, curr = _slice_preamble_match(basmalah_ph, curr)
-        if bas_res:
-            st, et, bas_toks = bas_res
-            intro_starts.append(st)
-            intro_ends.append(et)
-            intro_texts.append(ref_surah_1.ayah_texts.get(1, "بِسْمِ ٱللَّهِ ٱلرَّحْمَـٰنِ ٱلرَّحِيمِ"))
-            bas_segs = _align_and_package_ayahs(
-                aligned_tokens=bas_toks,
-                ref_data=ref_surah_1,
-                start_word_index=0,
-                target_end_ayah=1,
-            )
-            if bas_segs:
-                for sub in (bas_segs[0].sub_segments or []):
-                    for w in sub.words:
-                        intro_words.append(w.to_dict())
-                if not bas_segs[0].sub_segments and bas_segs[0].words:
-                    for w in bas_segs[0].words:
-                        intro_words.append(w.to_dict())
+        _match_and_align(basmalah_ph, ref_surah_1, ref_surah_1.ayah_texts.get(1, "بِسْمِ ٱللَّهِ ٱلرَّحْمَـٰنِ ٱلرَّحِيمِ"))
 
     if intro_texts:
-        intro_dict = {
+        return {
             "start": round(min(intro_starts), 2),
             "end": round(max(intro_ends), 2),
             "transcribed_text": " ".join(intro_texts),
             "words": intro_words,
-        }
-        return intro_dict, curr
+        }, curr
 
     return None, curr
 

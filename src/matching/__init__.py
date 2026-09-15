@@ -7,7 +7,6 @@ linguistic rules, and global detection engines.
 from src.matching.phonetics import (
     ZERO_COST_MARKERS,
     HAMZA_VARIANTS,
-    TASHKEEL_CODES,
     MADD_VOWEL_CODES,
     PhoneticCostEngine,
     normalize_phoneme_query,
@@ -42,7 +41,6 @@ from src.matching.matcher import (
 __all__ = [
     "ZERO_COST_MARKERS",
     "HAMZA_VARIANTS",
-    "TASHKEEL_CODES",
     "MADD_VOWEL_CODES",
     "PhoneticCostEngine",
     "normalize_phoneme_query",
