@@ -70,28 +70,12 @@ class SurahSearchResult:
     ayah_number: int
     distance: int
 
-    # Backward-compatibility properties
-    @property
-    def start(self) -> SurahSearchResult:
-        return self
-
-    @property
-    def surah_idx(self) -> int:
-        return self.surah_number
-
-    @property
-    def ayah_idx(self) -> int:
-        return self.ayah_number
-
-
-SurahMatchSpan = SurahSearchResult  # Backward-compatibility alias
-
 
 @dataclass(slots=True)
 class SurahDetectionResult:
     surah: int
     start_ayah: int
-    end_ayah: int
+    end_ayah: Optional[int] = None
     start_time: float = 0.0
     end_time: float = 0.0
     confidence: float = 1.0
@@ -130,14 +114,10 @@ class PhoneticSearch:
         self._index_array = arr[:, :2].astype(np.uint16)
         self._is_loaded = True
 
-    @staticmethod
-    def normalize_query(query: str) -> str:
-        return normalize_phoneme_query(query)
-
     def search(self, query: str, error_ratio: Optional[float] = None) -> List[SurahSearchResult]:
         if not self._is_loaded or self._ref_codes is None or self._index_array is None:
             return []
-        norm_query = self.normalize_query(query)
+        norm_query = normalize_phoneme_query(query)
         if not norm_query:
             return []
 
@@ -227,7 +207,7 @@ class SurahDetector:
             start_ayah = max(1, min_ayah - 1) if best_offset > 0 and min_ayah > 1 else min_ayah
 
             # Determine end Ayah by probing near the recitation tail
-            end_ayah = start_ayah
+            confirmed_end_ayah: Optional[int] = None
             if total_toks > sample_length:
                 for end_offset in (
                     total_toks - sample_length,
@@ -240,19 +220,17 @@ class SurahDetector:
                         q = "".join(p.phoneme for p in slice_tokens)
                         if len(q) >= 6:
                             res = self._phonetic_search.search(q, error_ratio=0.25)
-                            matched_end = False
                             for r in res:
                                 if r.surah_number == best_surah:
-                                    end_ayah = max(end_ayah, r.ayah_number)
-                                    matched_end = True
+                                    confirmed_end_ayah = max(confirmed_end_ayah or start_ayah, r.ayah_number)
                                     break
-                            if matched_end:
+                            if confirmed_end_ayah is not None:
                                 break
 
             return SurahDetectionResult(
                 surah=best_surah,
                 start_ayah=start_ayah,
-                end_ayah=end_ayah,
+                end_ayah=confirmed_end_ayah,
                 start_time=aligned_phonemes[0].start,
                 end_time=aligned_phonemes[-1].end,
                 confidence=max(0.5, 1.0 - best_norm),
@@ -261,11 +239,8 @@ class SurahDetector:
         return SurahDetectionResult(
             surah=1,
             start_ayah=1,
-            end_ayah=1,
+            end_ayah=None,
             start_time=aligned_phonemes[0].start,
             end_time=aligned_phonemes[-1].end,
             confidence=0.5,
         )
-
-
-MultiSurahFinder = SurahDetector  # Backward compatibility alias

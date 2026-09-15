@@ -50,7 +50,7 @@ def _global_viterbi_fast(
     dp_curr = np.full(n + 1, INF, dtype=np.float64)
 
     backtrack_op = np.zeros((m + 1, n + 1), dtype=np.uint8)
-    wrap_from_j = np.zeros((m + 1, n + 1), dtype=np.int32)
+    wrap_from_j = np.zeros((m + 1, n + 1), dtype=np.uint16)
 
     dp_prev[0] = 0.0
 
@@ -114,7 +114,7 @@ def _global_viterbi_fast(
                     if new_cost < dp_curr[j_start]:
                         dp_curr[j_start] = new_cost
                         backtrack_op[i, j_start] = 4  # WRAPAROUND JUMP
-                        wrap_from_j[i, j_start] = best_j_after[j_start + 1]
+                        wrap_from_j[i, j_start] = np.uint16(best_j_after[j_start + 1])
                         has_wrap = True
 
         if has_wrap:
@@ -193,9 +193,9 @@ def _bit_parallel_search_fast(
     vn = np.uint64(0)
     curr_dist = n
 
-    match_starts = []
-    match_ends = []
-    match_dists = []
+    match_starts: List[int] = []
+    match_ends: List[int] = []
+    match_dists: List[int] = []
 
     for j in range(m):
         code = text_codes[j]
@@ -272,7 +272,10 @@ def warmup_detector_jit() -> None:
         pass
 
 
-def warmup_matching_kernels() -> None:
+def warmup_matching() -> None:
     """Consolidated warmup for all matching subsystem JIT kernels."""
     warmup_matcher_jit()
     warmup_detector_jit()
+
+
+warmup_matching_kernels = warmup_matching

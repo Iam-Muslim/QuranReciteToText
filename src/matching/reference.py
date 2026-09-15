@@ -25,9 +25,6 @@ class RefWord:
     location: str
 
 
-ContinuousQuranWord = RefWord  # Backward compatibility alias
-
-
 class SurahReferenceData:
     """Indexed reference representation for a single Surah."""
 

@@ -7,7 +7,6 @@ Tashkeel classifications, and acoustic confusion lookups.
 
 from __future__ import annotations
 
-import re
 from typing import Dict
 import numpy as np
 
@@ -33,20 +32,19 @@ HAMZA_VARIANTS: frozenset[int] = frozenset({0x0621, 0x0622, 0x0623, 0x0625, 0x06
 # Madd long vowels and Quranic superscript vowels (ا, و, ي, ۥ, ۦ)
 MADD_VOWEL_CODES: frozenset[int] = frozenset({0x0627, 0x0648, 0x064A, 0x06E5, 0x06E6})
 
-# Normalization charsets for fast phonetic search
-CORE_CHARS = "ءبتثجحخدذرزسشصضطظعغفقكلمنهوياۥۦ۾ںـٲ"
-RESIDUAL_CHARS = "َُِڇؙ۪ۜ"
-_CORE_GROUP = "|".join(f"{c}+" for c in CORE_CHARS)
-_CHUNK_REGEX = re.compile(f"((?:{_CORE_GROUP})[{RESIDUAL_CHARS}]?)")
+# Normalization core characters for fast phonetic search
+CORE_CHARS_SET: frozenset[str] = frozenset("ءبتثجحخدذرزسشصضطظعغفقكلمنهوياۥۦ۾ںـٲ")
 
 
 def normalize_phoneme_query(query: str) -> str:
     """Normalizes an Arabic phoneme string by collapsing consecutive core consonants."""
-    parts = []
-    for match in _CHUNK_REGEX.finditer(query):
-        group = match.group(1)
-        if group:
-            parts.append(group[0])
+    parts: list[str] = []
+    prev = ""
+    for c in query:
+        if c in CORE_CHARS_SET:
+            if c != prev:
+                parts.append(c)
+                prev = c
     return "".join(parts)
 
 
@@ -116,6 +114,7 @@ def _fill_sub_cost_table(table: np.ndarray, confusion_cost: float) -> None:
 
 _SUB_COST_TABLES: Dict[float, np.ndarray] = {}
 
+
 def get_sub_cost_table(confusion_cost: float = 0.25) -> np.ndarray:
     """Returns a precomputed 2048x2048 float64 lookup table filled directly by _sub_cost_fast."""
     key = round(float(confusion_cost), 4)
@@ -165,42 +164,3 @@ def _compute_deletion_costs_fast(
         elif j > 0 and code == r_codes[j - 1]:
             costs[j] = confusion_cost
     return costs
-
-
-class PhoneticCostEngine:
-    """Evaluates phonetic edit costs for deletions and insertions (backward compatible)."""
-
-    @staticmethod
-    def get_deletion_cost(
-        full_phonemes: str,
-        g_ref_idx: int,
-        standard_deletion_cost: float = 1.0,
-        acoustic_confusion_cost: float = 0.25,
-    ) -> float:
-        if g_ref_idx < 0 or g_ref_idx >= len(full_phonemes):
-            return standard_deletion_cost
-        code = ord(full_phonemes[g_ref_idx])
-        if code in ZERO_COST_MARKERS:
-            return 0.0
-        if code in HAMZA_VARIANTS:
-            return acoustic_confusion_cost
-        if g_ref_idx > 0 and code == ord(full_phonemes[g_ref_idx - 1]):
-            return acoustic_confusion_cost
-        return standard_deletion_cost
-
-    @staticmethod
-    def get_insertion_cost(
-        asr_text: str,
-        asr_idx: int,
-        standard_insertion_cost: float = 0.75,
-        acoustic_confusion_cost: float = 0.25,
-    ) -> float:
-        if asr_idx < 0 or asr_idx >= len(asr_text):
-            return standard_insertion_cost
-        code = ord(asr_text[asr_idx])
-        if code in ZERO_COST_MARKERS:
-            return 0.0
-        if asr_idx > 0 and code == ord(asr_text[asr_idx - 1]):
-            if code in MADD_VOWEL_CODES:
-                return acoustic_confusion_cost
-        return standard_insertion_cost

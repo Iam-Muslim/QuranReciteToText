@@ -49,10 +49,6 @@ class MatcherConfig:
     wrap_span_weight: float = getattr(config, "WRAP_SPAN_WEIGHT", 0.05)
 
 
-WraparoundConfig = MatcherConfig  # Backward compatibility alias
-TrackerConfig = MatcherConfig     # Backward compatibility alias
-
-
 # ═══════════════════════════════════════════════════════════════════════════════
 # 2. WORD & SEGMENT BUILDERS
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -94,12 +90,15 @@ def _align_and_package_ayahs(
     word_count = ref_data.num_words
     win_start = max(0, start_word_index - 50)
 
+    # Robust window bounds: never truncate below acoustic length estimate
+    est_words = int(len(asr_str) / 4.0) + 150
+    min_required_end = start_word_index + est_words
+
     if target_end_ayah is not None and target_end_ayah in ref_data.ayah_to_words:
-        max_ay = min(max(ref_data.ayah_to_words.keys()), target_end_ayah + 15)
-        win_end = min(word_count, ref_data.ayah_to_words[max_ay][-1].global_index + 1)
+        target_end_word = ref_data.ayah_to_words[target_end_ayah][-1].global_index + 1
+        win_end = min(word_count, max(min_required_end, target_end_word + 30))
     else:
-        est_words = int(len(asr_str) / 4.0) + 150
-        win_end = min(word_count, start_word_index + est_words)
+        win_end = min(word_count, min_required_end)
 
     p_start = ref_data.word_boundaries[win_start]
     p_end = ref_data.word_boundaries[win_end] if win_end < word_count else len(ref_data.full_phonemes)
@@ -437,14 +436,16 @@ class QuranMatcher:
         # 1. Automatic Surah & Start Ayah Detection
         detected_surah = target_surah
         detected_start_ayah = start_ayah
-        detected_end_ayah = None
+        detected_end_ayah: Optional[int] = None
 
         if detected_surah is None:
             det_res = self.detector.detect_single_surah(aligned_phonemes)
             if det_res is not None:
                 detected_surah = det_res.surah
                 detected_start_ayah = det_res.start_ayah
-                detected_end_ayah = det_res.end_ayah
+                # Only trust detected_end_ayah if it verified an Ayah after start_ayah
+                if det_res.end_ayah is not None and det_res.end_ayah > det_res.start_ayah:
+                    detected_end_ayah = det_res.end_ayah
                 logger.info(
                     "Detected Surah %d starting at Ayah %d (confidence=%.2f)",
                     detected_surah,
@@ -457,7 +458,10 @@ class QuranMatcher:
 
         # 2. Opening Preamble Extraction (Isti'adha & pre-verse Basmalah)
         intro_dict, remaining_tokens = _extract_opening_preamble(
-            aligned_phonemes, detected_surah, detected_start_ayah or 1, self._get_surah_ref(1)
+            aligned_tokens=aligned_phonemes,
+            surah=detected_surah,
+            start_ayah=detected_start_ayah or 1,
+            ref_surah_1=self._get_surah_ref(1),
         )
 
         ref_data = self._get_surah_ref(detected_surah)
@@ -478,4 +482,5 @@ class QuranMatcher:
         return segments
 
 
-QuranWordMatcher = QuranMatcher  # Backward compatibility alias
+# Backward compatibility alias
+QuranWordMatcher = QuranMatcher
