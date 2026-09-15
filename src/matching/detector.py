@@ -70,6 +70,7 @@ class SurahSearchResult:
     surah_number: int
     ayah_number: int
     distance: int
+    end_ayah_number: Optional[int] = None
 
 
 @dataclass(slots=True)
@@ -80,6 +81,15 @@ class SurahDetectionResult:
     start_time: float = 0.0
     end_time: float = 0.0
     confidence: float = 1.0
+
+
+def _adaptive_error_ratio(q_len: int) -> float:
+    """Scales error tolerance dynamically with length to prevent short-phrase false matches."""
+    if q_len < 16:
+        return 0.15
+    elif q_len < 28:
+        return 0.20
+    return 0.25
 
 
 class PhoneticSearch:
@@ -128,14 +138,17 @@ class PhoneticSearch:
 
         results = []
         for out in outs:
-            row = self._index_array[out.start]
+            s_row = self._index_array[out.start]
+            e_row = self._index_array[max(0, out.end - 1)]
             results.append(SurahSearchResult(
-                surah_number=int(row[0]),
-                ayah_number=int(row[1]),
+                surah_number=int(s_row[0]),
+                ayah_number=int(s_row[1]),
                 distance=out.dist,
+                end_ayah_number=int(e_row[1]),
             ))
         results.sort(key=lambda r: r.distance)
         return results
+
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -181,25 +194,39 @@ class SurahDetector:
         surah_counts: Dict[int, int] = defaultdict(int)
         surah_candidates: Dict[int, List[Tuple[int, float, int, int]]] = defaultdict(list)
 
+        def _probe_slice(offset: int) -> None:
+            for slen in (16, 28):
+                slice_tokens = aligned_phonemes[offset:offset + slen]
+                q = "".join(p.phoneme for p in slice_tokens)
+                norm_q = normalize_phoneme_query(q)
+                q_len = min(len(norm_q), 64)
+                if q_len >= 6:
+                    ratio = _adaptive_error_ratio(q_len)
+                    res = self._phonetic_search.search(q, error_ratio=ratio)
+                    if res:
+                        best_d = res[0].distance
+                        for b in res:
+                            if b.distance > best_d + 1:
+                                break
+                            norm_dist = b.distance / max(1, q_len)
+                            w = max(0.01, 1.0 - norm_dist)
+                            if b.distance > best_d:
+                                w *= 0.6
+                            surah_scores[b.surah_number] += w
+                            surah_counts[b.surah_number] += 1
+                            surah_candidates[b.surah_number].append((b.distance, norm_dist, b.ayah_number, offset))
+
         for offset in probe_offsets:
-            slice_tokens = aligned_phonemes[offset:offset + sample_length]
-            q = "".join(p.phoneme for p in slice_tokens)
-            norm_q = normalize_phoneme_query(q)
-            q_len = min(len(norm_q), 64)
-            if q_len >= 6:
-                res = self._phonetic_search.search(q, error_ratio=0.25)
-                if res:
-                    best_d = res[0].distance
-                    for b in res:
-                        if b.distance > best_d + 1:
-                            break
-                        norm_dist = b.distance / max(1, q_len)
-                        w = max(0.01, 1.0 - norm_dist)
-                        if b.distance > best_d:
-                            w *= 0.6
-                        surah_scores[b.surah_number] += w
-                        surah_counts[b.surah_number] += 1
-                        surah_candidates[b.surah_number].append((b.distance, norm_dist, b.ayah_number, offset))
+            _probe_slice(offset)
+
+        # Adaptive sweep fallback: if opening probes found no match or noisy match (long intro/Dua)
+        best_norm_pre = min((c[1] for c_list in surah_candidates.values() for c in c_list), default=1.0)
+        if (not surah_candidates or best_norm_pre > 0.35) and total_toks > 180:
+            for offset in range(210, total_toks - sample_length, 45):
+                _probe_slice(offset)
+                curr_best = min((c[1] for c_list in surah_candidates.values() for c in c_list), default=1.0)
+                if curr_best <= 0.20:
+                    break
 
         if surah_candidates:
             # If Surah 1:1 (Basmalah) matched but a non-1 Surah exists with strong votes, select non-1
@@ -213,8 +240,10 @@ class SurahDetector:
             best_list.sort(key=lambda c: (c[0], c[1]))
             _, best_norm, _, best_offset = best_list[0]
 
-            # Start Ayah is the minimum ayah matched for best_surah across opening probes
-            start_ayah = min(c[2] for c in best_list)
+            # Outlier-resistant start Ayah: consider probes within best_distance + 2
+            min_dist = best_list[0][0]
+            reliable_probes = [c for c in best_list if c[0] <= min_dist + 2]
+            start_ayah = min(c[2] for c in reliable_probes)
 
             # Determine end Ayah by probing near the recitation tail
             confirmed_end_ayah: Optional[int] = None
@@ -232,11 +261,14 @@ class SurahDetector:
                         slice_tokens = aligned_phonemes[end_offset:end_offset + sample_length]
                         q = "".join(p.phoneme for p in slice_tokens)
                         norm_q = normalize_phoneme_query(q)
+                        q_len = min(len(norm_q), 64)
                         if len(norm_q) >= 6:
-                            res = self._phonetic_search.search(q, error_ratio=0.25)
+                            ratio = _adaptive_error_ratio(q_len)
+                            res = self._phonetic_search.search(q, error_ratio=ratio)
                             for r in res:
                                 if r.surah_number == best_surah and r.ayah_number >= start_ayah:
-                                    confirmed_end_ayah = max(confirmed_end_ayah or start_ayah, r.ayah_number)
+                                    target_ay = r.end_ayah_number or r.ayah_number
+                                    confirmed_end_ayah = max(confirmed_end_ayah or start_ayah, target_ay)
                                     break
                             if confirmed_end_ayah is not None:
                                 break
@@ -249,6 +281,7 @@ class SurahDetector:
                 end_time=aligned_phonemes[-1].end,
                 confidence=max(0.5, 1.0 - best_norm),
             )
+
 
         return SurahDetectionResult(
             surah=1,
