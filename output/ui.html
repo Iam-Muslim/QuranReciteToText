@@ -859,9 +859,14 @@ PASTE_FULL_OUTPUT_JSON_HERE
     function buildIntroModel(intro) {
       const iStart = num(intro.start);
       const iEnd = num(intro.end);
-      const iText = str(intro.transcribed_text || intro.text || "Intro");
+      const rawIntroWords = Array.isArray(intro.words) ? intro.words : [];
+      const introWordsText = rawIntroWords
+        .map((w) => str(w.word || w.text))
+        .filter(Boolean)
+        .join(" ");
+      const iText = introWordsText || str(intro.text || intro.transcribed_text || "Intro");
 
-      const words = (Array.isArray(intro.words) ? intro.words : []).map((w, wIdx) => {
+      const words = rawIntroWords.map((w, wIdx) => {
         const wStart = num(w.start, iStart);
         const wEnd = num(w.end, iEnd);
         let phs = Array.isArray(w.phonemes)
@@ -977,7 +982,6 @@ PASTE_FULL_OUTPUT_JSON_HERE
       return segments.map((segment, segmentIndex) => {
         const segStart = num(segment.start !== undefined ? segment.start : segment.start_time);
         const segEnd = num(segment.end !== undefined ? segment.end : segment.end_time);
-        const segText = str(segment.transcribed_text || segment.matched_text || segment.text);
 
         const repeated = bool(
           segment.has_repeated_words ||
@@ -992,14 +996,20 @@ PASTE_FULL_OUTPUT_JSON_HERE
           : [];
 
         if (rawSubs.length === 0) {
+          const fallbackWords = Array.isArray(segment.words) ? segment.words : [];
+          const fallbackWordsText = fallbackWords
+            .map((w) => str(w.word || w.text))
+            .filter(Boolean)
+            .join(" ");
           rawSubs = [
             {
               segment: 1,
               start: segStart,
               end: segEnd,
-              transcribed_text: segText,
+              text: fallbackWordsText,
+              transcribed_text: str(segment.transcribed_text || ""),
               words_range: str(segment.matched_ref),
-              words: Array.isArray(segment.words) ? segment.words : []
+              words: fallbackWords
             }
           ];
         }
@@ -1008,6 +1018,14 @@ PASTE_FULL_OUTPUT_JSON_HERE
         const ayahNum = segment.ayah !== undefined
           ? segment.ayah
           : (segment.ayah_number !== undefined ? segment.ayah_number : segment.segment_number);
+
+        // Form Ayah-level text from its words
+        const segWords = rawSubs.flatMap((s) => (Array.isArray(s.words) ? s.words : []));
+        const segWordsText = segWords
+          .map((w) => str(w.word || w.text))
+          .filter(Boolean)
+          .join(" ");
+        const segText = segWordsText || str(segment.text || segment.transcribed_text || "");
 
         return {
           index: segmentIndex,
@@ -1022,11 +1040,17 @@ PASTE_FULL_OUTPUT_JSON_HERE
           sub_segments: rawSubs.map((sub, subIndex) => {
             const subStart = num(sub.start !== undefined ? sub.start : sub.start_time, segStart);
             const subEnd = num(sub.end !== undefined ? sub.end : sub.end_time, segEnd);
-            const subText = str(sub.transcribed_text || sub.text || segText);
             const subRange = str(sub.words_range || segment.matched_ref);
             const subRepeated = bool(sub.is_repetition || (repeated && subIndex > 0));
 
             let rawWords = Array.isArray(sub.words) ? sub.words : [];
+
+            // Form segment text from the words ("word" property) instead of transcribed_text
+            const subWordsText = rawWords
+              .map((w) => str(w.word || w.text))
+              .filter(Boolean)
+              .join(" ");
+            const subText = subWordsText || str(sub.text || segText);
 
             if (rawWords.length === 0 && subText) {
               rawWords = [
@@ -1092,6 +1116,7 @@ PASTE_FULL_OUTPUT_JSON_HERE
               start: subStart,
               end: subEnd,
               text: subText,
+              transcribed_text: str(sub.transcribed_text || ""),
               range: subRange,
               repeated: subRepeated,
               missing,
@@ -1163,9 +1188,14 @@ PASTE_FULL_OUTPUT_JSON_HERE
           if (sub.missing) tags.push("missing");
           if (sub.repeated) tags.push("repetition");
 
-          text.title =
-            (sub.text || segment.text || "") +
-            (tags.length ? "\nFlags: " + tags.join(", ") : "");
+          let tip = sub.text || segment.text || "";
+          if (sub.transcribed_text) {
+            tip += "\nASR: " + sub.transcribed_text;
+          }
+          if (tags.length) {
+            tip += "\nFlags: " + tags.join(", ");
+          }
+          text.title = tip;
 
           chip.appendChild(head);
           chip.appendChild(text);

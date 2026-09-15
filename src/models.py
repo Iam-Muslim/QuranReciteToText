@@ -175,7 +175,6 @@ class QuranSegment:
     surah_number: int = 1
     start_time: float = 0.0
     end_time: float = 0.0
-    transcribed_text: str = ""
     matched_ref: str = ""
     words: List[QuranWord] = field(default_factory=list)
     repeated_ranges: Optional[List[Any]] = None
@@ -195,7 +194,6 @@ class QuranSegment:
             "ayah": real_ayah,
             "start": round(self.start_time, 2),
             "end": round(self.end_time, 2),
-            "transcribed_text": self.transcribed_text,
             "matched_ref": self.matched_ref,
         }
         if self.repeated_ranges:
@@ -206,12 +204,13 @@ class QuranSegment:
         if self.sub_segments:
             d["segments"] = [s.to_dict() for s in self.sub_segments]
         else:
+            seg_asr = " ".join("".join(p.get("phoneme", "") for p in (w.phonemes or [])) for w in self.words if w.phonemes)
             d["segments"] = [
                 {
                     "segment": 1,
                     "start": round(self.start_time, 2),
                     "end": round(self.end_time, 2),
-                    "transcribed_text": self.transcribed_text,
+                    "transcribed_text": seg_asr,
                     "words": [w.to_dict() for w in self.words],
                 }
             ]

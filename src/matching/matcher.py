@@ -251,11 +251,12 @@ def _align_and_package_ayahs(
             all_word_instances.sort(key=lambda x: x[2].start)
 
             def _build_sub(pass_words: List[QuranWord], seg_num: int) -> AyahSubSegment:
+                sub_asr = " ".join("".join(p["phoneme"] for p in (w.phonemes or [])) for w in pass_words if w.phonemes)
                 return AyahSubSegment(
                     sub_segment_number=seg_num,
                     start_time=pass_words[0].start or 0.0,
                     end_time=pass_words[-1].end or 0.0,
-                    text=" ".join(w.word for w in pass_words),
+                    text=sub_asr,
                     words_range=f"{pass_words[0].location}-{pass_words[-1].location}",
                     is_repetition=(seg_num > 1),
                     words=pass_words,
@@ -286,7 +287,6 @@ def _align_and_package_ayahs(
         seg_start = min(p[0].start for p in all_ay_passes)
         seg_end = max(p[-1].end for p in all_ay_passes)
 
-        ayah_text = ref_data.ayah_texts.get(ay, " ".join(w.uthmani for w in ay_words))
         matched_ref_str = f"{ref_data.surah}:{ay}:1-{ref_data.surah}:{ay}:{len(ay_words)}"
 
         segments.append(QuranSegment(
@@ -295,7 +295,6 @@ def _align_and_package_ayahs(
             surah_number=ref_data.surah,
             start_time=round(seg_start, 2),
             end_time=round(seg_end, 2),
-            transcribed_text=ayah_text,
             matched_ref=matched_ref_str,
             words=qwords,
             repeated_ranges=repeated_ranges,
@@ -380,7 +379,6 @@ def _extract_opening_preamble(
             st, et, toks = res
             intro_starts.append(st)
             intro_ends.append(et)
-            intro_texts.append(ref.ayah_texts.get(1, fallback_text))
             segs = _align_and_package_ayahs(
                 aligned_tokens=toks,
                 ref_data=ref,
@@ -388,10 +386,13 @@ def _extract_opening_preamble(
                 target_end_ayah=1,
             )
             if segs:
-                for sub in (segs[0].sub_segments or []):
-                    for w in sub.words:
-                        intro_words.append(w.to_dict())
-                if not segs[0].sub_segments and segs[0].words:
+                if segs[0].sub_segments:
+                    for sub in segs[0].sub_segments:
+                        intro_texts.append(sub.text)
+                        for w in sub.words:
+                            intro_words.append(w.to_dict())
+                elif segs[0].words:
+                    intro_texts.append(" ".join("".join(p.get("phoneme", "") for p in (w.phonemes or [])) for w in segs[0].words if w.phonemes))
                     for w in segs[0].words:
                         intro_words.append(w.to_dict())
 
