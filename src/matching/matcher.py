@@ -362,8 +362,8 @@ def _extract_opening_preamble(
     # 1. Isti'adha (can precede any recitation)
     _match_and_align(ISTIAADHA_PH, ISTIAADHA_REF_DATA)
 
-    # 2. Basmalah (Surahs 2-114 except 9, only before Ayah 1)
-    if start_ayah == 1 and surah not in (1, 9):
+    # 2. Basmalah (Surahs 2-114 except 9)
+    if surah not in (1, 9):
         basmalah_ph = "".join(w.phoneme for w in ref_surah_1.ayah_to_words[1])
         _match_and_align(basmalah_ph, ref_surah_1)
 
@@ -465,7 +465,10 @@ class QuranMatcher:
         )
 
         ref_data = self._get_surah_ref(detected_surah)
-        start_word_idx = ref_data.ayah_start_word_index.get(detected_start_ayah or 1, 0)
+        effective_start_ayah = detected_start_ayah or 1
+        if intro_dict and any(w.get("location", "").startswith("1:1:") for w in intro_dict.get("words", [])):
+            effective_start_ayah = 1
+        start_word_idx = ref_data.ayah_start_word_index.get(effective_start_ayah, 0)
 
         # 3. 3D JumpDTW Alignment & Segment Construction
         segments = _align_and_package_ayahs(
