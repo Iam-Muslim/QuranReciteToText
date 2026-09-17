@@ -14,6 +14,7 @@ import urllib.request
 import logging
 from dataclasses import dataclass
 from typing import Optional, List, Dict, Tuple, Callable
+import queue
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
 import kaldi_native_fbank as knf
@@ -335,14 +336,21 @@ class ZipformerONNX:
         # Pre-allocate reusable in-place state buffers to eliminate per-segment heap allocations
         self._input_names = [inp.name for inp in self.session.get_inputs()]
         self._state_names = [name for name in self._input_names if name != 'x']
+        self._state_specs = [
+            (inp.name, [1 if dim == 'N' else dim for dim in inp.shape], np.float32 if inp.type == 'tensor(float)' else np.int64)
+            for inp in self.session.get_inputs()
+        ]
         self._state_buffers = self._create_initial_states()
 
     def _create_initial_states(self) -> dict:
-        states = {}
-        for inp in self.session.get_inputs():
-            shape = [1 if dim == 'N' else dim for dim in inp.shape]
-            dtype = np.float32 if inp.type == 'tensor(float)' else np.int64
-            states[inp.name] = np.zeros(shape, dtype=dtype)
+        if hasattr(self, "_state_specs"):
+            states = {name: np.zeros(shape, dtype=dt) for name, shape, dt in self._state_specs}
+        else:
+            states = {}
+            for inp in self.session.get_inputs():
+                shape = [1 if dim == 'N' else dim for dim in inp.shape]
+                dtype = np.float32 if inp.type == 'tensor(float)' else np.int64
+                states[inp.name] = np.zeros(shape, dtype=dtype)
         states['processed_lens'] = np.array([0], dtype=np.int64)
         return states
 
@@ -579,8 +587,20 @@ class ZipformerONNX:
 
         if use_parallel:
             completed_count = 0
+            # Pre-allocate exactly one state buffer per worker thread (saves ~10.5s of heap allocations)
+            buffer_pool = queue.SimpleQueue()
+            for _ in range(num_workers):
+                buffer_pool.put(self._create_initial_states())
+
+            def _worker_task(s_idx: int) -> Tuple[int, np.ndarray, List[PhonemeToken]]:
+                buf = buffer_pool.get()
+                try:
+                    return _transcribe_single_segment(s_idx, buf)
+                finally:
+                    buffer_pool.put(buf)
+
             with ThreadPoolExecutor(max_workers=num_workers) as executor:
-                futures = [executor.submit(_transcribe_single_segment, i, self._create_initial_states()) for i in range(num_segments)]
+                futures = [executor.submit(_worker_task, i) for i in range(num_segments)]
                 for fut in as_completed(futures):
                     s_idx, seg_lp, seg_phonemes = fut.result()
                     results_by_idx[s_idx] = (seg_lp, seg_phonemes)

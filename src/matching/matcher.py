@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import json
+import bisect
 import logging
 from dataclasses import dataclass
 from typing import Optional, List, Dict, Any, Tuple
@@ -259,7 +260,8 @@ def _align_and_package_ayahs(
                     min_p = (prev_w.end or 0.0) - 0.15
                     c_curr = ((w.start or 0.0) + (w.end or 0.0)) / 2.0
 
-                    if any(min_p <= p < c_curr for p in pauses):
+                    p_idx = bisect.bisect_left(pauses, min_p)
+                    if p_idx < len(pauses) and pauses[p_idx] < c_curr:
                         sub_segs_list.append(_build_sub(current_chunk, is_rep))
                         current_chunk = []
 
