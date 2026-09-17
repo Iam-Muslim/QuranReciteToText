@@ -127,7 +127,7 @@ class QuranSilenceSegmenter:
             ]
 
         reshaped = audio[:num_frames * self.frame_samples].reshape(num_frames, self.frame_samples)
-        rms = np.sqrt(np.mean(np.square(reshaped), axis=1) + 1e-12)
+        rms = np.sqrt(np.einsum('ij,ij->i', reshaped, reshaped) / self.frame_samples + 1e-12)
         rms_db = 20.0 * np.log10(np.maximum(rms, 1e-5))
 
         # Apply a 5-frame (100ms) median filter to remove micro-glitches and breath spikes
@@ -391,8 +391,9 @@ class ZipformerONNX:
             return np.empty((0, 80), dtype=np.float32)
 
         feats = np.empty((num_frames, 80), dtype=np.float32)
+        get_frame = fbank.get_frame
         for i in range(num_frames):
-            feats[i] = fbank.get_frame(i)
+            feats[i] = get_frame(i)
 
         del fbank
         return feats
@@ -415,8 +416,8 @@ class ZipformerONNX:
         required_len = max(T_LEN, (num_chunks - 1) * CHUNK_LEN + T_LEN)
         pad_len = max(0, required_len - len(feats))
         if pad_len > 0:
-            pad = np.zeros((pad_len, 80), dtype=np.float32)
-            padded_feats = np.vstack([feats, pad])
+            padded_feats = np.zeros((required_len, 80), dtype=np.float32)
+            padded_feats[:len(feats)] = feats
         else:
             padded_feats = feats
 
@@ -437,8 +438,7 @@ class ZipformerONNX:
         while pos + T_LEN <= num_frames:
             states['x'] = padded_feats[pos:pos + T_LEN][None, :]
             outs = self.session.run(None, states)
-            for idx in range(1, len(outs)):
-                states[self._input_names[idx]] = outs[idx]
+            states.update(zip(self._state_names, outs[1:]))
             chunk_logprobs.append(outs[0][0])
             pos += CHUNK_LEN
 
@@ -602,7 +602,9 @@ class ZipformerONNX:
                     buffer_pool.put(buf)
 
             with ThreadPoolExecutor(max_workers=num_workers) as executor:
-                futures = [executor.submit(_worker_task, i) for i in range(num_segments)]
+                # LPT scheduling: dispatch longest segments first so short segments pack the tail with zero idle waiting
+                sorted_indices = sorted(range(num_segments), key=lambda i: (segments[i].padded_end_sec - segments[i].padded_start_sec), reverse=True)
+                futures = [executor.submit(_worker_task, i) for i in sorted_indices]
                 for fut in as_completed(futures):
                     s_idx, seg_lp, seg_phonemes = fut.result()
                     results_by_idx[s_idx] = (seg_lp, seg_phonemes)
