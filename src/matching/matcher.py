@@ -72,6 +72,7 @@ def _align_and_package_ayahs(
     start_word_index: int = 0,
     target_end_ayah: Optional[int] = None,
     matcher_cfg: Optional[MatcherConfig] = None,
+    pause_timestamps: Optional[List[float]] = None,
 ) -> List[QuranSegment]:
     """Aligns speech tokens against Surah reference using JumpDTW Dynamic Programming."""
     if not aligned_tokens or ref_data.num_words == 0:
@@ -205,6 +206,9 @@ def _align_and_package_ayahs(
         repeated_ranges: Optional[List[str]] = None
         repeated_text: Optional[List[str]] = None
 
+        # Tier 1: Group word instances into passes (repetition tracking)
+        passes: List[Tuple[List[QuranWord], bool]] = []
+
         if has_repeated:
             all_word_instances = []
             for rw in ay_words:
@@ -216,36 +220,58 @@ def _align_and_package_ayahs(
 
             all_word_instances.sort(key=lambda x: x[1].start or 0.0)
 
-            def _build_sub(pass_words: List[QuranWord], seg_num: int) -> AyahSubSegment:
-                sub_asr = " ".join("".join(p["phoneme"] for p in (w.phonemes or [])) for w in pass_words if w.phonemes)
-                return AyahSubSegment(
-                    sub_segment_number=seg_num,
-                    start_time=pass_words[0].start or 0.0,
-                    end_time=pass_words[-1].end or 0.0,
-                    text=sub_asr,
-                    words_range=f"{pass_words[0].location}-{pass_words[-1].location}",
-                    is_repetition=(seg_num > 1),
-                    words=pass_words,
-                )
-
-            sub_segs_list: List[AyahSubSegment] = []
             current_pass: List[QuranWord] = []
             prev_w_idx = -1
 
             for w_idx, q_inst in all_word_instances:
                 if current_pass and w_idx <= prev_w_idx:
-                    sub_segs_list.append(_build_sub(current_pass, len(sub_segs_list) + 1))
+                    passes.append((current_pass, len(passes) > 0))
                     current_pass = []
                 current_pass.append(q_inst)
                 prev_w_idx = w_idx
 
             if current_pass:
-                sub_segs_list.append(_build_sub(current_pass, len(sub_segs_list) + 1))
+                passes.append((current_pass, len(passes) > 0))
+        else:
+            passes = [(qwords, False)]
 
-            if sub_segs_list:
-                sub_segments = sub_segs_list
-                repeated_ranges = [s.words_range for s in sub_segments if s.is_repetition]
-                repeated_text = [s.text for s in sub_segments if s.is_repetition]
+        # Tier 2: Split passes on Phase 1 pauses with 'Never Cut Word' geometric validation
+        sub_segs_list: List[AyahSubSegment] = []
+        pauses = pause_timestamps or []
+
+        def _build_sub(pass_words: List[QuranWord], is_rep: bool) -> AyahSubSegment:
+            sub_asr = " ".join("".join(p.get("phoneme", "") for p in (w.phonemes or [])) for w in pass_words if w.phonemes)
+            return AyahSubSegment(
+                sub_segment_number=len(sub_segs_list) + 1,
+                start_time=pass_words[0].start or 0.0,
+                end_time=pass_words[-1].end or 0.0,
+                text=sub_asr,
+                words_range=f"{pass_words[0].location}-{pass_words[-1].location}",
+                is_repetition=is_rep,
+                words=pass_words,
+            )
+
+        for pass_words, is_rep in passes:
+            current_chunk: List[QuranWord] = []
+            for w in pass_words:
+                if current_chunk:
+                    prev_w = current_chunk[-1]
+                    min_p = (prev_w.end or 0.0) - 0.15
+                    c_curr = ((w.start or 0.0) + (w.end or 0.0)) / 2.0
+
+                    if any(min_p <= p < c_curr for p in pauses):
+                        sub_segs_list.append(_build_sub(current_chunk, is_rep))
+                        current_chunk = []
+
+                current_chunk.append(w)
+
+            if current_chunk:
+                sub_segs_list.append(_build_sub(current_chunk, is_rep))
+
+        if len(sub_segs_list) > 1 or has_repeated:
+            sub_segments = sub_segs_list
+            repeated_ranges = [s.words_range for s in sub_segments if s.is_repetition] or None
+            repeated_text = [s.text for s in sub_segments if s.is_repetition] or None
 
         all_ay_passes = [p for rw in ay_words for p in matched_word_tokens.get(rw.global_index, []) if p]
         seg_start = min(p[0].start for p in all_ay_passes)
@@ -427,6 +453,7 @@ class QuranMatcher:
         audio_duration: float = 0.0,
         target_surah: Optional[int] = None,
         start_ayah: Optional[int] = None,
+        pause_timestamps: Optional[List[float]] = None,
     ) -> List[QuranSegment]:
         if not self._is_initialized:
             self.initialize_from_file()
@@ -477,6 +504,7 @@ class QuranMatcher:
             start_word_index=start_word_idx,
             target_end_ayah=detected_end_ayah,
             matcher_cfg=self.config,
+            pause_timestamps=pause_timestamps,
         )
 
         if intro_dict and segments:

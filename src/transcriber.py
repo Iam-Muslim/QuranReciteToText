@@ -521,6 +521,17 @@ class ZipformerONNX:
         segmenter = QuranSilenceSegmenter(sample_rate=sample_rate)
         segments = segmenter.segment_audio(audio_pcm)
 
+        # Extract fine-grained pause moments (Waqf + Sakt) for Phase 3 sub-segment splitting
+        agg_pause_s = getattr(config, "AGGRESSIVE_MIN_PAUSE_S", 0.20)
+        fine_segmenter = QuranSilenceSegmenter(sample_rate=sample_rate, min_pause_s=agg_pause_s)
+        fine_segments = fine_segmenter.segment_audio(audio_pcm) if agg_pause_s < segmenter.min_pause_s else segments
+        pause_timestamps: List[float] = []
+        for i in range(len(fine_segments) - 1):
+            p_s = fine_segments[i].raw_end_sec
+            p_e = fine_segments[i + 1].raw_start_sec
+            p_m = round((p_s + p_e) / 2.0, 3)
+            pause_timestamps.append(p_m)
+
         # 2. Extract Mel Filterbank ONCE globally across entire audio (blazing fast in C++)
         global_feats = self._extract_fbank(audio_pcm)
         total_fbank_frames = len(global_feats)
@@ -539,7 +550,6 @@ class ZipformerONNX:
         global_phonemes: List[PhonemeToken] = []
         global_raw_tokens: List[str] = []
         global_raw_timestamps: List[float] = []
-        pause_timestamps: List[float] = []
 
         # Reset recurrent state buffers once at the start of the audio file (preserves memory across segments)
         self._reset_states()
@@ -636,13 +646,6 @@ class ZipformerONNX:
                     global_phonemes.append(shifted_token)
                     global_raw_tokens.append(p.phoneme)
                     global_raw_timestamps.append(g_pk)
-
-            # Record pause moments
-            if s_idx < num_segments - 1:
-                next_seg = segments[s_idx + 1]
-                gap = next_seg.raw_start_sec - seg.raw_end_sec
-                if gap >= 0.40:
-                    pause_timestamps.append(round(seg.raw_end_sec, 2))
 
         global_phonemes.sort(key=lambda p: p.start)
 

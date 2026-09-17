@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+import gc
 import json
 import time
 import threading
@@ -197,7 +198,6 @@ class AudioPipeline:
 
         # Release large emission logprobs matrix before Phase 3 to reclaim physical RAM
         raw_result.logprobs_matrix = None
-        import gc
         gc.collect()
 
         # Phase 3: Quran Text Matcher & Sequencer
@@ -207,6 +207,7 @@ class AudioPipeline:
             audio_duration=audio_duration,
             target_surah=target_surah,
             start_ayah=start_ayah,
+            pause_timestamps=raw_result.pause_timestamps,
         )
         match_time = time.time() - match_start
         if live_profile:

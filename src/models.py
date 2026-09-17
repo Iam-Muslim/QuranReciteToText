@@ -162,6 +162,8 @@ class AyahSubSegment:
             "transcribed_text": self.text,
             "words": [w.to_dict() for w in self.words],
         }
+        if self.words_range:
+            d["words_range"] = self.words_range
         if self.is_repetition:
             d["is_repetition"] = True
         return d

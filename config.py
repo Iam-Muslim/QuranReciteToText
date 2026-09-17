@@ -76,6 +76,7 @@ FLUSH_PAD_FRAMES: int = 28                  # Optimal tail flush padding (280ms 
 
 # Encoder state reset at Waqf boundaries (prevents repetition skipping / attention saturation)
 RESET_ENCODER_ON_SILENCE: bool = True
+AGGRESSIVE_MIN_PAUSE_S: float = 0.20        # Sakt & fine pause detection threshold (seconds)
 
 
 # ==============================================================================
