@@ -24,7 +24,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="Quran Recitation Transcription & Forced Alignment Pipeline")
     parser.add_argument("--audio", type=str, required=True, help="Path to input audio file")
-    parser.add_argument("--threads", type=int, default=2, help="ONNX execution threads (default: 2)")
+    parser.add_argument("--threads", type=int, default=None, help="ONNX execution threads (default: 1 for multi-worker, 2 for single-worker)")
     parser.add_argument("--workers", type=int, default=1, help="Parallel segment workers (default: 1 for lowest CPU/RAM)")
     parser.add_argument("--progress", action="store_true", default=False, help="Emit JSON progress lines for frontend apps")
     args = parser.parse_args()
@@ -34,7 +34,11 @@ def main():
         sys.exit(1)
 
     workers = args.workers
-    threads = args.threads
+    if args.threads is not None:
+        threads = args.threads
+    else:
+        threads = 1 if workers > 1 else 2
+
     os.environ["ONNX_SEGMENT_WORKERS"] = str(workers)
     os.environ["OMP_NUM_THREADS"] = str(threads)
     os.environ["ONNX_NUM_THREADS"] = str(threads)
