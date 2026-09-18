@@ -54,8 +54,13 @@ class MatcherConfig:
 # 2. WORD & SEGMENT BUILDERS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _build_qword(rw: RefWord, tokens: List[PhonemeToken], score: float) -> QuranWord:
-    """Creates a unified QuranWord instance with phoneme breakdown."""
+def _build_qword(
+    rw: RefWord,
+    tokens: List[PhonemeToken],
+    score: float,
+    all_passes: Optional[List[Dict[str, Any]]] = None,
+) -> QuranWord:
+    """Creates a unified QuranWord instance with phoneme breakdown and multi-pass support."""
     return QuranWord(
         word=rw.uthmani,
         location=rw.location,
@@ -64,6 +69,21 @@ def _build_qword(rw: RefWord, tokens: List[PhonemeToken], score: float) -> Quran
         end=round(tokens[-1].end, 2),
         score=round(score, 2),
         phonemes=[t.to_dict() for t in tokens],
+        all_passes=all_passes,
+    )
+
+
+def _build_unaligned_qword(rw: RefWord) -> QuranWord:
+    """Creates an explicit unaligned placeholder for an elided/dropped word."""
+    return QuranWord(
+        word=rw.uthmani,
+        location=rw.location,
+        ref=rw.phoneme,
+        start=None,
+        end=None,
+        score=0.0,
+        phonemes=[],
+        all_passes=None,
     )
 
 
@@ -100,7 +120,7 @@ def _align_and_package_ayahs(
         target_end_word = ref_data.ayah_to_words[target_end_ayah][-1].global_index + 1
         win_end = min(word_count, max(min_required_end, target_end_word + 30))
     else:
-        win_end = min(word_count, min_required_end)
+        win_end = word_count
 
     p_start = ref_data.word_boundaries[win_start]
     p_end = ref_data.word_boundaries[win_end] if win_end < word_count else len(ref_data.full_phonemes)
@@ -189,23 +209,39 @@ def _align_and_package_ayahs(
 
         qwords: List[QuranWord] = []
         has_repeated = False
+        has_any_match = False
 
         for rw in ay_words:
             w_idx = rw.global_index
             passes = matched_word_tokens.get(w_idx)
             if passes:
+                has_any_match = True
+                multi_passes = None
                 if len(passes) > 1:
                     has_repeated = True
+                    multi_passes = [
+                        {
+                            "pass_number": p_idx + 1,
+                            "start": float(round(p[0].start, 2)),
+                            "end": float(round(p[-1].end, 2)),
+                            "score": float(round(sum(t.confidence for t in p) / len(p), 2)),
+                        }
+                        for p_idx, p in enumerate(passes)
+                    ]
                 chosen_pass = passes[-1]
                 score = matched_word_scores.get(w_idx, 1.0)
-                qwords.append(_build_qword(rw, chosen_pass, score))
+                qwords.append(_build_qword(rw, chosen_pass, score, all_passes=multi_passes))
+            else:
+                qwords.append(_build_unaligned_qword(rw))
 
-        if not qwords:
+        if not has_any_match:
             continue
 
         sub_segments: Optional[List[AyahSubSegment]] = None
         repeated_ranges: Optional[List[str]] = None
         repeated_text: Optional[List[str]] = None
+
+        matched_words = [w for w in qwords if w.start is not None]
 
         # Tier 1: Group word instances into passes (repetition tracking)
         passes: List[Tuple[List[QuranWord], bool]] = []
@@ -214,10 +250,22 @@ def _align_and_package_ayahs(
             all_word_instances = []
             for rw in ay_words:
                 w_idx = rw.global_index
-                for p in matched_word_tokens.get(w_idx, []):
+                passes_w = matched_word_tokens.get(w_idx, [])
+                multi_passes = None
+                if len(passes_w) > 1:
+                    multi_passes = [
+                        {
+                            "pass_number": p_idx + 1,
+                            "start": float(round(p[0].start, 2)),
+                            "end": float(round(p[-1].end, 2)),
+                            "score": float(round(sum(t.confidence for t in p) / len(p), 2)),
+                        }
+                        for p_idx, p in enumerate(passes_w)
+                    ]
+                for p in passes_w:
                     if p:
                         score = matched_word_scores.get(w_idx, 1.0)
-                        all_word_instances.append((w_idx, _build_qword(rw, p, score)))
+                        all_word_instances.append((w_idx, _build_qword(rw, p, score, all_passes=multi_passes)))
 
             all_word_instances.sort(key=lambda x: x[1].start or 0.0)
 
@@ -234,7 +282,7 @@ def _align_and_package_ayahs(
             if current_pass:
                 passes.append((current_pass, len(passes) > 0))
         else:
-            passes = [(qwords, False)]
+            passes = [(matched_words, False)]
 
         # Tier 2: Split passes on Phase 1 pauses with 'Never Cut Word' geometric validation
         sub_segs_list: List[AyahSubSegment] = []
@@ -270,7 +318,7 @@ def _align_and_package_ayahs(
             if current_chunk:
                 sub_segs_list.append(_build_sub(current_chunk, is_rep))
 
-        if len(sub_segs_list) > 1 or has_repeated:
+        if sub_segs_list:
             sub_segments = sub_segs_list
             repeated_ranges = [s.words_range for s in sub_segments if s.is_repetition] or None
             repeated_text = [s.text for s in sub_segments if s.is_repetition] or None

@@ -130,9 +130,10 @@ class QuranWord:
     end: Optional[float] = None
     score: Optional[float] = None
     phonemes: Optional[List[Dict[str, Any]]] = None
+    all_passes: Optional[List[Dict[str, Any]]] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d = {
             "word": self.word,
             "location": self.location,
             "ref": self.ref,
@@ -141,6 +142,9 @@ class QuranWord:
             "score": round(self.score, 2) if self.score is not None else 0.0,
             "phonemes": self.phonemes if self.phonemes is not None else [],
         }
+        if self.all_passes:
+            d["all_passes"] = self.all_passes
+        return d
 
 
 @dataclass
