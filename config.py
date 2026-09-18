@@ -59,7 +59,7 @@ DETECTOR_MIN_PHONEMES: int = 12             # Minimum phonemes required to trigg
 # 5. PHASE 2 CTC FORCED ALIGNMENT TUNING
 # ==============================================================================
 CTC_BLANK_PENALTY: float = 1.8              # Trellis blank prior regularization
-LOOKAHEAD_OFFSET_FRAMES: float = 1.5        # -60ms streaming lookahead delay compensation
+LOOKAHEAD_OFFSET_FRAMES: float = 3.0        # -120ms streaming lookahead delay compensation
 
 
 # ==============================================================================
@@ -100,6 +100,14 @@ ENABLE_PROFILING: bool = True
 # 9. WORD TIMING BRIDGE (VIDEO SYNCHRONIZATION)
 # ==============================================================================
 ENABLE_WORD_TIMING_BRIDGE: bool = True       # Synthesize continuous timestamps for elided words (video/subtitles)
+
+# ==============================================================================
+# 10. ACOUSTIC SILENCE & WAQF PRESERVATION (100% TIMING FIDELITY)
+# ==============================================================================
+ENABLE_ACOUSTIC_SILENCE_PRESERVATION: bool = True  # Preserve true silence between Ayahs/words
+MIN_SILENCE_GAP_FRAMES: int = 12                   # Minimum blank frames (480ms) to constitute a true Waqf pause
+PHONEME_ONSET_PAD_FRAMES: float = 7.5              # 300ms lead on speech onset after a breath pause (never start late)
+PHONEME_OFFSET_PAD_FRAMES: float = 2.5             # 100ms trail protecting soft Madd/Ghunnah tails
 
 # Backward compatibility alias
 PipelineConfig = sys.modules[__name__]
