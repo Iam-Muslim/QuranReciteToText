@@ -1067,7 +1067,7 @@ PASTE_FULL_OUTPUT_JSON_HERE
 
             const words = rawWords.map((word, wordIndex) => {
               const wordText = str(word.word || word.text || subText);
-              const isMissingWord = bool(word.is_missing || (word.start === null && word.end === null) || word.score <= 0);
+              const isMissingWord = bool(word.is_missing || (word.start === null && word.end === null) || (!word.is_interpolated && word.score <= 0));
               const wordStart = isMissingWord ? subStart : num(word.start, subStart);
               const wordEnd = isMissingWord ? subStart : num(word.end, subEnd);
               const score = isMissingWord ? 0 : num(word.score, 1);

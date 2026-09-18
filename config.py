@@ -96,5 +96,11 @@ DEFAULT_NUM_THREADS: int = 2
 NUM_SEGMENT_WORKERS: int = 1
 ENABLE_PROFILING: bool = True
 
+# ==============================================================================
+# 9. WORD TIMING BRIDGE (VIDEO SYNCHRONIZATION)
+# ==============================================================================
+ENABLE_WORD_TIMING_BRIDGE: bool = True       # Synthesize continuous timestamps for elided words (video/subtitles)
+
 # Backward compatibility alias
 PipelineConfig = sys.modules[__name__]
+

@@ -87,6 +87,49 @@ def _build_unaligned_qword(rw: RefWord) -> QuranWord:
     )
 
 
+def _bridge_unaligned_words(words: List[QuranWord], seg_start: float, seg_end: float) -> None:
+    """Bridges unaligned words (start=None) to surrounding word boundaries in-place."""
+    n = len(words)
+    i = 0
+    while i < n:
+        if words[i].start is not None:
+            i += 1
+            continue
+
+        j = i
+        while j < n and words[j].start is None:
+            j += 1
+        count = j - i
+
+        left = words[i - 1].end if (i > 0 and words[i - 1].end is not None) else None
+        right = words[j].start if (j < n and words[j].start is not None) else None
+
+        if left is not None and right is not None:
+            gap = right - left
+            t_start, dur = left, (gap if gap >= 0.04 * count else 0.06 * count)
+        elif right is not None:
+            t_start, dur = max(0.0, right - 0.12 * count), 0.12 * count
+        else:
+            t_start, dur = (left if left is not None else seg_start), 0.15 * count
+
+        weights = [max(1, len(words[k].ref or words[k].word)) for k in range(i, j)]
+        total_weight = sum(weights)
+        curr = t_start
+        for k in range(i, j):
+            w_dur = dur * (weights[k - i] / total_weight)
+            w_start = round(curr, 2)
+            w_end = round(curr + w_dur, 2)
+            if w_end <= w_start:
+                w_end = round(w_start + 0.05, 2)
+            words[k].start = w_start
+            words[k].end = w_end
+            words[k].is_interpolated = True
+            curr += w_dur
+
+        i = j
+
+
+
 def _align_and_package_ayahs(
     aligned_tokens: List[PhonemeToken],
     ref_data: SurahReferenceData,
@@ -237,6 +280,13 @@ def _align_and_package_ayahs(
         if not has_any_match:
             continue
 
+        all_ay_passes = [p for rw in ay_words for p in matched_word_tokens.get(rw.global_index, []) if p]
+        seg_start = min(p[0].start for p in all_ay_passes)
+        seg_end = max(p[-1].end for p in all_ay_passes)
+
+        if getattr(config, "ENABLE_WORD_TIMING_BRIDGE", True):
+            _bridge_unaligned_words(qwords, seg_start=seg_start, seg_end=seg_end)
+
         sub_segments: Optional[List[AyahSubSegment]] = None
         repeated_ranges: Optional[List[str]] = None
         repeated_text: Optional[List[str]] = None
@@ -323,9 +373,6 @@ def _align_and_package_ayahs(
             repeated_ranges = [s.words_range for s in sub_segments if s.is_repetition] or None
             repeated_text = [s.text for s in sub_segments if s.is_repetition] or None
 
-        all_ay_passes = [p for rw in ay_words for p in matched_word_tokens.get(rw.global_index, []) if p]
-        seg_start = min(p[0].start for p in all_ay_passes)
-        seg_end = max(p[-1].end for p in all_ay_passes)
         matched_ref_str = f"{ref_data.surah}:{ay}:1-{ref_data.surah}:{ay}:{len(ay_words)}"
 
         segments.append(QuranSegment(
