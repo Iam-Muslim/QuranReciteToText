@@ -24,6 +24,7 @@ from config import (
 )
 from src.models import (
     PhonemeToken,
+    PauseInterval,
     RawTranscriptionResult,
     RecoveryEvent,
     RecoverySummary,
@@ -208,6 +209,7 @@ class AudioPipeline:
             target_surah=target_surah,
             start_ayah=start_ayah,
             pause_timestamps=raw_result.pause_timestamps,
+            pause_intervals=raw_result.pause_intervals,
         )
         match_time = time.time() - match_start
         if live_profile:
@@ -231,6 +233,7 @@ class AudioPipeline:
             ctc_aligned_phonemes=aligned_phonemes,
             segments=segments,
             pause_timestamps=raw_result.pause_timestamps,
+            pause_intervals=raw_result.pause_intervals,
         )
 
         if export_json_files:
@@ -316,6 +319,7 @@ __all__ = [
     "QuranWordMatcher",
     "MatcherConfig",
     "PhonemeToken",
+    "PauseInterval",
     "QuranWord",
     "QuranSegment",
     "AyahSubSegment",

@@ -44,6 +44,7 @@ from config import (
 )
 from src.models import (
     PhonemeToken,
+    PauseInterval,
     RawTranscriptionResult,
     RecoveryEvent,
     RecoverySummary,
@@ -80,8 +81,9 @@ class QuranSilenceSegmenter:
     Features:
     - Dual-threshold Schmitt trigger to prevent fluttering on soft Tajweed letters.
     - Hangover buffer to ensure trailing Madd and Ghunnah are never cut.
-    - Rejection of micro-stops (< 500ms) to preserve Qalqalah consonant closures.
+    - Rejection of micro-stops (< 250ms) to preserve Qalqalah consonant closures.
     - Gap-clamped padding guaranteeing zero boundary overlap between chunks.
+    - Structured PauseInterval extraction (Waqf vs Sakt classification).
     """
 
     def __init__(
@@ -104,6 +106,7 @@ class QuranSilenceSegmenter:
         self.onset_db = onset_db
         self.offset_db = offset_db
         self.pause_timestamps: List[float] = []
+        self.pause_intervals: List[PauseInterval] = []
 
     def segment_audio(self, audio: np.ndarray) -> List[SpeechSegment]:
         total_samples = len(audio)
@@ -189,6 +192,7 @@ class QuranSilenceSegmenter:
 
         if not raw_intervals:
             self.pause_timestamps = []
+            self.pause_intervals = []
             return [
                 SpeechSegment(
                     segment_id=1,
@@ -203,8 +207,10 @@ class QuranSilenceSegmenter:
 
         # 4. Merge micro-gaps (< min_pause_s) to preserve Qalqalah stop closures & extract fine pause moments
         merged_intervals: List[Tuple[float, float]] = []
+        pause_intervals: List[PauseInterval] = []
         pause_timestamps: List[float] = []
         agg_pause = getattr(config, "AGGRESSIVE_MIN_PAUSE_S", 0.20)
+        min_pause_filter = max(0.25, agg_pause)
 
         for s, e in raw_intervals:
             if not merged_intervals:
@@ -212,13 +218,28 @@ class QuranSilenceSegmenter:
             else:
                 prev_s, prev_e = merged_intervals[-1]
                 gap = s - prev_e
-                if gap >= agg_pause:
-                    pause_timestamps.append(round((prev_e + s) / 2.0, 3))
+                if gap >= min_pause_filter:
+                    p_type = "waqf" if gap >= self.min_pause_s else "sakt"
+                    s_idx = max(0, int((prev_e * self.sr) / self.frame_samples))
+                    e_idx = min(len(energy_curve), int((s * self.sr) / self.frame_samples))
+                    min_e = float(np.min(energy_curve[s_idx:e_idx])) if (e_idx > s_idx and len(energy_curve) > 0) else None
+
+                    interval = PauseInterval(
+                        start_sec=round(prev_e, 3),
+                        end_sec=round(s, 3),
+                        duration_sec=round(gap, 3),
+                        pause_type=p_type,
+                        min_energy_db=min_e,
+                    )
+                    pause_intervals.append(interval)
+                    pause_timestamps.append(interval.optimal_cut_point)
+
                 if gap < self.min_pause_s:
                     merged_intervals[-1] = (prev_s, e)
                 else:
                     merged_intervals.append((s, e))
 
+        self.pause_intervals = pause_intervals
         self.pause_timestamps = pause_timestamps
 
         # 5. Apply Gap-Clamped Padding (guarantees zero boundary overlap between chunks)
@@ -540,6 +561,7 @@ class ZipformerONNX:
         segmenter = QuranSilenceSegmenter(sample_rate=sample_rate)
         segments = segmenter.segment_audio(audio_pcm)
         pause_timestamps = segmenter.pause_timestamps
+        pause_intervals = segmenter.pause_intervals
 
         # 2. Extract Mel Filterbank ONCE globally across entire audio (blazing fast in C++)
         global_feats = self._extract_fbank(audio_pcm)
@@ -680,6 +702,7 @@ class ZipformerONNX:
             num_frames=total_frames,
             vocab_size=vocab_size,
             pause_timestamps=pause_timestamps,
+            pause_intervals=pause_intervals,
         )
 
 

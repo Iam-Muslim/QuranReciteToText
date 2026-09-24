@@ -47,6 +47,32 @@ class PhonemeToken:
 
 
 @dataclass
+class PauseInterval:
+    """Continuous acoustic silence interval with duration and Tajweed pause classification."""
+    start_sec: float
+    end_sec: float
+    duration_sec: float
+    pause_type: str = "waqf"  # "waqf" (>= 0.50s) or "sakt" (0.25s - 0.50s)
+    min_energy_db: Optional[float] = None
+
+    @property
+    def optimal_cut_point(self) -> float:
+        """Midpoint of silence interval for safe zero-hazard splitting."""
+        return round((self.start_sec + self.end_sec) / 2.0, 3)
+
+    def to_dict(self) -> Dict[str, Any]:
+        d = {
+            "start": round(self.start_sec, 3),
+            "end": round(self.end_sec, 3),
+            "duration": round(self.duration_sec, 3),
+            "type": self.pause_type,
+        }
+        if self.min_energy_db is not None:
+            d["min_energy_db"] = round(self.min_energy_db, 1)
+        return d
+
+
+@dataclass
 class RawTranscriptionResult:
     """Consolidated result of Phase 1 pure ONNX Zipformer CTC transcription."""
     phonemes: List[PhonemeToken] = field(default_factory=list)
@@ -56,6 +82,7 @@ class RawTranscriptionResult:
     num_frames: int = 0
     vocab_size: int = 251
     pause_timestamps: List[float] = field(default_factory=list)
+    pause_intervals: List[PauseInterval] = field(default_factory=list)
 
     @property
     def raw_text(self) -> str:
@@ -253,6 +280,7 @@ class PipelineResult:
     total_processing_time_seconds: float = 0.0
     profiling: Optional[PipelineProfiling] = None
     pause_timestamps: List[float] = field(default_factory=list)
+    pause_intervals: List[PauseInterval] = field(default_factory=list)
 
     def to_output_dict(self) -> Dict[str, Any]:
         return {"total_ayahs": len(self.segments), "ayahs": [s.to_dict() for s in self.segments]}
@@ -274,6 +302,8 @@ class PipelineResult:
                 "audio_duration_seconds": dur,
                 "total_tokens": len(self.raw_phonemes),
                 "raw_text": "".join(p.phoneme for p in self.raw_phonemes),
+                "pause_intervals": [p.to_dict() for p in self.pause_intervals],
+                "pause_timestamps": self.pause_timestamps,
                 "phoneme_tokens": [p.to_raw_dict(i + 1) for i, p in enumerate(self.raw_phonemes)],
             },
             "recovered_speech.json": {

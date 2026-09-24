@@ -60,6 +60,7 @@
 
   button,
   input,
+  select,
   label {
     font: inherit;
   }
@@ -78,6 +79,43 @@
     flex: 1;
     min-height: 0;
     display: flex;
+    flex-direction: column;
+  }
+
+  .preview-header {
+    width: 100%;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 16px 20px 0;
+    flex: 0 0 auto;
+    user-select: none;
+  }
+
+  .preview-header.visible {
+    display: flex;
+  }
+
+  .surah-badge {
+    background: rgba(216, 167, 95, 0.12);
+    color: var(--gold-strong);
+    border: 1px solid var(--gold-line);
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+  }
+
+  .ayah-badge {
+    background: var(--surface-2);
+    color: var(--text-soft);
+    border: 1px solid var(--line-soft);
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 500;
   }
 
   #previewScroll {
@@ -85,7 +123,7 @@
     min-height: 0;
     display: flex;
     overflow: auto;
-    padding: 26px 4vw 32px;
+    padding: 20px 4vw 32px;
     -webkit-overflow-scrolling: touch;
     scrollbar-color: #3a4250 transparent;
     scrollbar-width: thin;
@@ -348,6 +386,32 @@
     direction: ltr;
   }
 
+  .surah-select {
+    border-radius: 10px;
+    padding: 8px 12px;
+    background: #1b212a;
+    border: 1px solid #303947;
+    color: #e7bd79;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 500;
+    transition: background 0.15s ease, border-color 0.15s ease;
+    flex: 0 0 auto;
+    max-width: 220px;
+    outline: none;
+  }
+
+  .surah-select:hover,
+  .surah-select:focus {
+    background: #232b37;
+    border-color: var(--gold-line);
+  }
+
+  .surah-select option {
+    background: #181d24;
+    color: var(--text);
+  }
+
   .btn,
   .toggle-btn {
     border-radius: 10px;
@@ -525,11 +589,20 @@
     .chip {
       width: 190px;
     }
+
+    .surah-select {
+      max-width: 160px;
+      font-size: 11px;
+    }
   }
 </style>
 </head>
 <body>
   <main>
+    <div id="previewHeader" class="preview-header">
+      <span id="currentSurahBadge" class="surah-badge"></span>
+      <span id="currentAyahBadge" class="ayah-badge"></span>
+    </div>
     <div id="previewScroll">
       <div id="preview" dir="rtl">
         <div class="empty-hint">
@@ -551,6 +624,8 @@
         <button class="icon-btn" id="speedUpBtn">+</button>
       </div>
 
+      <select id="surahSelect" class="surah-select" style="display: none;"></select>
+
       <button class="toggle-btn active" id="phonemeBtn">Hide phonemes</button>
       <button class="btn" id="loadJsonBtn">Open JSON</button>
       <button class="btn" id="loadAudioBtn">Open MP3</button>
@@ -559,7 +634,7 @@
     <div id="strip" dir="ltr"></div>
   </footer>
 
-  <input type="file" id="jsonFile" accept=".json,application/json" />
+  <input type="file" id="jsonFile" accept=".json,.html,application/json,text/html" />
   <input type="file" id="audioFile" accept="audio/*" />
   <audio id="audio" preload="auto"></audio>
 
@@ -573,12 +648,142 @@ PASTE_FULL_OUTPUT_JSON_HERE
   </script>
 
   <script>
+    const SURAH_NAMES = {
+      1: { ar: "الفاتحة", en: "Al-Fatihah" },
+      2: { ar: "البقرة", en: "Al-Baqarah" },
+      3: { ar: "آل عمران", en: "Ali 'Imran" },
+      4: { ar: "النساء", en: "An-Nisa" },
+      5: { ar: "المائدة", en: "Al-Ma'idah" },
+      6: { ar: "الأنعام", en: "Al-An'am" },
+      7: { ar: "الأعراف", en: "Al-A'raf" },
+      8: { ar: "الأنفال", en: "Al-Anfal" },
+      9: { ar: "التوبة", en: "At-Tawbah" },
+      10: { ar: "يونس", en: "Yunus" },
+      11: { ar: "هود", en: "Hud" },
+      12: { ar: "يوسف", en: "Yusuf" },
+      13: { ar: "الرعد", en: "Ar-Ra'd" },
+      14: { ar: "إبراهيم", en: "Ibrahim" },
+      15: { ar: "الحجر", en: "Al-Hijr" },
+      16: { ar: "النحل", en: "An-Nahl" },
+      17: { ar: "الإسراء", en: "Al-Isra" },
+      18: { ar: "الكهف", en: "Al-Kahf" },
+      19: { ar: "مريم", en: "Maryam" },
+      20: { ar: "طه", en: "Taha" },
+      21: { ar: "الأنبياء", en: "Al-Anbiya" },
+      22: { ar: "الحج", en: "Al-Hajj" },
+      23: { ar: "المؤمنون", en: "Al-Mu'minun" },
+      24: { ar: "النور", en: "An-Nur" },
+      25: { ar: "الفرقان", en: "Al-Furqan" },
+      26: { ar: "الشعراء", en: "Ash-Shu'ara" },
+      27: { ar: "النمل", en: "An-Naml" },
+      28: { ar: "القصص", en: "Al-Qasas" },
+      29: { ar: "العنكبوت", en: "Al-'Ankabut" },
+      30: { ar: "الروم", en: "Ar-Rum" },
+      31: { ar: "لقمان", en: "Luqman" },
+      32: { ar: "السجدة", en: "As-Sajdah" },
+      33: { ar: "الأحزاب", en: "Al-Ahzab" },
+      34: { ar: "سبأ", en: "Saba" },
+      35: { ar: "فاطر", en: "Fatir" },
+      36: { ar: "يس", en: "Ya-Sin" },
+      37: { ar: "الصافات", en: "As-Saffat" },
+      38: { ar: "ص", en: "Sad" },
+      39: { ar: "الزمر", en: "Az-Zumar" },
+      40: { ar: "غافر", en: "Ghafir" },
+      41: { ar: "فصلت", en: "Fussilat" },
+      42: { ar: "الشورى", en: "Ash-Shura" },
+      43: { ar: "الزخرف", en: "Az-Zukhruf" },
+      44: { ar: "الدخان", en: "Ad-Dukhan" },
+      45: { ar: "الجاثية", en: "Al-Jathiyah" },
+      46: { ar: "الأحقاف", en: "Al-Ahqaf" },
+      47: { ar: "محمد", en: "Muhammad" },
+      48: { ar: "الفتح", en: "Al-Fath" },
+      49: { ar: "الحجرات", en: "Al-Hujurat" },
+      50: { ar: "ق", en: "Qaf" },
+      51: { ar: "الذاريات", en: "Adh-Dhariyat" },
+      52: { ar: "الطور", en: "At-Tur" },
+      53: { ar: "النجم", en: "An-Najm" },
+      54: { ar: "القمر", en: "Al-Qamar" },
+      55: { ar: "الرحمن", en: "Ar-Rahman" },
+      56: { ar: "الواقعة", en: "Al-Waqi'ah" },
+      57: { ar: "الحديد", en: "Al-Hadid" },
+      58: { ar: "المجادلة", en: "Al-Mujadila" },
+      59: { ar: "الحشر", en: "Al-Hashr" },
+      60: { ar: "الممتحنة", en: "Al-Mumtahanah" },
+      61: { ar: "الصف", en: "As-Saff" },
+      62: { ar: "الجمعة", en: "Al-Jumu'ah" },
+      63: { ar: "المنافقون", en: "Al-Munafiqun" },
+      64: { ar: "التغابن", en: "At-Taghabun" },
+      65: { ar: "الطلاق", en: "At-Talaq" },
+      66: { ar: "التحريم", en: "At-Tahrim" },
+      67: { ar: "الملك", en: "Al-Mulk" },
+      68: { ar: "القلم", en: "Al-Qalam" },
+      69: { ar: "الحاقة", en: "Al-Haqqah" },
+      70: { ar: "المعارج", en: "Al-Ma'arij" },
+      71: { ar: "نوح", en: "Nuh" },
+      72: { ar: "الجن", en: "Al-Jinn" },
+      73: { ar: "المزمل", en: "Al-Muzzammil" },
+      74: { ar: "المدثر", en: "Al-Muddaththir" },
+      75: { ar: "القيامة", en: "Al-Qiyamah" },
+      76: { ar: "الإنسان", en: "Al-Insan" },
+      77: { ar: "المرسلات", en: "Al-Mursalat" },
+      78: { ar: "النبأ", en: "An-Naba" },
+      79: { ar: "النازعات", en: "An-Nazi'at" },
+      80: { ar: "عبس", en: "'Abasa" },
+      81: { ar: "التكوير", en: "At-Takwir" },
+      82: { ar: "الانفطار", en: "Al-Infitar" },
+      83: { ar: "المطففين", en: "Al-Mutaffifin" },
+      84: { ar: "الانشقاق", en: "Al-Inshiqaq" },
+      85: { ar: "البروج", en: "Al-Buruj" },
+      86: { ar: "الطارق", en: "At-Tariq" },
+      87: { ar: "الأعلى", en: "Al-A'la" },
+      88: { ar: "الغاشية", en: "Al-Ghashiyah" },
+      89: { ar: "الفجر", en: "Al-Fajr" },
+      90: { ar: "البلد", en: "Al-Balad" },
+      91: { ar: "الشمس", en: "Ash-Shams" },
+      92: { ar: "الليل", en: "Al-Layl" },
+      93: { ar: "الضحى", en: "Ad-Duha" },
+      94: { ar: "الشرح", en: "Ash-Sharh" },
+      95: { ar: "التين", en: "At-Tin" },
+      96: { ar: "العلق", en: "Al-'Alaq" },
+      97: { ar: "القدر", en: "Al-Qadr" },
+      98: { ar: "البينة", en: "Al-Bayyinah" },
+      99: { ar: "الزلزلة", en: "Az-Zalzalah" },
+      100: { ar: "العاديات", en: "Al-'Adiyat" },
+      101: { ar: "القارعة", en: "Al-Qari'ah" },
+      102: { ar: "التكاثر", en: "At-Takathur" },
+      103: { ar: "العصر", en: "Al-'Asr" },
+      104: { ar: "الهمزة", en: "Al-Humazah" },
+      105: { ar: "الفيل", en: "Al-Fil" },
+      106: { ar: "قريش", en: "Quraysh" },
+      107: { ar: "الماعون", en: "Al-Ma'un" },
+      108: { ar: "الكوثر", en: "Al-Kawthar" },
+      109: { ar: "الكافرون", en: "Al-Kafirun" },
+      110: { ar: "النصر", en: "An-Nasr" },
+      111: { ar: "المسد", en: "Al-Masad" },
+      112: { ar: "الإخلاص", en: "Al-Ikhlas" },
+      113: { ar: "الفلق", en: "Al-Falaq" },
+      114: { ar: "الناس", en: "An-Nas" }
+    };
+
+    function getSurahTitle(num) {
+      const n = parseInt(num, 10);
+      const info = SURAH_NAMES[n];
+      if (info) {
+        return `${info.en} (${info.ar})`;
+      }
+      return "";
+    }
+
     const audio = document.getElementById("audio");
     const jsonFile = document.getElementById("jsonFile");
     const audioFile = document.getElementById("audioFile");
 
     const loadJsonBtn = document.getElementById("loadJsonBtn");
     const loadAudioBtn = document.getElementById("loadAudioBtn");
+
+    const previewHeader = document.getElementById("previewHeader");
+    const currentSurahBadge = document.getElementById("currentSurahBadge");
+    const currentAyahBadge = document.getElementById("currentAyahBadge");
 
     const previewScroll = document.getElementById("previewScroll");
     const preview = document.getElementById("preview");
@@ -591,6 +796,7 @@ PASTE_FULL_OUTPUT_JSON_HERE
     const speedUpBtn = document.getElementById("speedUpBtn");
     const speedValue = document.getElementById("speedValue");
 
+    const surahSelect = document.getElementById("surahSelect");
     const phonemeBtn = document.getElementById("phonemeBtn");
     const strip = document.getElementById("strip");
 
@@ -652,6 +858,15 @@ PASTE_FULL_OUTPUT_JSON_HERE
         const file = e.target.files[0];
         if (file) loadAudioFile(file);
         audioFile.value = "";
+      });
+
+      surahSelect.addEventListener("change", (e) => {
+        const selectedSurah = e.target.value;
+        if (!selectedSurah || selectedSurah === "all") return;
+        const target = model.find((m) => String(m.surah) === String(selectedSurah));
+        if (target) {
+          seekTo(target.start + 0.0001);
+        }
       });
 
       playBtn.addEventListener("click", togglePlay);
@@ -717,7 +932,8 @@ PASTE_FULL_OUTPUT_JSON_HERE
         for (const file of files) {
           const isJson =
             file.type.includes("json") ||
-            file.name.toLowerCase().endsWith(".json");
+            file.type.includes("html") ||
+            /\.(json|html|htm)$/i.test(file.name);
 
           const isAudio =
             file.type.startsWith("audio/") ||
@@ -737,7 +953,8 @@ PASTE_FULL_OUTPUT_JSON_HERE
         const res = await fetch(url, { cache: "no-store" });
         if (!res.ok) throw new Error("HTTP " + res.status);
 
-        const json = await res.json();
+        const text = await res.text();
+        const json = parseJsonText(text);
         initModel(json);
       } catch (err) {
         // If automatic loading fails, use Open JSON button.
@@ -747,11 +964,37 @@ PASTE_FULL_OUTPUT_JSON_HERE
     async function loadJsonFile(file) {
       try {
         const text = await file.text();
-        const json = JSON.parse(text);
+        const json = parseJsonText(text);
         initModel(json);
       } catch (err) {
-        alert("JSON error: " + err.message);
+        alert("JSON / HTML error: " + err.message);
       }
+    }
+
+    function parseJsonText(text) {
+      const trimmed = text.trim();
+      if (trimmed.startsWith("<")) {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(trimmed, "text/html");
+        const embedded = doc.getElementById("embedded-json");
+        if (
+          embedded &&
+          embedded.textContent.trim() &&
+          !embedded.textContent.includes("PASTE_FULL_OUTPUT_JSON_HERE")
+        ) {
+          return JSON.parse(embedded.textContent.trim());
+        }
+        const scripts = doc.querySelectorAll('script[type="application/json"]');
+        for (const s of scripts) {
+          if (
+            s.textContent.trim() &&
+            !s.textContent.includes("PASTE_FULL_OUTPUT_JSON_HERE")
+          ) {
+            return JSON.parse(s.textContent.trim());
+          }
+        }
+      }
+      return JSON.parse(trimmed);
     }
 
     function loadAudioFile(file) {
@@ -769,33 +1012,117 @@ PASTE_FULL_OUTPUT_JSON_HERE
     function initModel(rawJson) {
       const normalized = normalizeKeys(rawJson);
 
-      surahNumber = str(findSurahNumber(normalized));
-      const segments = findSegments(normalized);
+      let builtModel = [];
 
-      if (!Array.isArray(segments) || segments.length === 0) {
+      // Check if multi-surah format: { "total_surahs": ..., "surahs": [ ... ] }
+      if (Array.isArray(normalized.surahs) && normalized.surahs.length > 0) {
+        let globalIndex = 0;
+        for (const surahObj of normalized.surahs) {
+          const sNum = str(surahObj.surah !== undefined ? surahObj.surah : surahObj.surah_number);
+
+          // Intro per surah if present
+          if (surahObj.intro && Array.isArray(surahObj.intro.words) && surahObj.intro.words.length) {
+            const introSeg = buildIntroModel(surahObj.intro, sNum);
+            if (introSeg) {
+              introSeg.index = globalIndex++;
+              builtModel.push(introSeg);
+            }
+          }
+
+          const rawAyahs = Array.isArray(surahObj.ayahs)
+            ? surahObj.ayahs
+            : Array.isArray(surahObj.segments)
+            ? surahObj.segments
+            : [];
+
+          if (rawAyahs.length > 0) {
+            const ayahModels = buildModel(rawAyahs, sNum, globalIndex);
+            globalIndex += ayahModels.length;
+            builtModel.push(...ayahModels);
+          }
+        }
+      } else {
+        // Single surah / flat ayahs format
+        surahNumber = str(findSurahNumber(normalized));
+        const segments = findSegments(normalized);
+
+        if (!Array.isArray(segments) || segments.length === 0) {
+          alert("No segments found in JSON.");
+          return;
+        }
+
+        const ayahModels = buildModel(segments, surahNumber, 0);
+        builtModel = ayahModels;
+
+        const intro = findIntro(normalized);
+        if (intro && Array.isArray(intro.words) && intro.words.length) {
+          const introSeg = buildIntroModel(intro, surahNumber);
+          if (introSeg) {
+            builtModel.unshift(introSeg);
+            builtModel.forEach((seg, idx) => {
+              seg.index = idx;
+            });
+          }
+        }
+      }
+
+      if (builtModel.length === 0) {
         alert("No segments found in JSON.");
         return;
       }
 
-      model = buildModel(segments);
+      builtModel.sort((a, b) => a.start - b.start);
+      builtModel.forEach((seg, idx) => {
+        seg.index = idx;
+      });
 
-      const intro = findIntro(normalized);
-      if (intro && Array.isArray(intro.words) && intro.words.length) {
-        const introSeg = buildIntroModel(intro);
-        if (introSeg) {
-          model.unshift(introSeg);
-        }
-      }
-
+      model = builtModel;
+      buildSurahSelect();
       buildStrip();
 
       if (model.length > 0) {
+        previewHeader.classList.add("visible");
         setCurrent(0, 0);
       }
 
       seek.max = getTotalDuration();
       updateReady();
       refreshOnce();
+    }
+
+    function buildSurahSelect() {
+      surahSelect.innerHTML = "";
+      const distinctSurahs = [];
+      for (const m of model) {
+        if (m.surah && !distinctSurahs.includes(String(m.surah))) {
+          distinctSurahs.push(String(m.surah));
+        }
+      }
+
+      if (distinctSurahs.length > 1) {
+        surahSelect.style.display = "";
+        const allOpt = document.createElement("option");
+        allOpt.value = "all";
+        allOpt.textContent = `All Surahs (${distinctSurahs.length})`;
+        surahSelect.appendChild(allOpt);
+
+        distinctSurahs.forEach((s) => {
+          const opt = document.createElement("option");
+          opt.value = s;
+          const title = getSurahTitle(s);
+          opt.textContent = `Surah ${s}${title ? ": " + title : ""}`;
+          surahSelect.appendChild(opt);
+        });
+      } else if (distinctSurahs.length === 1) {
+        surahSelect.style.display = "";
+        const opt = document.createElement("option");
+        opt.value = distinctSurahs[0];
+        const title = getSurahTitle(distinctSurahs[0]);
+        opt.textContent = `Surah ${distinctSurahs[0]}${title ? ": " + title : ""}`;
+        surahSelect.appendChild(opt);
+      } else {
+        surahSelect.style.display = "none";
+      }
     }
 
     function normalizeKeys(value) {
@@ -856,7 +1183,7 @@ PASTE_FULL_OUTPUT_JSON_HERE
       return null;
     }
 
-    function buildIntroModel(intro) {
+    function buildIntroModel(intro, surahNum = "") {
       const iStart = num(intro.start);
       const iEnd = num(intro.end);
       const rawIntroWords = Array.isArray(intro.words) ? intro.words : [];
@@ -894,6 +1221,7 @@ PASTE_FULL_OUTPUT_JSON_HERE
 
       return {
         index: 0,
+        surah: str(surahNum || intro.surah || ""),
         number: "Intro",
         start: iStart,
         end: iEnd,
@@ -978,7 +1306,7 @@ PASTE_FULL_OUTPUT_JSON_HERE
       return [];
     }
 
-    function buildModel(segments) {
+    function buildModel(segments, defaultSurah = "", startIndex = 0) {
       return segments.map((segment, segmentIndex) => {
         const segStart = num(segment.start !== undefined ? segment.start : segment.start_time);
         const segEnd = num(segment.end !== undefined ? segment.end : segment.end_time);
@@ -1019,6 +1347,14 @@ PASTE_FULL_OUTPUT_JSON_HERE
           ? segment.ayah
           : (segment.ayah_number !== undefined ? segment.ayah_number : segment.segment_number);
 
+        let segSurah = str(segment.surah !== undefined ? segment.surah : segment.surah_number);
+        if (!segSurah && segment.matched_ref && segment.matched_ref.includes(":")) {
+          segSurah = segment.matched_ref.split(":")[0];
+        }
+        if (!segSurah) {
+          segSurah = str(defaultSurah);
+        }
+
         // Form Ayah-level text from its words
         const segWords = rawSubs.flatMap((s) => (Array.isArray(s.words) ? s.words : []));
         const segWordsText = segWords
@@ -1028,7 +1364,8 @@ PASTE_FULL_OUTPUT_JSON_HERE
         const segText = segWordsText || str(segment.text || segment.transcribed_text || "");
 
         return {
-          index: segmentIndex,
+          index: startIndex + segmentIndex,
+          surah: segSurah,
           number: ayahNum !== undefined ? ayahNum : segmentIndex + 1,
           start: segStart,
           end: segEnd,
@@ -1147,9 +1484,11 @@ PASTE_FULL_OUTPUT_JSON_HERE
           const metaLine = document.createElement("div");
           metaLine.className = "chip-meta";
 
-          const metaParts = [
-            "Surah " + (surahNumber || "?")
-          ];
+          const sNum = segment.surah || surahNumber;
+          const metaParts = [];
+          if (sNum) {
+            metaParts.push("Surah " + sNum);
+          }
 
           if (segment.number === "Intro") {
             metaParts.push("Intro");
@@ -1228,6 +1567,20 @@ PASTE_FULL_OUTPUT_JSON_HERE
         0,
         Math.min(subIndex, segment.sub_segments.length - 1)
       );
+
+      // Update Surah & Ayah badges
+      if (segment.surah) {
+        const title = getSurahTitle(segment.surah);
+        currentSurahBadge.textContent = `Surah ${segment.surah}${title ? " · " + title : ""}`;
+        currentSurahBadge.style.display = "";
+        if (surahSelect.value !== segment.surah && surahSelect.querySelector(`option[value="${segment.surah}"]`)) {
+          surahSelect.value = segment.surah;
+        }
+      } else {
+        currentSurahBadge.style.display = "none";
+      }
+
+      currentAyahBadge.textContent = segment.number === "Intro" ? "Intro" : `Ayah ${segment.number}`;
 
       renderCurrentSub();
       updateActiveChip();
