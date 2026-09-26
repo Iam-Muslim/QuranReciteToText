@@ -13,19 +13,20 @@ from dataclasses import dataclass
 from typing import List, Tuple, Optional, Dict, Any
 import numpy as np
 
+import os
+import urllib.request
+
 try:
     from scipy.ndimage import median_filter
 except ImportError:
     median_filter = None
 
 try:
-    import torch
-    from silero_vad import load_silero_vad
-    _HAS_SILERO = True
+    import onnxruntime as ort
+    _HAS_ORT = True
 except ImportError:
-    _HAS_SILERO = False
-    load_silero_vad = None
-    torch = None
+    _HAS_ORT = False
+    ort = None
 
 import config
 from config import (
@@ -45,20 +46,64 @@ from src.models import PauseInterval, QuranWord, QuranSegment
 
 logger = logging.getLogger(__name__)
 
-_SILERO_MODEL_INSTANCE = None
+_SILERO_SESSION_INSTANCE = None
+_SILERO_INPUT_NAMES = None
+
+# silero_vad_half.onnx works correctly with ONNX Runtime (the default silero_vad.onnx
+# has a broken ONNX export that outputs ~0.0005 probability for all frames).
+SILERO_VAD_URL = "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad_half.onnx"
 
 
-def _get_silero_model():
-    """Singleton getter for cached ONNX Silero VAD model instance."""
-    global _SILERO_MODEL_INSTANCE
-    if _SILERO_MODEL_INSTANCE is None and _HAS_SILERO:
+def _get_silero_session():
+    """Singleton getter for cached ONNX Silero VAD session instance.
+
+    Returns (session, input_names_set) or (None, None).
+    """
+    global _SILERO_SESSION_INSTANCE, _SILERO_INPUT_NAMES
+    if _SILERO_SESSION_INSTANCE is None and _HAS_ORT:
+        candidate_paths = [
+            getattr(config, "DEFAULT_SILERO_PATH", None),
+            os.path.join("data", "onnx", "silero_vad_half.onnx"),
+            os.path.join("models", "silero_vad_half.onnx"),
+            os.path.join("data", "onnx", "silero_vad.onnx"),
+        ]
+        model_path = None
+        for p in candidate_paths:
+            if p and os.path.exists(p):
+                model_path = p
+                break
+
+        if not model_path:
+            model_path = getattr(config, "DEFAULT_SILERO_PATH", os.path.join("data", "onnx", "silero_vad_half.onnx"))
+            os.makedirs(os.path.dirname(model_path), exist_ok=True)
+            logger.info(f"[*] Downloading Silero VAD ONNX model (~1.3 MB) from {SILERO_VAD_URL}...")
+            try:
+                urllib.request.urlretrieve(SILERO_VAD_URL, model_path)
+                logger.info("[*] Silero VAD ONNX model downloaded successfully.")
+            except Exception as e:
+                logger.warning(f"Failed to auto-download Silero VAD ONNX model: {e}")
+                return None, None
+
         try:
-            _SILERO_MODEL_INSTANCE = load_silero_vad(onnx=True)
-            logger.info("Loaded Silero VAD ONNX model successfully.")
+            sess_opts = ort.SessionOptions()
+            sess_opts.log_severity_level = 4
+            num_threads = min(4, os.cpu_count() or 1)
+            sess_opts.intra_op_num_threads = num_threads
+            sess_opts.inter_op_num_threads = 1
+            sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+            sess_opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+            _SILERO_SESSION_INSTANCE = ort.InferenceSession(
+                model_path,
+                sess_opts,
+                providers=["CPUExecutionProvider"],
+            )
+            _SILERO_INPUT_NAMES = {inp.name for inp in _SILERO_SESSION_INSTANCE.get_inputs()}
+            logger.info(f"Loaded Silero VAD ONNX session from {model_path} (threads: {num_threads}).")
         except Exception as e:
-            logger.warning(f"Failed to load Silero VAD ONNX model: {e}")
-            _SILERO_MODEL_INSTANCE = None
-    return _SILERO_MODEL_INSTANCE
+            logger.warning(f"Failed to load Silero VAD ONNX session: {e}")
+            _SILERO_SESSION_INSTANCE = None
+            _SILERO_INPUT_NAMES = None
+    return _SILERO_SESSION_INSTANCE, _SILERO_INPUT_NAMES
 
 
 @dataclass(slots=True)
@@ -157,11 +202,11 @@ class QuranSilenceVAD:
         self, audio: np.ndarray
     ) -> Tuple[List[SpeechSegment], List[PauseInterval], List[float]]:
         """Extracts unified speech segments and pause intervals from raw audio PCM."""
-        if self.backend == "silero_dual_check" and _HAS_SILERO:
-            model = _get_silero_model()
-            if model is not None:
+        if self.backend == "silero_dual_check" and _HAS_ORT:
+            session, input_names = _get_silero_session()
+            if session is not None:
                 try:
-                    return self._detect_silero_dual_check(audio, model)
+                    return self._detect_silero_dual_check(audio, session, input_names)
                 except Exception as e:
                     logger.warning(
                         f"Silero VAD dual-check execution failed ({e}), falling back to energy VAD."
@@ -169,9 +214,21 @@ class QuranSilenceVAD:
         return self._detect_energy(audio)
 
     def _detect_silero_dual_check(
-        self, audio: np.ndarray, model: Any
+        self, audio: np.ndarray, session: Any, input_names: Optional[set] = None
     ) -> Tuple[List[SpeechSegment], List[PauseInterval], List[float]]:
-        """Ultra-fast neural Silero VAD coupled with a dual Energy/Harmonicity Madd Guardian."""
+        """Neural Silero VAD (pure ONNX Runtime) coupled with a Tajweed Guardian.
+
+        Architecture:
+          1. Silero v4 Neural VAD streaming with 64-sample context buffer (576 samples / 36ms).
+          2. Frame-level Tajweed Guardian: Dual-check protection using pitch autocorrelation
+             and 100-500Hz low-band spectral energy to prevent cutting held vowels (Madd: ا، و، ي)
+             and nasal murmurs (Ghunnah: ن، م).
+          3. Consonant closure bridging (<= closure_max_s, default 160ms) protecting stop occlusions
+             and Qalqalah (حروف القلقلة: قطب جد).
+          4. Acoustic Gap Validator: Verifies candidate pauses have true acoustic valleys dropping
+             below the dynamic silence energy threshold, preventing false waqfs.
+          5. Click-free valley cut point snapping at acoustic silence energy nulls.
+        """
         total_samples = len(audio)
         dur = total_samples / self.sr
         if total_samples == 0:
@@ -180,119 +237,176 @@ class QuranSilenceVAD:
             return [], [], []
 
         window_size = 512  # 32ms at 16kHz
+        context_size = 64  # Silero v4 streaming context size
         num_windows = int(math.ceil(total_samples / window_size))
         frame_dur = window_size / self.sr
 
         # Pad audio to full windows
         padded_len = num_windows * window_size
         if len(audio) < padded_len:
-            pcm = np.pad(audio, (0, padded_len - len(audio)))
+            pcm = np.pad(audio.astype(np.float32), (0, padded_len - len(audio)))
         else:
-            pcm = audio[:padded_len]
+            pcm = audio[:padded_len].astype(np.float32)
 
-        pcm_t = torch.from_numpy(pcm)
-
-        # 1. Dynamic Noise Floor & Madd Energy Threshold
         reshaped = pcm.reshape(num_windows, window_size)
+
+        # ── 1. Broadband + low-band energy and spectral envelopes ─────────
         rms_all = np.sqrt(np.mean(reshaped**2, axis=1) + 1e-12)
         energy_db_arr = 20.0 * np.log10(np.maximum(rms_all, 1e-5))
 
+        # Low-band (100–500 Hz) energy via FFT — catches nasal Ghunnah murmur
+        spectra = np.abs(np.fft.rfft(reshaped, axis=1))
+        freq_bin_hz = self.sr / window_size  # ~31.25 Hz per bin at 16kHz/512
+        lo_bin = max(1, int(100.0 / freq_bin_hz))   # ~3
+        hi_bin = min(spectra.shape[1], int(500.0 / freq_bin_hz) + 1)  # ~16
+        lowband_energy = np.sqrt(np.mean(spectra[:, lo_bin:hi_bin]**2, axis=1) + 1e-12)
+        lowband_db = 20.0 * np.log10(np.maximum(lowband_energy, 1e-5))
+
+        # Spectral flatness: geometric_mean / arithmetic_mean (0=tonal, 1=noise)
+        mag = spectra[:, 1:]  # exclude DC
+        log_mag = np.log(mag + 1e-12)
+        geo_mean = np.exp(np.mean(log_mag, axis=1))
+        arith_mean = np.mean(mag, axis=1) + 1e-12
+        spectral_flatness = geo_mean / arith_mean  # 0..1
+
         if self.adaptive:
-            p15 = float(np.percentile(energy_db_arr, 15))
+            p05 = float(np.percentile(energy_db_arr, 5))
             p85 = float(np.percentile(energy_db_arr, 85))
-            dyn_range = max(6.0, p85 - p15)
-            # Madd must exhibit audible recitation volume relative to ambient floor
-            madd_energy_th = max(self.madd_min_energy_db, p15 + 0.35 * dyn_range)
+            silence_energy_threshold = min(p05 + 4.0, p85 - 8.0)
+            noise_floor_db = p05
         else:
-            madd_energy_th = self.madd_min_energy_db
+            silence_energy_threshold = self.offset_db
+            noise_floor_db = self.offset_db
 
-        # 2. Silero Forward Pass & Frame-level Dual Check (Madd Guardian)
-        model.reset_states()
-        is_speech = np.zeros(num_windows, dtype=bool)
+        # ── 2. Silero ONNX Forward Pass (with preallocated 576-sample buffer)
+        x_buf = np.zeros((1, window_size + context_size), dtype=np.float32)
+        state = np.zeros((2, 1, 128), dtype=np.float32)
+        feeds = {"input": x_buf, "state": state}
 
+        has_sr_input = input_names is not None and "sr" in input_names
+        if has_sr_input:
+            feeds["sr"] = np.array(self.sr, dtype=np.int64)
+
+        silero_probs = np.zeros(num_windows, dtype=np.float32)
+        for i in range(num_windows):
+            x_buf[0, context_size:] = reshaped[i]
+            outs = session.run(None, feeds)
+            silero_probs[i] = float(outs[0][0, 0])
+            feeds["state"] = outs[1]
+            x_buf[0, :context_size] = x_buf[0, -context_size:]
+
+        # ── 3. Pitch Autocorrelation & Frame-Level Tajweed Guardian ───────
         lag_min = int(self.sr / 500)  # 500 Hz pitch ceiling
         lag_max = min(window_size - 1, int(self.sr / 70))  # 70 Hz pitch floor
+        pitch_ac = np.zeros(num_windows, dtype=np.float32)
 
-        for i in range(num_windows):
+        # Optimization: Only evaluate pitch autocorrelation on candidate frames where
+        # energy is active but Silero probability dipped below threshold (rescue target)
+        cand_rescue_idx = np.where(
+            (energy_db_arr > silence_energy_threshold)
+            & (silero_probs < self.silero_threshold)
+        )[0]
+
+        for i in cand_rescue_idx:
             chunk = reshaped[i]
-            chunk_t = pcm_t[i * window_size : (i + 1) * window_size]
-            p = model(chunk_t, self.sr).item()
-            db = energy_db_arr[i]
+            r = np.correlate(chunk, chunk, mode="full")[window_size - 1:]
+            r_norm = r / (r[0] + 1e-12)
+            if lag_max > lag_min:
+                pitch_ac[i] = float(np.max(r_norm[lag_min:lag_max]))
 
-            if p >= self.silero_threshold:
-                is_speech[i] = True
-            else:
-                # DUAL CHECK: Madd & Held Letter Guardian
-                # When Silero decays probability on steady vowels ("ييييي", "ااااا", "ووووو"),
-                # check if energy is recitation-level AND signal has strong pitch autocorrelation.
-                if db >= madd_energy_th:
-                    r = np.correlate(chunk, chunk, mode="full")[window_size - 1:]
-                    r_norm = r / (r[0] + 1e-12)
-                    max_ac = (
-                        float(np.max(r_norm[lag_min:lag_max]))
-                        if lag_max > lag_min
-                        else 0.0
-                    )
-                    if max_ac >= self.madd_periodicity_th:
-                        is_speech[i] = True  # Rescued sustained Madd / held letter!
+        # Dual-check: Silero OR Tajweed Guardian (Madd & Ghunnah)
+        is_madd = (energy_db_arr > silence_energy_threshold) & (pitch_ac >= self.madd_periodicity_th)
+        is_ghunnah = (
+            (energy_db_arr > silence_energy_threshold)
+            & (lowband_db > silence_energy_threshold + 5.0)
+            & (pitch_ac >= 0.35)
+        )
+        speech_frame = (silero_probs >= self.silero_threshold) | is_madd | is_ghunnah
 
-        # 3. Hangover buffer smoothing (protecting soft consonant bursts & decay)
+        # ── 4. Hangover buffer (protect consonant tails & transitions) ─────
         hangover_frames = max(1, int(self.hangover_s / frame_dur))
         preroll_frames = max(1, int(self.preroll_s / frame_dur))
 
-        smoothed_speech = np.copy(is_speech)
-        silence_run = 0
+        smoothed = np.copy(speech_frame)
+        sil_run = 0
         for i in range(num_windows):
-            if is_speech[i]:
-                silence_run = 0
+            if speech_frame[i]:
+                sil_run = 0
             else:
-                if silence_run < hangover_frames and i > 0 and smoothed_speech[i - 1]:
-                    smoothed_speech[i] = True
-                    silence_run += 1
+                if sil_run < hangover_frames and i > 0 and smoothed[i - 1]:
+                    smoothed[i] = True
+                    sil_run += 1
                 else:
-                    silence_run += 1
+                    sil_run += 1
 
-        # 4. Extract contiguous raw speech intervals with safe non-overlapping preroll
+        # ── 5. Extract raw speech intervals ───────────────────────────────
         raw_intervals: List[Tuple[float, float]] = []
         seg_start: Optional[int] = None
         for i in range(num_windows):
-            if smoothed_speech[i] and seg_start is None:
-                earliest_start = (
-                    int(raw_intervals[-1][1] * self.sr) // window_size
-                    if raw_intervals
-                    else 0
-                )
-                seg_start = max(earliest_start, i - preroll_frames)
-            elif not smoothed_speech[i] and seg_start is not None:
+            if smoothed[i] and seg_start is None:
+                seg_start = i
+            elif not smoothed[i] and seg_start is not None:
                 s_sec = (seg_start * window_size) / self.sr
                 e_sec = (i * window_size) / self.sr
                 if e_sec > s_sec:
                     raw_intervals.append((s_sec, e_sec))
                 seg_start = None
-
         if seg_start is not None:
-            s_sec = (seg_start * window_size) / self.sr
-            raw_intervals.append((s_sec, dur))
+            raw_intervals.append(((seg_start * window_size) / self.sr, dur))
 
         if not raw_intervals:
             self.pause_timestamps = []
             self.pause_intervals = []
             return [SpeechSegment(1, 0.0, dur, 0.0, dur, 0, total_samples)], [], []
 
-        # 5. Bridge intra-word plosive consonant closures (Qalqalah: < closure_max_s)
-        bridged_intervals: List[Tuple[float, float]] = []
-        for s, e in raw_intervals:
-            if not bridged_intervals:
-                bridged_intervals.append((s, e))
-            else:
-                prev_s, prev_e = bridged_intervals[-1]
-                gap = s - prev_e
-                if gap < self.closure_max_s:
-                    bridged_intervals[-1] = (prev_s, e)
-                else:
-                    bridged_intervals.append((s, e))
+        # ── 6. Consonant Closure Bridging & Acoustic Gap Validation ───────
+        # Bridges:
+        #   (a) Very short closures (<= closure_max_s) for Qalqalah/Shaddah stop occlusions.
+        #   (b) False gaps where energy never dropped toward silence (no acoustic valley).
+        #   (c) Sustained harmonicity / vowel hold across candidate gaps.
+        validated: List[Tuple[float, float]] = [raw_intervals[0]]
+        for j in range(1, len(raw_intervals)):
+            prev_s, prev_e = validated[-1]
+            cur_s, cur_e = raw_intervals[j]
+            gap = cur_s - prev_e
 
-        # 6. Extract Tajweed Pause Intervals & sub-millisecond click-free cut points
+            if gap <= self.closure_max_s:
+                # Plosive consonant closure (Qalqalah: قطب جد, Shaddah)
+                validated[-1] = (prev_s, cur_e)
+                continue
+
+            g_start_idx = max(0, int(prev_e * self.sr) // window_size)
+            g_end_idx = min(num_windows, int(cur_s * self.sr) // window_size)
+            gap_frames = g_end_idx - g_start_idx
+
+            if gap_frames <= 0:
+                validated[-1] = (prev_s, cur_e)
+                continue
+
+            gap_energy = energy_db_arr[g_start_idx:g_end_idx]
+            gap_pitch = pitch_ac[g_start_idx:g_end_idx]
+            gap_flatness = spectral_flatness[g_start_idx:g_end_idx]
+
+            min_e = float(np.min(gap_energy))
+            mean_e = float(np.mean(gap_energy))
+            voiced_pitch_ratio = float(np.mean(gap_pitch >= self.madd_periodicity_th))
+            avg_flatness = float(np.mean(gap_flatness))
+
+            # Validate whether this gap is an acoustic silence or continuous speech
+            no_energy_drop = min_e > silence_energy_threshold
+            has_madd = voiced_pitch_ratio > 0.25 and mean_e > silence_energy_threshold
+            is_tonal_speech = avg_flatness < 0.25 and mean_e > silence_energy_threshold
+
+            is_false_silence = no_energy_drop or has_madd or is_tonal_speech
+
+            if is_false_silence:
+                validated[-1] = (prev_s, cur_e)
+            else:
+                validated.append((cur_s, cur_e))
+
+        bridged_intervals = validated
+
+        # ── 7. Extract Tajweed Pause Intervals & cut points ───────────────
         pause_intervals: List[PauseInterval] = []
         pause_timestamps: List[float] = []
         merged_for_model: List[Tuple[float, float]] = []
@@ -311,16 +425,16 @@ class QuranSilenceVAD:
                     e_idx = min(len(energy_db_arr), int((s * self.sr) / window_size))
 
                     cut_point = round((prev_e + s) / 2.0, 3)
-                    min_e: Optional[float] = None
+                    min_e_val: Optional[float] = None
 
                     if e_idx > s_idx:
-                        margin_frames = max(1, int(0.20 * (e_idx - s_idx)))
+                        margin_frames = max(1, int(0.15 * (e_idx - s_idx)))
                         scan_s = min(e_idx - 1, s_idx + margin_frames)
                         scan_e = max(scan_s + 1, e_idx - margin_frames)
                         valley_slice = energy_db_arr[scan_s:scan_e]
                         if len(valley_slice) > 0:
                             min_offset = int(np.argmin(valley_slice))
-                            min_e = float(valley_slice[min_offset])
+                            min_e_val = float(valley_slice[min_offset])
                             cut_point = round(
                                 ((scan_s + min_offset) * window_size) / self.sr, 3
                             )
@@ -330,14 +444,14 @@ class QuranSilenceVAD:
                         end_sec=round(s, 3),
                         duration_sec=round(gap, 3),
                         pause_type=p_type,
-                        min_energy_db=min_e,
+                        min_energy_db=min_e_val,
                         cut_point=cut_point,
                     )
                     pause_intervals.append(interval)
                     pause_timestamps.append(interval.optimal_cut_point)
 
-                # For model chunking: merge speech segments across micro-pauses (< min_pause_s)
-                if gap < self.min_pause_s:
+                # For model chunking: split speech segments upon each validated pause (>= min_sakt_s)
+                if gap < self.min_sakt_s:
                     merged_for_model[-1] = (prev_s, e)
                 else:
                     merged_for_model.append((s, e))
@@ -345,7 +459,7 @@ class QuranSilenceVAD:
         self.pause_intervals = pause_intervals
         self.pause_timestamps = pause_timestamps
 
-        # 7. Build gap-clamped padded speech segments for model chunking
+        # ── 8. Build gap-clamped padded speech segments for model chunking ─
         segments: List[SpeechSegment] = []
         enc_samples = int(round(FRAME_STEP * self.sr))
         n_merged = len(merged_for_model)

@@ -49,6 +49,7 @@ class MatcherConfig:
     acoustic_confusion_cost: float = getattr(config, "ACOUSTIC_CONFUSION_COST", 0.25)
     wrap_penalty: float = getattr(config, "WRAP_PENALTY", 0.80)
     wrap_span_weight: float = getattr(config, "WRAP_SPAN_WEIGHT", 0.05)
+    min_word_coverage: float = getattr(config, "MIN_WORD_COVERAGE", 0.35)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -166,11 +167,40 @@ def _align_and_package_ayahs(
     if curr_w >= 0 and span_s >= 0:
         word_passes.append((curr_w, span_s, m))
 
+    min_cov = getattr(cfg, "min_word_coverage", getattr(config, "MIN_WORD_COVERAGE", 0.35))
+
     for w, s_char, e_char in word_passes:
         if e_char > s_char:
             t_s = char_to_tok[s_char]
             t_e = char_to_tok[e_char]
-            if t_e > t_s:
+            if t_e > t_s and 0 <= w < word_count:
+                rw = ref_data.words[w]
+                ref_len = len(rw.phoneme)
+
+                # Reference boundary for word w within the current sub_r_str window
+                w_j_start = ref_data.word_boundaries[w] - p_start
+                w_j_end = ref_data.word_boundaries[w + 1] - p_start
+
+                # Count unique reference phoneme positions covered in this pass
+                covered_j = set()
+                for i in range(s_char, e_char):
+                    j = int(char_j_map[i])
+                    if w_j_start <= j < w_j_end:
+                        covered_j.add(j)
+
+                ref_covered = len(covered_j)
+                coverage = ref_covered / max(1, ref_len)
+
+                # Pure coverage guard (no confidence check, robust to noisy/fast ASR):
+                # 1. Short words (<= 2 chars like "وَ", "فَ") require at least 1 covered char.
+                # 2. Longer words (>= 3 chars) require at least 2 covered chars AND coverage >= min_cov.
+                if ref_len <= 2:
+                    if ref_covered < 1:
+                        continue
+                else:
+                    if ref_covered < 2 or coverage < min_cov:
+                        continue
+
                 w_toks = aligned_tokens[t_s:t_e]
                 matched_word_tokens[w].append(w_toks)
                 w_conf = sum(t.confidence for t in w_toks) / len(w_toks)

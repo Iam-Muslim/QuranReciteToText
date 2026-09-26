@@ -15,6 +15,7 @@ DATA_PATH = PROJECT_ROOT / "data"
 
 ONNX_DIR = DATA_PATH / "onnx"
 DEFAULT_MODEL_PATH = str(ONNX_DIR / "zipformer_p_arabic_v3.int8.onnx")
+DEFAULT_SILERO_PATH = str(ONNX_DIR / "silero_vad_half.onnx")
 DEFAULT_TOKENS_PATH = str(ONNX_DIR / "tokens.txt")
 DEFAULT_QURAN_PHONEMES_PATH = str(DATA_PATH / "ordered_quran_phonemes.json")
 DEFAULT_REF_NORM_PH_PATH = str(DATA_PATH / "ref_norm_ph.txt")
@@ -46,6 +47,9 @@ ACOUSTIC_CONFUSION_COST: float = 0.25       # Cost for acoustically similar pair
 # Repetition Penalties
 WRAP_PENALTY: float = 0.80                  # Regularization penalty to prevent false backward jumps
 WRAP_SPAN_WEIGHT: float = 0.05              # Additional cost per word spanned in backward jump
+
+# Word Coverage Filtering (Prevents false words and phantom repetitions from stray phonemes)
+MIN_WORD_COVERAGE: float = 0.35             # Minimum fraction of reference phonemes required to accept a word pass
 
 
 # ==============================================================================

@@ -18,6 +18,7 @@ Place your recitation audio (`audio.mp3`) in the project directory and run:
 python run.py --audio audio.mp3 --workers 4
 
 ```
+Speed varies between 20x-65x rtf 
 
 The resulting `output.json` contains full Ayah segments, word timestamps, and letter-level phoneme breakdowns.
 
@@ -32,5 +33,5 @@ Double-click or open `output/ui.html`
 
 
 
-* **Original Concept**:  by [Hetchy's Quranic Universal Aligner](https://huggingface.co/spaces/hetchyy/quranic-universal-aligner).
+
 **Model**: [Zipformer Arabic Tajweed Phoneme CTC Model](https://github.com/Iam-Muslim/QuranReciteToText/releases).
