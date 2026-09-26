@@ -20,6 +20,8 @@ class PhonemeToken:
     end_frame: Optional[int] = None
     peak_frame: Optional[int] = None
     peak_timestamp: Optional[float] = None
+    raw_start: Optional[float] = None
+    raw_end: Optional[float] = None
 
     @property
     def duration(self) -> float:
@@ -52,12 +54,15 @@ class PauseInterval:
     start_sec: float
     end_sec: float
     duration_sec: float
-    pause_type: str = "waqf"  # "waqf" (>= 0.50s) or "sakt" (0.25s - 0.50s)
+    pause_type: str = "waqf"  # "waqf" (>= 0.45s) or "sakt" (0.20s - 0.45s)
     min_energy_db: Optional[float] = None
+    cut_point: Optional[float] = None
 
     @property
     def optimal_cut_point(self) -> float:
-        """Midpoint of silence interval for safe zero-hazard splitting."""
+        """Exact click-free acoustic cut point or midpoint of silence interval."""
+        if self.cut_point is not None:
+            return round(self.cut_point, 3)
         return round((self.start_sec + self.end_sec) / 2.0, 3)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -66,6 +71,7 @@ class PauseInterval:
             "end": round(self.end_sec, 3),
             "duration": round(self.duration_sec, 3),
             "type": self.pause_type,
+            "cut_point": self.optimal_cut_point,
         }
         if self.min_energy_db is not None:
             d["min_energy_db"] = round(self.min_energy_db, 1)
@@ -157,6 +163,8 @@ class QuranWord:
     end: Optional[float] = None
     score: Optional[float] = None
     phonemes: Optional[List[Dict[str, Any]]] = None
+    raw_start: Optional[float] = None
+    raw_end: Optional[float] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {

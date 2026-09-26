@@ -141,7 +141,9 @@ class CtcViterbiAligner:
                 PhonemeToken(
                     phoneme=p.phoneme, start=p.start, end=p.end, confidence=p.confidence,
                     is_recovered=p.is_recovered, start_frame=p.start_frame,
-                    end_frame=p.end_frame, peak_frame=p.peak_frame, peak_timestamp=p.peak_timestamp
+                    end_frame=p.end_frame, peak_frame=p.peak_frame, peak_timestamp=p.peak_timestamp,
+                    raw_start=p.raw_start if p.raw_start is not None else p.start,
+                    raw_end=p.raw_end if p.raw_end is not None else p.end,
                 )
                 for p in target_phonemes
             ]
@@ -322,6 +324,8 @@ class CtcViterbiAligner:
                     end_frame=int(round(e_frame)),
                     peak_frame=int(peak_frames[i]),
                     peak_timestamp=round(pk_sec, 3),
+                    raw_start=target_phonemes[i].raw_start if target_phonemes[i].raw_start is not None else target_phonemes[i].start,
+                    raw_end=target_phonemes[i].raw_end if target_phonemes[i].raw_end is not None else target_phonemes[i].end,
                 )
             )
 

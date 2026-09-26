@@ -51,233 +51,13 @@ from src.models import (
     SpeechRecoveryResult,
 )
 from src.audio import AudioDecoder
+from src.vad import SpeechSegment, QuranSilenceVAD
 
 logger = logging.getLogger(__name__)
 
 FRAME_TIME_STEP = 0.04  # 10ms fbank hop x 4 subsampling = 40ms per encoder frame (25 Hz)
 CHUNK_LEN = 48         # decode chunk length in fbank frames (480ms)
 T_LEN = 61             # total chunk window including right context in fbank frames (610ms)
-
-
-@dataclass
-class SpeechSegment:
-    """Acoustically detected continuous speech segment with safe clamped context."""
-    segment_id: int
-    raw_start_sec: float
-    raw_end_sec: float
-    padded_start_sec: float
-    padded_end_sec: float
-    start_sample: int
-    end_sample: int
-
-    @property
-    def duration_sec(self) -> float:
-        return self.padded_end_sec - self.padded_start_sec
-
-
-class QuranSilenceSegmenter:
-    """Tajweed-aware acoustic silence segmenter.
-    
-    Features:
-    - Dual-threshold Schmitt trigger to prevent fluttering on soft Tajweed letters.
-    - Hangover buffer to ensure trailing Madd and Ghunnah are never cut.
-    - Rejection of micro-stops (< 250ms) to preserve Qalqalah consonant closures.
-    - Gap-clamped padding guaranteeing zero boundary overlap between chunks.
-    - Structured PauseInterval extraction (Waqf vs Sakt classification).
-    """
-
-    def __init__(
-        self,
-        sample_rate: int = SAMPLE_RATE,
-        frame_ms: float = 20.0,
-        min_pause_s: float = VAD_MIN_PAUSE_S,
-        onset_db: float = VAD_ONSET_DB,
-        offset_db: float = VAD_OFFSET_DB,
-        hangover_s: float = VAD_HANGOVER_S,
-        max_pad_s: float = VAD_MAX_PAD_S,
-        preroll_s: float = VAD_PREROLL_S,
-    ):
-        self.sr = sample_rate
-        self.frame_samples = int((frame_ms / 1000.0) * sample_rate)
-        self.min_pause_s = min_pause_s
-        self.hangover_frames = int(hangover_s / (frame_ms / 1000.0))
-        self.preroll_frames = int(preroll_s / (frame_ms / 1000.0))
-        self.max_pad_s = max_pad_s
-        self.onset_db = onset_db
-        self.offset_db = offset_db
-        self.pause_timestamps: List[float] = []
-        self.pause_intervals: List[PauseInterval] = []
-
-    def segment_audio(self, audio: np.ndarray) -> List[SpeechSegment]:
-        total_samples = len(audio)
-        total_duration = total_samples / self.sr
-        if total_samples == 0:
-            return []
-
-        # 1. Compute frame-level RMS energy in dB
-        num_frames = total_samples // self.frame_samples
-        if num_frames == 0:
-            return [
-                SpeechSegment(
-                    segment_id=1,
-                    raw_start_sec=0.0,
-                    raw_end_sec=total_duration,
-                    padded_start_sec=0.0,
-                    padded_end_sec=total_duration,
-                    start_sample=0,
-                    end_sample=total_samples,
-                )
-            ]
-
-        reshaped = audio[:num_frames * self.frame_samples].reshape(num_frames, self.frame_samples)
-        rms = np.sqrt(np.einsum('ij,ij->i', reshaped, reshaped) / self.frame_samples + 1e-12)
-        rms_db = 20.0 * np.log10(np.maximum(rms, 1e-5))
-
-        # Apply a 5-frame (100ms) median filter to remove micro-glitches and breath spikes
-        try:
-            from scipy.ndimage import median_filter
-            energy_curve = median_filter(rms_db, size=5)
-        except Exception:
-            energy_curve = rms_db
-
-        # Dynamic noise-floor adaptation (calibrates thresholds to audio recording's dynamic range)
-        if getattr(config, "VAD_ADAPTIVE", True):
-            p15 = float(np.percentile(energy_curve, 15))
-            p85 = float(np.percentile(energy_curve, 85))
-            dr = max(6.0, p85 - p15)
-            onset_th = max(self.onset_db, p15 + 0.38 * dr)
-            offset_th = max(self.offset_db, p15 + 0.22 * dr)
-        else:
-            onset_th = self.onset_db
-            offset_th = self.offset_db
-
-        # 2. Dual-threshold state machine with hangover
-        is_speech = np.zeros(num_frames, dtype=bool)
-        in_speech = False
-        silence_count = 0
-
-        for t in range(num_frames):
-            e = energy_curve[t]
-            if not in_speech:
-                if e >= onset_th:
-                    in_speech = True
-                    is_speech[t] = True
-                    silence_count = 0
-            else:
-                if e >= offset_th:
-                    is_speech[t] = True
-                    silence_count = 0
-                else:
-                    silence_count += 1
-                    if silence_count <= self.hangover_frames:
-                        is_speech[t] = True  # Hangover protection
-                    else:
-                        in_speech = False
-
-        # 3. Extract continuous speech intervals with pre-roll protection
-        raw_intervals: List[Tuple[float, float]] = []
-        seg_start = None
-        for t in range(num_frames):
-            if is_speech[t] and seg_start is None:
-                seg_start = max(0, t - self.preroll_frames)
-            elif not is_speech[t] and seg_start is not None:
-                raw_intervals.append((
-                    seg_start * self.frame_samples / self.sr,
-                    t * self.frame_samples / self.sr
-                ))
-                seg_start = None
-
-        if seg_start is not None:
-            raw_intervals.append((seg_start * self.frame_samples / self.sr, total_duration))
-
-        if not raw_intervals:
-            self.pause_timestamps = []
-            self.pause_intervals = []
-            return [
-                SpeechSegment(
-                    segment_id=1,
-                    raw_start_sec=0.0,
-                    raw_end_sec=total_duration,
-                    padded_start_sec=0.0,
-                    padded_end_sec=total_duration,
-                    start_sample=0,
-                    end_sample=total_samples,
-                )
-            ]
-
-        # 4. Merge micro-gaps (< min_pause_s) to preserve Qalqalah stop closures & extract fine pause moments
-        merged_intervals: List[Tuple[float, float]] = []
-        pause_intervals: List[PauseInterval] = []
-        pause_timestamps: List[float] = []
-        agg_pause = getattr(config, "AGGRESSIVE_MIN_PAUSE_S", 0.20)
-        min_pause_filter = max(0.25, agg_pause)
-
-        for s, e in raw_intervals:
-            if not merged_intervals:
-                merged_intervals.append((s, e))
-            else:
-                prev_s, prev_e = merged_intervals[-1]
-                gap = s - prev_e
-                if gap >= min_pause_filter:
-                    p_type = "waqf" if gap >= self.min_pause_s else "sakt"
-                    s_idx = max(0, int((prev_e * self.sr) / self.frame_samples))
-                    e_idx = min(len(energy_curve), int((s * self.sr) / self.frame_samples))
-                    min_e = float(np.min(energy_curve[s_idx:e_idx])) if (e_idx > s_idx and len(energy_curve) > 0) else None
-
-                    interval = PauseInterval(
-                        start_sec=round(prev_e, 3),
-                        end_sec=round(s, 3),
-                        duration_sec=round(gap, 3),
-                        pause_type=p_type,
-                        min_energy_db=min_e,
-                    )
-                    pause_intervals.append(interval)
-                    pause_timestamps.append(interval.optimal_cut_point)
-
-                if gap < self.min_pause_s:
-                    merged_intervals[-1] = (prev_s, e)
-                else:
-                    merged_intervals.append((s, e))
-
-        self.pause_intervals = pause_intervals
-        self.pause_timestamps = pause_timestamps
-
-        # 5. Apply Gap-Clamped Padding (guarantees zero boundary overlap between chunks)
-        segments: List[SpeechSegment] = []
-        num_merged = len(merged_intervals)
-
-        for i, (raw_s, raw_e) in enumerate(merged_intervals):
-            gap_before = (raw_s - merged_intervals[i - 1][1]) if i > 0 else 10.0
-            gap_after = (merged_intervals[i + 1][0] - raw_e) if i < num_merged - 1 else 10.0
-
-            pad_left = min(self.max_pad_s, max(0.0, gap_before / 2.0))
-            pad_right = min(self.max_pad_s, max(0.0, gap_after / 2.0))
-
-            padded_s = max(0.0, raw_s - pad_left)
-            padded_e = min(total_duration, raw_e + pad_right)
-
-            # Snap to exact 40ms encoder frame boundaries (640 audio samples = 4 fbank frames = 1 encoder frame)
-            # This completely eliminates sub-frame phase jitter and time-quantization drift at segment boundaries
-            FRAME_SAMPLES = int(round(FRAME_TIME_STEP * self.sr))  # 640 samples (40ms)
-            start_sample = int(math.floor((padded_s * self.sr) / FRAME_SAMPLES)) * FRAME_SAMPLES
-            end_sample = min(total_samples, int(math.ceil((padded_e * self.sr) / FRAME_SAMPLES)) * FRAME_SAMPLES)
-
-            aligned_padded_s = start_sample / self.sr
-            aligned_padded_e = end_sample / self.sr
-
-            segments.append(
-                SpeechSegment(
-                    segment_id=i + 1,
-                    raw_start_sec=round(raw_s, 3),
-                    raw_end_sec=round(raw_e, 3),
-                    padded_start_sec=round(aligned_padded_s, 4),
-                    padded_end_sec=round(aligned_padded_e, 4),
-                    start_sample=start_sample,
-                    end_sample=end_sample,
-                )
-            )
-
-        return segments
 
 
 class ZipformerONNX:
@@ -548,7 +328,6 @@ class ZipformerONNX:
         silence_pad_frames: Optional[int] = None,
         on_progress=None,
         reset_on_silence: Optional[bool] = None,
-        min_blank_chunks: Optional[int] = None,
     ) -> RawTranscriptionResult:
         """Transcribes audio using global Fbank caching, Tajweed pause segmentation & zero-drift segment feeding."""
         if self.session is None or len(audio) == 0:
@@ -557,11 +336,9 @@ class ZipformerONNX:
         audio_pcm = audio.astype(np.float32, copy=False)
         audio_duration = len(audio_pcm) / sample_rate
 
-        # 1. Segment audio on natural Waqf pauses & extract fine pause moments in a single pass
-        segmenter = QuranSilenceSegmenter(sample_rate=sample_rate)
-        segments = segmenter.segment_audio(audio_pcm)
-        pause_timestamps = segmenter.pause_timestamps
-        pause_intervals = segmenter.pause_intervals
+        # 1. Unified Tajweed pause & silence detection
+        vad = QuranSilenceVAD(sample_rate=sample_rate)
+        segments, pause_intervals, pause_timestamps = vad.detect_speech_and_pauses(audio_pcm)
 
         # 2. Extract Mel Filterbank ONCE globally across entire audio (blazing fast in C++)
         global_feats = self._extract_fbank(audio_pcm)

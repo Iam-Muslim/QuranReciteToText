@@ -63,20 +63,26 @@ LOOKAHEAD_OFFSET_FRAMES: float = 1.5        # -60ms streaming lookahead delay co
 
 
 # ==============================================================================
-# 6. PHASE 1 ASR & ACOUSTIC SILENCE SEGMENTATION (VAD)
+# 6. UNIFIED TAJWEED ACOUSTIC SILENCE & PAUSE ENGINE (VAD)
 # ==============================================================================
-VAD_MIN_PAUSE_S: float = 0.50               # Natural Waqf pause threshold (seconds; prevents intra-Ayah splits)
+VAD_BACKEND: str = "silero_dual_check"                  # "energy" (ultra-fast 45ms vectorized) or "silero_dual_check"
+VAD_SILERO_THRESHOLD: float = 0.45          # Silero speech onset probability threshold
+VAD_MADD_PERIODICITY_TH: float = 0.45       # Normalized autocorrelation peak for held Madd ("ييييي")
+VAD_MADD_MIN_ENERGY_DB: float = -38.0       # Minimum floor dB for held letter detection
+VAD_MIN_PAUSE_S: float = 0.38               # Natural Waqf pause threshold (seconds; prevents intra-Ayah splits)
+VAD_SAKT_MIN_PAUSE_S: float = 0.20          # Sakt pause detection threshold (seconds)
+VAD_CLOSURE_MAX_S: float = 0.16             # Max intra-word stop closure / Qalqalah bridge (seconds)
 VAD_ADAPTIVE: bool = True                   # Dynamic noise-floor adaptation (works on studio & noisy phone audio)
 VAD_ONSET_DB: float = -35.0                 # Fallback speech onset energy threshold (dB)
 VAD_OFFSET_DB: float = -42.0                # Fallback speech offset energy threshold (dB)
-VAD_HANGOVER_S: float = 0.20                # Hangover buffer (protecting soft Madd & Ghunnah tails)
-VAD_MAX_PAD_S: float = 0.25                 # Post-roll margin (250ms)
-VAD_PREROLL_S: float = 0.20                 # Pre-roll margin (200ms for cold-start priming)
-FLUSH_PAD_FRAMES: int = 28                  # Optimal tail flush padding (280ms silence to emit delayed CTC spikes)
+VAD_HANGOVER_S: float = 0.08                # Hangover buffer (protecting soft Madd & Ghunnah tails)
+VAD_MAX_PAD_S: float = 0.08                 # Post-roll margin (80ms; protects boundaries without eating silence)
+VAD_PREROLL_S: float = 0.06                 # Pre-roll margin (60ms for cold-start priming)
+FLUSH_PAD_FRAMES: int = 16                  # Optimal tail flush padding (160ms silence to emit delayed CTC spikes)
 
 # Encoder state reset at Waqf boundaries (prevents repetition skipping / attention saturation)
 RESET_ENCODER_ON_SILENCE: bool = True
-AGGRESSIVE_MIN_PAUSE_S: float = 0.20        # Sakt & fine pause detection threshold (seconds)
+SUBSEGMENT_MIN_PAUSE_S: float = 0.20        # Minimum pause duration (seconds) to split an Ayah into a Subsegment
 
 
 # ==============================================================================

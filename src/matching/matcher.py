@@ -56,7 +56,9 @@ class MatcherConfig:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _build_qword(rw: RefWord, tokens: List[PhonemeToken], score: float) -> QuranWord:
-    """Creates a unified QuranWord instance with phoneme breakdown."""
+    """Creates a unified QuranWord instance with phoneme breakdown and raw ASR bounds."""
+    r_start = tokens[0].raw_start if tokens[0].raw_start is not None else tokens[0].start
+    r_end = tokens[-1].raw_end if tokens[-1].raw_end is not None else tokens[-1].end
     return QuranWord(
         word=rw.uthmani,
         location=rw.location,
@@ -65,6 +67,8 @@ def _build_qword(rw: RefWord, tokens: List[PhonemeToken], score: float) -> Quran
         end=round(tokens[-1].end, 2),
         score=round(score, 2),
         phonemes=[t.to_dict() for t in tokens],
+        raw_start=round(r_start, 3),
+        raw_end=round(r_end, 3),
     )
 
 
@@ -242,6 +246,7 @@ def _align_and_package_ayahs(
         sub_segs_list: List[AyahSubSegment] = []
         pauses = pause_timestamps or []
         intervals = pause_intervals or []
+        min_sub_pause = getattr(config, "SUBSEGMENT_MIN_PAUSE_S", 0.20)
 
         def _build_sub(pass_words: List[QuranWord], is_rep: bool) -> AyahSubSegment:
             sub_asr = " ".join("".join(p.get("phoneme", "") for p in (w.phonemes or [])) for w in pass_words if w.phonemes)
@@ -255,48 +260,74 @@ def _align_and_package_ayahs(
                 words=pass_words,
             )
 
-        def _has_pause_between(w_prev: QuranWord, w_curr: QuranWord) -> bool:
+        def _find_pause_cut(w_prev: QuranWord, w_curr: QuranWord) -> Optional[float]:
+            # Raw ASR bounds (before forced alignment) where acoustic pauses actually sit in <blank> frames
+            w_prev_raw_e = w_prev.raw_end if w_prev.raw_end is not None else (w_prev.end or 0.0)
+            w_curr_raw_s = w_curr.raw_start if w_curr.raw_start is not None else (w_curr.start or 0.0)
+
+            w_prev_s = w_prev.start or 0.0
             w_prev_e = w_prev.end or 0.0
+            w_curr_s = w_curr.start or 0.0
             w_curr_e = w_curr.end or 0.0
 
-            tol = 0.15  # 150ms tolerance for CTC boundary quantization
+            mid_prev = (w_prev_s + w_prev_e) / 2.0
+            mid_curr = (w_curr_s + w_curr_e) / 2.0
+            if mid_curr <= mid_prev:
+                return None
 
             if intervals:
                 for p in intervals:
-                    # 1. Minimum pause duration threshold
-                    min_dur = 0.25 if p.pause_type == "sakt" else 0.35
-                    if p.duration_sec < min_dur:
+                    if p.duration_sec < min_sub_pause:
                         continue
+                    cut = p.optimal_cut_point
 
-                    # 2. w_prev must finish before or around the end of the pause
-                    # (Prevents false cuts on subsequent words where w_prev.end > p.end_sec)
-                    if w_prev_e > (p.end_sec + tol):
-                        continue
+                    # 1. Primary check using raw CTC ASR time before forced alignment:
+                    # In raw ASR time, w_prev_raw_e is when speech stopped and w_curr_raw_s is when speech started.
+                    # The pause valley 'cut' sits cleanly between the two raw speech emissions.
+                    if (w_prev_raw_e - 0.08) <= cut <= (w_curr_raw_s + 0.08) and (mid_prev < cut < mid_curr):
+                        return cut
 
-                    # 3. w_curr must extend past the pause
-                    # (Ensures w_curr is the word after the pause, not before it)
-                    if w_curr_e < (p.end_sec - tol):
-                        continue
+                    # 2. Interval overlap check in raw ASR time:
+                    # Pause interval begins after w_prev raw speech and ends before w_curr raw speech
+                    if (p.start_sec >= w_prev_raw_e - 0.12) and (p.end_sec <= w_curr_raw_s + 0.12):
+                        if mid_prev < cut < mid_curr:
+                            return cut
 
-                    # 4. The boundary between the two words must lie inside or at the edges of the pause
-                    # Even when w_curr absorbed the silence (w_curr.start == w_prev.end == p.start_sec),
-                    # this correctly evaluates to True.
-                    if (p.start_sec - tol) <= w_prev_e <= (p.end_sec + tol):
-                        return True
-
-                return False
+                    # 3. Geometric fallback: cut point sits safely between the word boundaries
+                    if cut > (w_prev_s + 0.04) and cut < (w_curr_e - 0.04) and (mid_prev < cut < mid_curr):
+                        if (p.start_sec - 0.15) <= w_prev_e and (p.end_sec + 0.15) >= w_curr_s:
+                            return cut
             elif pauses:
                 for pt in pauses:
-                    if (w_prev_e - tol) <= pt <= (w_curr_e + tol):
-                        return True
-            return False
+                    if (w_prev_raw_e - 0.08) <= pt <= (w_curr_raw_s + 0.08) and (mid_prev < pt < mid_curr):
+                        return pt
+                    if mid_prev < pt < mid_curr and pt > (w_prev_s + 0.04) and pt < (w_curr_e - 0.04):
+                        return pt
+
+            return None
 
         for pass_words, is_rep in passes:
             current_chunk: List[QuranWord] = []
             for w in pass_words:
                 if current_chunk:
                     prev_w = current_chunk[-1]
-                    if _has_pause_between(prev_w, w):
+                    cut = _find_pause_cut(prev_w, w)
+                    if cut is not None:
+                        # Snap acoustic boundary cleanly to the silence cut point
+                        if prev_w.end and prev_w.end > cut:
+                            prev_w.end = round(cut, 2)
+                            if prev_w.phonemes:
+                                prev_w.phonemes[-1]["end"] = round(cut, 2)
+                                if prev_w.phonemes[-1]["start"] >= prev_w.end:
+                                    prev_w.phonemes[-1]["start"] = max(prev_w.start or 0.0, round(prev_w.end - 0.04, 2))
+
+                        if w.start and w.start < cut:
+                            w.start = round(cut, 2)
+                            if w.phonemes:
+                                w.phonemes[0]["start"] = round(cut, 2)
+                                if w.phonemes[0]["end"] <= w.start:
+                                    w.phonemes[0]["end"] = min(w.end or 999999.0, round(w.start + 0.04, 2))
+
                         sub_segs_list.append(_build_sub(current_chunk, is_rep))
                         current_chunk = []
 
@@ -328,6 +359,10 @@ def _align_and_package_ayahs(
             sub_segments=sub_segments,
         ))
         seg_number += 1
+
+    if pause_intervals and len(segments) > 1:
+        from src.vad import align_ayah_boundaries
+        align_ayah_boundaries(segments, pause_intervals)
 
     return segments
 
