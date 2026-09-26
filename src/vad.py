@@ -450,8 +450,9 @@ class QuranSilenceVAD:
                     pause_intervals.append(interval)
                     pause_timestamps.append(interval.optimal_cut_point)
 
-                # For model chunking: split speech segments upon each validated pause (>= min_sakt_s)
-                if gap < self.min_sakt_s:
+                # For model chunking: split speech segments only upon true Waqf pauses (>= min_pause_s, 0.50s)
+                # Keep subsegment/sakt detection for timestamps, but do NOT over-fragment model feeding
+                if gap < self.min_pause_s:
                     merged_for_model[-1] = (prev_s, e)
                 else:
                     merged_for_model.append((s, e))
