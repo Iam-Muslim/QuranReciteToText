@@ -89,6 +89,7 @@ class RawTranscriptionResult:
     vocab_size: int = 251
     pause_timestamps: List[float] = field(default_factory=list)
     pause_intervals: List[PauseInterval] = field(default_factory=list)
+    vad_time: float = 0.0
 
     @property
     def raw_text(self) -> str:
@@ -259,6 +260,7 @@ class PipelineProfiling:
     """Profiling breakdown for all pipeline stages."""
     audio_duration: float = 0.0
     load_time: float = 0.0
+    vad_time: float = 0.0
     asr_time: float = 0.0
     recovery_time: float = 0.0
     alignment_time: float = 0.0
@@ -350,6 +352,7 @@ class PipelineStage(str, Enum):
     """Processing stages for progress callbacks."""
     idle = "idle"
     loading = "loading"
+    vad = "vad"
     transcribing = "transcribing"
     recovering = "recovering"
     aligning = "aligning"

@@ -76,10 +76,10 @@ def _get_silero_session():
         if not model_path:
             model_path = getattr(config, "DEFAULT_SILERO_PATH", os.path.join("data", "onnx", "silero_vad_half.onnx"))
             os.makedirs(os.path.dirname(model_path), exist_ok=True)
-            logger.info(f"[*] Downloading Silero VAD ONNX model (~1.3 MB) from {SILERO_VAD_URL}...")
+            logger.info(f"Downloading Silero VAD ONNX model (~1.3 MB) from {SILERO_VAD_URL}...")
             try:
                 urllib.request.urlretrieve(SILERO_VAD_URL, model_path)
-                logger.info("[*] Silero VAD ONNX model downloaded successfully.")
+                logger.info("Silero VAD ONNX model downloaded successfully.")
             except Exception as e:
                 logger.warning(f"Failed to auto-download Silero VAD ONNX model: {e}")
                 return None, None

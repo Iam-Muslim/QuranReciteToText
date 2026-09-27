@@ -76,7 +76,7 @@ def main():
     from src.audio import AudioDecoder
 
     if not args.progress:
-        print("[*] Initializing pipeline and decoding audio...", flush=True)
+        print("Initializing pipeline and decoding audio...", flush=True)
 
     pipeline = AudioPipeline()
     pipeline.initialize(num_threads=threads)
@@ -92,7 +92,6 @@ def main():
         print("=" * 55)
         print(f"Audio Duration      : {audio_duration:.2f}s", flush=True)
         print(f"Startup & Preload   : {startup_time:.2f}s", flush=True)
-        print(f"Concurrency         : {workers} Workers x {threads} Threads{' (Fast Mode)' if args.fast else ''}", flush=True)
 
     result = pipeline.process_pcm(
         audio_pcm=audio_pcm,

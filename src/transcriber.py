@@ -82,9 +82,9 @@ class ZipformerONNX:
         if not os.path.exists(DEFAULT_MODEL_PATH):
             os.makedirs(os.path.dirname(DEFAULT_MODEL_PATH), exist_ok=True)
             url = "https://github.com/Iam-Muslim/Natlu/releases/download/models-latest/zipformer_p_arabic_v3.int8.onnx"
-            logger.info(f"[*] Downloading Zipformer ONNX model from {url}...")
+            logger.info(f"Downloading Zipformer ONNX model from {url}...")
             urllib.request.urlretrieve(url, DEFAULT_MODEL_PATH)
-            logger.info("[*] Zipformer ONNX model downloaded successfully.")
+            logger.info("Zipformer ONNX model downloaded successfully.")
 
         sess_opts = ort.SessionOptions()
         sess_opts.log_severity_level = 3
@@ -350,6 +350,7 @@ class ZipformerONNX:
         sample_rate: int = SAMPLE_RATE,
         silence_pad_frames: Optional[int] = None,
         on_progress=None,
+        on_vad_done=None,
         reset_on_silence: Optional[bool] = None,
     ) -> RawTranscriptionResult:
         """Transcribes audio using global Fbank caching, Tajweed pause segmentation & zero-drift segment feeding."""
@@ -360,14 +361,19 @@ class ZipformerONNX:
         audio_duration = len(audio_pcm) / sample_rate
 
         # 1. Unified Tajweed pause & silence detection
+        vad_start = time.time()
         vad = QuranSilenceVAD(sample_rate=sample_rate)
         segments, pause_intervals, pause_timestamps = vad.detect_speech_and_pauses(audio_pcm)
+        vad_time = max(0.0, time.time() - vad_start)
+
+        if on_vad_done is not None:
+            on_vad_done(vad_time)
 
         # 2. Extract Mel Filterbank ONCE globally across entire audio (blazing fast in C++)
         global_feats = self._extract_fbank(audio_pcm)
         total_fbank_frames = len(global_feats)
         if total_fbank_frames == 0:
-            return RawTranscriptionResult(vocab_size=len(self.vocab))
+            return RawTranscriptionResult(vocab_size=len(self.vocab), vad_time=vad_time)
 
         del audio_pcm
 
@@ -503,6 +509,7 @@ class ZipformerONNX:
             vocab_size=vocab_size,
             pause_timestamps=pause_timestamps,
             pause_intervals=pause_intervals,
+            vad_time=vad_time,
         )
 
 
