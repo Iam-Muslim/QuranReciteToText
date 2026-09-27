@@ -410,7 +410,7 @@ class ZipformerONNX:
             return s_idx, seg_lp, seg_phonemes
 
         if use_parallel:
-            completed_count = 0
+            completed_dur = 0.0
             # Pre-allocate exactly one state buffer per worker thread (saves ~10.5s of heap allocations)
             buffer_pool = queue.SimpleQueue()
             for _ in range(num_workers):
@@ -431,10 +431,10 @@ class ZipformerONNX:
                     s_idx, seg_lp, seg_phonemes = fut.result()
                     results_by_idx[s_idx] = (seg_lp, seg_phonemes)
                     if on_progress is not None:
-                        completed_count += 1
-                        pct = min(100.0, (completed_count / max(1, num_segments)) * 100.0)
+                        completed_dur += segments[s_idx].duration_sec
+                        pct = min(100.0, (completed_dur / max(0.001, audio_duration)) * 100.0)
                         elp = max(0.001, time.time() - start_time)
-                        spd = (completed_count / max(1, num_segments) * audio_duration) / elp
+                        spd = completed_dur / elp
                         on_progress(pct, spd, elp)
         else:
             # Single-worker mode: 100% zero extra heap allocation with in-place buffer reuse

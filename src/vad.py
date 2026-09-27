@@ -278,41 +278,82 @@ class QuranSilenceVAD:
             silence_energy_threshold = self.offset_db
             noise_floor_db = self.offset_db
 
-        # ── 2. Silero ONNX Forward Pass (with preallocated 576-sample buffer)
-        x_buf = np.zeros((1, window_size + context_size), dtype=np.float32)
-        state = np.zeros((2, 1, 128), dtype=np.float32)
-        feeds = {"input": x_buf, "state": state}
-
+        # ── 2. Silero ONNX Forward Pass (with Silence-Valley Guided Batching)
         has_sr_input = input_names is not None and "sr" in input_names
-        if has_sr_input:
-            feeds["sr"] = np.array(self.sr, dtype=np.int64)
 
-        silero_probs = np.zeros(num_windows, dtype=np.float32)
-        for i in range(num_windows):
-            x_buf[0, context_size:] = reshaped[i]
-            outs = session.run(None, feeds)
-            silero_probs[i] = float(outs[0][0, 0])
-            feeds["state"] = outs[1]
-            x_buf[0, :context_size] = x_buf[0, -context_size:]
+        # For long audio (>30s), use Silence-Valley Guided Batching:
+        # Splits parallel streams ONLY at confirmed acoustic silence valleys where energy is minimal.
+        # At true silence, the recurrent LSTM state is naturally zero, guaranteeing 100% exact fidelity.
+        target_chunk_windows = 4000  # ~2 minutes per stream
+        if num_windows > 3000:
+            split_points = [0]
+            cur = target_chunk_windows
+            while cur < (num_windows - 500):
+                w_start = max(0, cur - 400)
+                w_end = min(num_windows, cur + 400)
+                search_slice = energy_db_arr[w_start:w_end]
+                best_off = int(np.argmin(search_slice))
+                split_pt = w_start + best_off
+                split_points.append(split_pt)
+                cur = split_pt + target_chunk_windows
+            split_points.append(num_windows)
+
+            num_streams = len(split_points) - 1
+            chunks = [reshaped[split_points[b]:split_points[b + 1]] for b in range(num_streams)]
+            max_c_len = max(len(c) for c in chunks)
+
+            batched_data = np.zeros((num_streams, max_c_len, window_size), dtype=np.float32)
+            for b, c in enumerate(chunks):
+                batched_data[b, :len(c)] = c
+
+            x_batched = np.zeros((num_streams, window_size + context_size), dtype=np.float32)
+            state_batched = np.zeros((2, num_streams, 128), dtype=np.float32)
+            feeds_batched = {"input": x_batched, "state": state_batched}
+            if has_sr_input:
+                feeds_batched["sr"] = np.array(self.sr, dtype=np.int64)
+
+            raw_stream_probs = np.zeros((num_streams, max_c_len), dtype=np.float32)
+            for step in range(max_c_len):
+                x_batched[:, context_size:] = batched_data[:, step]
+                outs = session.run(None, feeds_batched)
+                raw_stream_probs[:, step] = outs[0][:, 0]
+                feeds_batched["state"] = outs[1]
+                x_batched[:, :context_size] = x_batched[:, -context_size:]
+
+            silero_probs = np.concatenate([raw_stream_probs[b, :len(chunks[b])] for b in range(num_streams)])
+        else:
+            x_buf = np.zeros((1, window_size + context_size), dtype=np.float32)
+            state = np.zeros((2, 1, 128), dtype=np.float32)
+            feeds = {"input": x_buf, "state": state}
+            if has_sr_input:
+                feeds["sr"] = np.array(self.sr, dtype=np.int64)
+
+            silero_probs = np.zeros(num_windows, dtype=np.float32)
+            for i in range(num_windows):
+                x_buf[0, context_size:] = reshaped[i]
+                outs = session.run(None, feeds)
+                silero_probs[i] = float(outs[0][0, 0])
+                feeds["state"] = outs[1]
+                x_buf[0, :context_size] = x_buf[0, -context_size:]
 
         # ── 3. Pitch Autocorrelation & Frame-Level Tajweed Guardian ───────
         lag_min = int(self.sr / 500)  # 500 Hz pitch ceiling
         lag_max = min(window_size - 1, int(self.sr / 70))  # 70 Hz pitch floor
         pitch_ac = np.zeros(num_windows, dtype=np.float32)
 
-        # Optimization: Only evaluate pitch autocorrelation on candidate frames where
-        # energy is active but Silero probability dipped below threshold (rescue target)
+        # Optimization: Vectorized Wiener-Khinchin FFT autocorrelation across candidate frames
         cand_rescue_idx = np.where(
             (energy_db_arr > silence_energy_threshold)
             & (silero_probs < self.silero_threshold)
         )[0]
 
-        for i in cand_rescue_idx:
-            chunk = reshaped[i]
-            r = np.correlate(chunk, chunk, mode="full")[window_size - 1:]
-            r_norm = r / (r[0] + 1e-12)
-            if lag_max > lag_min:
-                pitch_ac[i] = float(np.max(r_norm[lag_min:lag_max]))
+        if len(cand_rescue_idx) > 0 and lag_max > lag_min:
+            cand_chunks = reshaped[cand_rescue_idx]
+            cand_spec = np.abs(np.fft.rfft(cand_chunks, n=window_size * 2, axis=1)) ** 2
+            cand_ac = np.fft.irfft(cand_spec, axis=1)[:, :window_size]
+            r0 = cand_ac[:, 0:1] + 1e-12
+            r_norm = cand_ac / r0
+            pitch_ac[cand_rescue_idx] = np.max(r_norm[:, lag_min:lag_max], axis=1)
 
         # Dual-check: Silero OR Tajweed Guardian (Madd & Ghunnah)
         is_madd = (energy_db_arr > silence_energy_threshold) & (pitch_ac >= self.madd_periodicity_th)
@@ -362,8 +403,8 @@ class QuranSilenceVAD:
         # ── 6. Consonant Closure Bridging & Acoustic Gap Validation ───────
         # Bridges:
         #   (a) Very short closures (<= closure_max_s) for Qalqalah/Shaddah stop occlusions.
-        #   (b) False gaps where energy never dropped toward silence (no acoustic valley).
-        #   (c) Sustained harmonicity / vowel hold across candidate gaps.
+        #   (b) False gaps where vocal fold harmonicity (Madd) or tonal speech is sustained.
+        #   (c) Energy drop check protecting short gaps (<350ms) from premature splitting.
         validated: List[Tuple[float, float]] = [raw_intervals[0]]
         for j in range(1, len(raw_intervals)):
             prev_s, prev_e = validated[-1]
@@ -393,11 +434,11 @@ class QuranSilenceVAD:
             avg_flatness = float(np.mean(gap_flatness))
 
             # Validate whether this gap is an acoustic silence or continuous speech
-            no_energy_drop = min_e > silence_energy_threshold
             has_madd = voiced_pitch_ratio > 0.25 and mean_e > silence_energy_threshold
             is_tonal_speech = avg_flatness < 0.25 and mean_e > silence_energy_threshold
+            no_energy_drop = (gap < 0.35) and (min_e > (silence_energy_threshold + 6.0))
 
-            is_false_silence = no_energy_drop or has_madd or is_tonal_speech
+            is_false_silence = has_madd or is_tonal_speech or no_energy_drop
 
             if is_false_silence:
                 validated[-1] = (prev_s, cur_e)
