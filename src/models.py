@@ -180,41 +180,41 @@ class QuranWord:
 
 
 def enforce_word_phoneme_monotonicity(word: 'QuranWord') -> None:
-    """Cascades boundary adjustments through all phonemes in a word to prevent internal overlaps.
+    """Cascades boundary adjustments through all phonemes in a word to ensure contiguity and prevent internal overlaps.
 
-    After any external adjustment to a word's start/end or its boundary phonemes,
-    this function ensures ALL internal phonemes maintain strict monotonic ordering:
-    phoneme[i].end <= phoneme[i+1].start, and all phonemes stay within [word.start, word.end].
+    Inside a single word, continuous speech dictates that phonemes are strictly contiguous:
+    phoneme[i].start == phoneme[i-1].end, perfectly bridging [word.start, word.end] with NO gaps.
     """
     if not word.phonemes or len(word.phonemes) < 2:
         return
     w_start = word.start if word.start is not None else 0.0
     w_end = word.end if word.end is not None else word.phonemes[-1].get("end", 0.0)
 
-    # Clamp first phoneme to word start
-    if word.phonemes[0]["start"] < w_start:
-        word.phonemes[0]["start"] = round(w_start, 3)
+    # Pin first phoneme to word start
+    word.phonemes[0]["start"] = round(w_start, 2)
     if word.phonemes[0]["end"] <= word.phonemes[0]["start"]:
-        word.phonemes[0]["end"] = round(word.phonemes[0]["start"] + 0.030, 3)
+        word.phonemes[0]["end"] = round(word.phonemes[0]["start"] + 0.060, 2)
 
-    # Forward pass: each phoneme starts at or after previous phoneme's end
+    # Forward pass: ensure contiguity within the word
     for i in range(1, len(word.phonemes)):
-        if word.phonemes[i]["start"] < word.phonemes[i - 1]["end"]:
-            word.phonemes[i]["start"] = round(word.phonemes[i - 1]["end"], 3)
+        # Bridge any internal gap or resolve overlap
+        word.phonemes[i]["start"] = word.phonemes[i - 1]["end"]
         if word.phonemes[i]["end"] <= word.phonemes[i]["start"]:
-            word.phonemes[i]["end"] = round(word.phonemes[i]["start"] + 0.030, 3)
+            word.phonemes[i]["end"] = round(word.phonemes[i]["start"] + 0.060, 2)
 
-    # Clamp last phoneme to word end
-    if word.phonemes[-1]["end"] > w_end:
-        word.phonemes[-1]["end"] = round(w_end, 3)
+    # Pin last phoneme to word end if word.end is set and greater than last start
+    if word.phonemes[-1]["end"] != round(w_end, 2) and round(w_end, 2) > word.phonemes[-1]["start"]:
+        word.phonemes[-1]["end"] = round(w_end, 2)
 
-    # Backward pass: fix any reverse overlaps from the end clamp
+    # Backward pass: resolve if end was clamped below start
     for i in range(len(word.phonemes) - 2, -1, -1):
         if word.phonemes[i]["end"] > word.phonemes[i + 1]["start"]:
-            word.phonemes[i]["end"] = round(word.phonemes[i + 1]["start"], 3)
+            word.phonemes[i]["end"] = word.phonemes[i + 1]["start"]
         if word.phonemes[i]["start"] >= word.phonemes[i]["end"]:
-            prev_end = word.phonemes[i - 1]["end"] if i > 0 else w_start
-            word.phonemes[i]["start"] = round(max(prev_end, word.phonemes[i]["end"] - 0.030), 3)
+            prev_end = word.phonemes[i - 1]["end"] if i > 0 else round(w_start, 2)
+            word.phonemes[i]["start"] = round(max(prev_end, word.phonemes[i]["end"] - 0.060), 2)
+            if i > 0:
+                word.phonemes[i - 1]["end"] = word.phonemes[i]["start"]
 
 
 @dataclass

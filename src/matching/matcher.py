@@ -61,7 +61,7 @@ def _build_qword(rw: RefWord, tokens: List[PhonemeToken], score: float) -> Quran
     """Creates a unified QuranWord instance with phoneme breakdown and raw ASR bounds."""
     r_start = tokens[0].raw_start if tokens[0].raw_start is not None else tokens[0].start
     r_end = tokens[-1].raw_end if tokens[-1].raw_end is not None else tokens[-1].end
-    return QuranWord(
+    qw = QuranWord(
         word=rw.uthmani,
         location=rw.location,
         ref=rw.phoneme,
@@ -72,6 +72,8 @@ def _build_qword(rw: RefWord, tokens: List[PhonemeToken], score: float) -> Quran
         raw_start=round(r_start, 3),
         raw_end=round(r_end, 3),
     )
+    enforce_word_phoneme_monotonicity(qw)
+    return qw
 
 
 def _align_and_package_ayahs(
