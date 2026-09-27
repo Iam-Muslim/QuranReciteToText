@@ -19,13 +19,44 @@ if str(_app_path) not in sys.path:
     sys.path.insert(0, str(_app_path))
 
 
+def get_hardware_topology() -> tuple[int, int]:
+    """Detects physical and logical CPU cores."""
+    try:
+        import psutil
+        phys = psutil.cpu_count(logical=False) or 4
+        log = psutil.cpu_count(logical=True) or 8
+    except Exception:
+        log = os.cpu_count() or 4
+        phys = max(1, log // 2)
+    return phys, log
+
+
+def resolve_concurrency(fast: bool, user_workers: int | None, user_threads: int | None) -> tuple[int, int]:
+    """Resolves optimal (workers, threads) based on hardware topology and CLI flags."""
+    phys, log = get_hardware_topology()
+    if fast:
+        # Fast mode: scale workers to physical cores (capped at 8), use 2 threads when SMT is available
+        opt_workers = min(max(1, phys), 8)
+        opt_threads = 2 if log >= (opt_workers * 2) else (2 if phys <= 4 else 1)
+        workers = user_workers if user_workers is not None else opt_workers
+        threads = user_threads if user_threads is not None else opt_threads
+    else:
+        workers = user_workers if user_workers is not None else 1
+        if user_threads is not None:
+            threads = user_threads
+        else:
+            threads = 2 if workers <= 4 else 1
+    return workers, threads
+
+
 def main():
     start_time = time.time()
 
     parser = argparse.ArgumentParser(description="Quran Recitation Transcription & Forced Alignment Pipeline")
     parser.add_argument("--audio", type=str, required=True, help="Path to input audio file")
-    parser.add_argument("--threads", type=int, default=None, help="ONNX execution threads (default: 1 for multi-worker, 2 for single-worker)")
-    parser.add_argument("--workers", type=int, default=1, help="Parallel segment workers (default: 1 for lowest CPU/RAM)")
+    parser.add_argument("--fast", action="store_true", default=False, help="Auto-configure top-speed parallel workers and threads for this CPU")
+    parser.add_argument("--threads", type=int, default=None, help="ONNX execution threads (default: auto/2)")
+    parser.add_argument("--workers", type=int, default=None, help="Parallel segment workers (default: 1, or auto in --fast mode)")
     parser.add_argument("--progress", action="store_true", default=False, help="Emit JSON progress lines for frontend apps")
     args = parser.parse_args()
 
@@ -33,11 +64,7 @@ def main():
         print(f"[!] Error: Audio file not found at: {args.audio}", file=sys.stderr)
         sys.exit(1)
 
-    workers = args.workers
-    if args.threads is not None:
-        threads = args.threads
-    else:
-        threads = 1 if workers > 1 else 2
+    workers, threads = resolve_concurrency(fast=args.fast, user_workers=args.workers, user_threads=args.threads)
 
     os.environ["ONNX_SEGMENT_WORKERS"] = str(workers)
     os.environ["OMP_NUM_THREADS"] = str(threads)
@@ -65,6 +92,7 @@ def main():
         print("=" * 55)
         print(f"Audio Duration      : {audio_duration:.2f}s", flush=True)
         print(f"Startup & Preload   : {startup_time:.2f}s", flush=True)
+        print(f"Concurrency         : {workers} Workers x {threads} Threads{' (Fast Mode)' if args.fast else ''}", flush=True)
 
     result = pipeline.process_pcm(
         audio_pcm=audio_pcm,
