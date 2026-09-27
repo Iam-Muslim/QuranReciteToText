@@ -210,6 +210,7 @@ class AudioPipeline:
             logprobs_matrix=raw_result.logprobs_matrix,
             num_frames=raw_result.num_frames,
             custom_blank_id=BLANK_ID,
+            pause_intervals=raw_result.pause_intervals,
         )
         align_time = time.time() - align_start
         if live_profile:

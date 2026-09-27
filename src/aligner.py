@@ -14,9 +14,13 @@ from config import (
     CTC_BLANK_PENALTY,
     LOOKAHEAD_OFFSET_FRAMES,
 )
-from src.models import PhonemeToken
+from src.models import PhonemeToken, PauseInterval
 
 logger = logging.getLogger(__name__)
+
+# Minimum phoneme duration to prevent UI flickering (60ms ≈ 1.5 CTC frames at 25 Hz)
+_MIN_PHONEME_DURATION_S = 0.060
+_MIN_PHONEME_DURATION_FRAMES = 1.5
 
 try:
     from numba import njit
@@ -120,6 +124,7 @@ class CtcViterbiAligner:
         logprobs_matrix: Optional[np.ndarray],
         num_frames: Optional[int] = None,
         custom_blank_id: Optional[int] = None,
+        pause_intervals: Optional[List[PauseInterval]] = None,
     ) -> List[PhonemeToken]:
         if not target_phonemes:
             return []
@@ -266,64 +271,195 @@ class CtcViterbiAligner:
                 )
                 peak_frames[k] = int(np.clip(fallback_pk, 0, total_frames - 1))
                 peak_confidences[k] = float(target_phonemes[k].confidence)
+                raw_starts[k] = peak_frames[k]
+                raw_ends[k] = peak_frames[k]
 
+        # 7. Compute Clean Boundaries with Acoustic Gap Classification
+        #    - VAD pauses: preserved as true silence gaps
+        #    - Blank-dominant gaps: intra-speech silence NOT caught by VAD, preserved as gaps
+        #    - Held letter / Madd gaps: previous phoneme energy persists, extend phoneme through
+        #    - Coarticulation gaps: smooth crossover bridge
         token_starts = np.zeros(n, dtype=np.float64)
         token_ends = np.zeros(n, dtype=np.float64)
-        token_starts[0] = 0.0
+
+        # Token 0 starts at its real acoustic emission, NEVER at 0.0 (opening silence preserved!)
+        token_starts[0] = float(max(0, raw_starts[0]))
 
         for k in range(1, n):
-            if raw_starts[k] == -1:
-                token_starts[k] = token_ends[k - 1]
-                token_ends[k] = token_starts[k]
-                continue
-            if raw_starts[k - 1] == -1:
-                token_starts[k] = token_ends[k - 1]
-                continue
-
             gap_start = int(raw_ends[k - 1] + 1)
             gap_end = int(raw_starts[k] - 1)
 
             if gap_end < gap_start:
+                # No gap — contiguous emission frames
                 token_ends[k - 1] = float(raw_starts[k])
                 token_starts[k] = float(raw_starts[k])
                 continue
 
+            gap_s_sec = gap_start * cls.frame_step
+            gap_e_sec = (gap_end + 1) * cls.frame_step
+            gap_dur = gap_e_sec - gap_s_sec
+            gap_len = gap_end - gap_start + 1
+
+            # Check VAD pause overlap
+            has_vad_pause = False
+            if pause_intervals:
+                for p in pause_intervals:
+                    overlap_s = max(gap_s_sec, p.start_sec)
+                    overlap_e = min(gap_e_sec, p.end_sec)
+                    if overlap_e - overlap_s >= 0.12:
+                        has_vad_pause = True
+                        break
+
+            if has_vad_pause:
+                # Confirmed VAD pause — preserve as true silence
+                token_ends[k - 1] = float(gap_start)
+                token_starts[k] = float(raw_starts[k])
+                continue
+
+            # Acoustic classification of gap frames using logprobs
             prev_tok = int(token_ids[k - 1])
             curr_tok = int(token_ids[k])
-            crossover = gap_start
-            for t in range(gap_start, gap_end + 1):
-                if lp[t, curr_tok] >= lp[t, prev_tok]:
-                    crossover = t
-                    break
 
-            token_ends[k - 1] = float(crossover)
-            token_starts[k] = float(crossover)
+            blank_dominant_count = 0
+            prev_energy_count = 0
+            for t in range(gap_start, min(gap_end + 1, total_frames)):
+                blank_lp_val = float(lp[t, b_id])
+                prev_lp_val = float(lp[t, prev_tok])
+                curr_lp_val = float(lp[t, curr_tok])
+                max_phoneme_lp = max(prev_lp_val, curr_lp_val)
 
-        if n > 0:
-            token_ends[n - 1] = float(total_frames)
+                if blank_lp_val > max_phoneme_lp + 2.0:
+                    blank_dominant_count += 1
+                elif prev_lp_val > blank_lp_val - 3.0:
+                    prev_energy_count += 1
 
-        lookahead = LOOKAHEAD_OFFSET_FRAMES
+            blank_ratio = blank_dominant_count / max(1, gap_len)
+            prev_energy_ratio = prev_energy_count / max(1, gap_len)
+
+            if blank_ratio >= 0.65 or gap_dur >= 0.25:
+                # Blank-dominant gap or large gap — intra-speech silence, preserve
+                token_ends[k - 1] = float(gap_start)
+                token_starts[k] = float(raw_starts[k])
+            elif prev_energy_ratio >= 0.50:
+                # Madd / held letter / Ghunnah: previous phoneme energy persists in gap
+                # Extend previous phoneme until next phoneme's logprob clearly surpasses
+                extension_end = gap_end + 1
+                for t in range(gap_start, min(gap_end + 1, total_frames)):
+                    if lp[t, curr_tok] > lp[t, prev_tok] + 1.0:
+                        extension_end = t
+                        break
+                token_ends[k - 1] = float(extension_end)
+                token_starts[k] = float(extension_end)
+            else:
+                # Normal coarticulation — bridge via logprob crossover
+                crossover = gap_start
+                for t in range(gap_start, min(gap_end + 1, total_frames)):
+                    if lp[t, curr_tok] >= lp[t, prev_tok]:
+                        crossover = t
+                        break
+                else:
+                    crossover = float(raw_starts[k])
+                token_ends[k - 1] = float(crossover)
+                token_starts[k] = float(crossover)
+
+        # Final token ends at its real acoustic offset, NEVER at total_frames (trailing silence preserved!)
+        token_ends[n - 1] = float(min(total_frames, raw_ends[n - 1] + 1))
+
+        # 8. Shift by Calibrated Model Lookahead (140ms = 3.5 frames)
+        #    After shift, verify each phoneme doesn't absorb silence and enforce minimum duration.
+        lookahead = float(LOOKAHEAD_OFFSET_FRAMES)
+        min_dur_f = _MIN_PHONEME_DURATION_FRAMES
+        min_dur_s = _MIN_PHONEME_DURATION_S
+        s_secs = np.zeros(n, dtype=np.float64)
+        e_secs = np.zeros(n, dtype=np.float64)
+        pk_secs = np.zeros(n, dtype=np.float64)
+
+        for k in range(n):
+            s_f = max(0.0, token_starts[k] - lookahead)
+            e_f = max(s_f + min_dur_f, token_ends[k] - lookahead)
+            pk_f = max(0.0, float(peak_frames[k]) - lookahead)
+
+            # Prevent lookahead shift from absorbing pre-phoneme silence:
+            # Scan forward from shifted start to find true acoustic onset
+            s_f_int = int(s_f)
+            orig_start = int(token_starts[k])
+            if s_f_int < orig_start and s_f_int < total_frames:
+                for t_scan in range(s_f_int, min(orig_start + 1, total_frames)):
+                    tok_lp_scan = float(lp[t_scan, int(token_ids[k])])
+                    blank_lp_scan = float(lp[t_scan, b_id])
+                    if tok_lp_scan > blank_lp_scan - 4.0:
+                        s_f = float(t_scan)
+                        break
+                e_f = max(s_f + min_dur_f, e_f)
+
+            s_secs[k] = s_f * cls.frame_step
+            e_secs[k] = max(s_secs[k] + min_dur_s, e_f * cls.frame_step)
+            pk_secs[k] = pk_f * cls.frame_step
+
+        # 9. Hard Silence Masking: Ensure NO phoneme ever absorbs or overlaps a VAD pause interval
+        if pause_intervals:
+            for p in pause_intervals:
+                p_s = p.start_sec
+                p_e = p.end_sec
+                if p_e <= p_s:
+                    continue
+                for k in range(n):
+                    # If phoneme ends inside the pause -> clamp end to pause start
+                    if p_s < e_secs[k] <= p_e:
+                        e_secs[k] = max(s_secs[k] + min_dur_s, p_s)
+                    # If phoneme starts inside the pause -> clamp start to pause end
+                    if p_s <= s_secs[k] < p_e:
+                        s_secs[k] = p_e
+                        if e_secs[k] <= s_secs[k]:
+                            e_secs[k] = s_secs[k] + min_dur_s
+                    # If phoneme completely swallows the pause -> clamp to side of peak
+                    if s_secs[k] < p_s and e_secs[k] > p_e:
+                        if pk_secs[k] <= (p_s + p_e) / 2.0:
+                            e_secs[k] = max(s_secs[k] + min_dur_s, p_s)
+                        else:
+                            s_secs[k] = p_e
+                            e_secs[k] = max(s_secs[k] + min_dur_s, e_secs[k])
+
+        # 10. Strict Monotonic Non-Overlapping Invariant: end[k-1] <= start[k] < end[k]
+        for k in range(1, n):
+            if s_secs[k] < e_secs[k - 1]:
+                mid = (e_secs[k - 1] + s_secs[k]) / 2.0
+                e_secs[k - 1] = mid
+                s_secs[k] = mid
+                if e_secs[k - 1] - s_secs[k - 1] < min_dur_s:
+                    s_secs[k - 1] = max(0.0 if k == 1 else e_secs[k - 2], e_secs[k - 1] - min_dur_s)
+                if e_secs[k] - s_secs[k] < min_dur_s:
+                    e_secs[k] = s_secs[k] + min_dur_s
+
+        for k in range(n - 1, 0, -1):
+            if s_secs[k] < e_secs[k - 1]:
+                e_secs[k - 1] = s_secs[k]
+                if e_secs[k - 1] - s_secs[k - 1] < min_dur_s:
+                    s_secs[k - 1] = max(0.0 if k == 1 else e_secs[k - 2], e_secs[k - 1] - min_dur_s)
+
+        # 11. Construct final PhonemeToken outputs with zero overlap and preserved silence gaps
         aligned: List[PhonemeToken] = []
-
         for i in range(n):
-            s_frame = max(0.0, token_starts[i] - lookahead)
-            e_frame = max(s_frame + 0.5, token_ends[i] - lookahead)
+            s_final = min(audio_duration, max(0.0, s_secs[i]))
+            e_final = min(audio_duration, max(s_final + min_dur_s, e_secs[i]))
+            pk_final = min(audio_duration, max(s_final, min(e_final, pk_secs[i])))
 
-            s_sec = min(audio_duration, s_frame * cls.frame_step)
-            e_sec = min(audio_duration, max(s_sec + cls.frame_step, e_frame * cls.frame_step))
-            pk_sec = min(audio_duration, float(peak_frames[i]) * cls.frame_step)
+            if aligned and s_final < aligned[-1].end:
+                s_final = aligned[-1].end
+                if e_final <= s_final:
+                    e_final = min(audio_duration, s_final + min_dur_s)
 
             aligned.append(
                 PhonemeToken(
                     phoneme=target_phonemes[i].phoneme,
-                    start=round(s_sec, 3),
-                    end=round(e_sec, 3),
+                    start=round(s_final, 3),
+                    end=round(e_final, 3),
                     confidence=round(float(peak_confidences[i]), 2),
                     is_recovered=target_phonemes[i].is_recovered,
-                    start_frame=int(round(s_frame)),
-                    end_frame=int(round(e_frame)),
+                    start_frame=int(round(s_final / cls.frame_step)),
+                    end_frame=int(round(e_final / cls.frame_step)),
                     peak_frame=int(peak_frames[i]),
-                    peak_timestamp=round(pk_sec, 3),
+                    peak_timestamp=round(pk_final, 3),
                     raw_start=target_phonemes[i].raw_start if target_phonemes[i].raw_start is not None else target_phonemes[i].start,
                     raw_end=target_phonemes[i].raw_end if target_phonemes[i].raw_end is not None else target_phonemes[i].end,
                 )
