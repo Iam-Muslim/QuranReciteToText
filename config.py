@@ -89,7 +89,7 @@ RESET_ENCODER_ON_SILENCE: bool = True
 SUBSEGMENT_MIN_PAUSE_S: float = 0.20        # Minimum pause duration (seconds) to split an Ayah into a Subsegment
 
 # Dual-gated in-loop cache reset (clears Zipformer attention saturation on acoustic silence + CTC blanks)
-ENABLE_IN_LOOP_BLANK_RESET: bool = True      # Set to False to disable in-loop reset for testing
+ENABLE_IN_LOOP_BLANK_RESET: bool = False      # Set to False to disable in-loop reset for testing
 IN_LOOP_RESET_MIN_CHUNKS: int = 1            # Minimum consecutive blank+silence chunks (1 chunk = 480ms)
 
 

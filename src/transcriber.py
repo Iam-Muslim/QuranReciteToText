@@ -234,13 +234,36 @@ class ZipformerONNX:
 
         num_frames = len(padded_feats)
         chunk_logprobs = []
-        pos = 0
+        enable_in_loop_reset = getattr(config, "ENABLE_IN_LOOP_BLANK_RESET", False)
+        min_blank_chunks = getattr(config, "IN_LOOP_RESET_MIN_CHUNKS", 1)
+        if enable_in_loop_reset:
+            slice_frame_energy = np.mean(padded_feats, axis=-1)
+            silence_th = float(np.percentile(slice_frame_energy[:len(feats)], 20) + 1.0) if len(feats) > 0 else -10.0
+            consecutive_silence_chunks = 0
 
+        pos = 0
         while pos + T_LEN <= num_frames:
             states['x'] = padded_feats[pos:pos + T_LEN][None, :]
             outs = self.session.run(None, states)
             states.update(zip(self._state_names, outs[1:]))
-            chunk_logprobs.append(outs[0][0])
+            chunk_lp = outs[0][0]
+            chunk_logprobs.append(chunk_lp)
+
+            if enable_in_loop_reset:
+                chunk_preds = np.argmax(chunk_lp, axis=-1)
+                chunk_energy = float(np.mean(slice_frame_energy[pos:pos + CHUNK_LEN]))
+                is_pure_blank = bool(np.all(chunk_preds == BLANK_ID))
+                is_acoustic_silence = chunk_energy <= silence_th
+
+                if is_pure_blank and is_acoustic_silence:
+                    consecutive_silence_chunks += 1
+                    if consecutive_silence_chunks >= min_blank_chunks:
+                        for k in self._state_names:
+                            states[k].fill(0)
+                        states['processed_lens'].fill(0)
+                else:
+                    consecutive_silence_chunks = 0
+
             pos += CHUNK_LEN
 
         if not chunk_logprobs:
