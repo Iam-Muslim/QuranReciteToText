@@ -74,6 +74,14 @@ class AudioPipeline:
                 ph_index_path=ph_index_path,
             )
 
+        # Warm up Numba JIT kernels so runtime Phase 2 and Phase 3 are instant
+        try:
+            warmup_aligner_jit()
+            warmup_matcher_jit()
+            warmup_detector_jit()
+        except Exception:
+            pass
+
 
 
 

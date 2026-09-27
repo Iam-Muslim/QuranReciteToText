@@ -279,6 +279,8 @@ def _align_and_package_ayahs(
         sub_segs_list: List[AyahSubSegment] = []
         pauses = pause_timestamps or []
         intervals = pause_intervals or []
+        interval_starts = [p.start_sec for p in intervals] if intervals else []
+        pause_pts = sorted(pauses) if pauses else []
         min_sub_pause = getattr(config, "SUBSEGMENT_MIN_PAUSE_S", 0.20)
 
         def _build_sub(pass_words: List[QuranWord], is_rep: bool) -> AyahSubSegment:
@@ -309,7 +311,11 @@ def _align_and_package_ayahs(
                 return None
 
             if intervals:
-                for p in intervals:
+                idx = bisect.bisect_right(interval_starts, w_curr_e + 0.50)
+                for i in range(idx - 1, -1, -1):
+                    p = intervals[i]
+                    if p.start_sec < w_prev_s - 1.0:
+                        break
                     if p.duration_sec < min_sub_pause:
                         continue
                     cut = p.optimal_cut_point
@@ -328,7 +334,11 @@ def _align_and_package_ayahs(
                         if (p.start_sec - 0.15) <= w_prev_e and (p.end_sec + 0.15) >= w_curr_s:
                             return (p.start_sec, p.end_sec)
             elif pauses:
-                for pt in pauses:
+                idx = bisect.bisect_right(pause_pts, w_curr_e + 0.50)
+                for i in range(idx - 1, -1, -1):
+                    pt = pause_pts[i]
+                    if pt < w_prev_s - 1.0:
+                        break
                     if (w_prev_raw_e - 0.08) <= pt <= (w_curr_raw_s + 0.08) and (mid_prev < pt < mid_curr):
                         return (pt - 0.10, pt + 0.10)
                     if mid_prev < pt < mid_curr and pt > (w_prev_s + 0.04) and pt < (w_curr_e - 0.04):

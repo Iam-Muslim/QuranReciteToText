@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import bisect
 import logging
 from typing import Optional, List, Dict, Tuple
 import numpy as np
@@ -259,9 +260,10 @@ class CtcViterbiAligner:
                 peak_frames[k] = best_f
 
                 frame_row = lp[best_f]
-                mask = np.ones(cls.vocab_size, dtype=bool)
-                mask[tok_id] = False
-                runner_up = float(np.max(frame_row[mask])) if cls.vocab_size > 1 else -1e30
+                orig_val = frame_row[tok_id]
+                frame_row[tok_id] = -1e30
+                runner_up = float(np.max(frame_row)) if cls.vocab_size > 1 else -1e30
+                frame_row[tok_id] = orig_val
                 peak_confidences[k] = max(0.1, max_lp - runner_up)
             else:
                 fallback_pk = (
@@ -286,6 +288,9 @@ class CtcViterbiAligner:
         # Token 0 starts at its real acoustic emission, NEVER at 0.0 (opening silence preserved!)
         token_starts[0] = float(max(0, raw_starts[0]))
 
+        p_starts = [p.start_sec for p in pause_intervals] if pause_intervals else []
+        num_pauses = len(p_starts)
+
         for k in range(1, n):
             gap_start = int(raw_ends[k - 1] + 1)
             gap_end = int(raw_starts[k] - 1)
@@ -299,10 +304,14 @@ class CtcViterbiAligner:
             gap_s_sec = gap_start * cls.frame_step
             gap_e_sec = (gap_end + 1) * cls.frame_step
 
-            # Check VAD pause overlap (true acoustic silence)
+            # Check VAD pause overlap (true acoustic silence) via fast binary search
             has_vad_pause = False
-            if pause_intervals:
-                for p in pause_intervals:
+            if num_pauses > 0:
+                p_idx = bisect.bisect_right(p_starts, gap_e_sec)
+                for i in range(p_idx - 1, -1, -1):
+                    p = pause_intervals[i]
+                    if p.start_sec < gap_s_sec - 15.0:
+                        break
                     overlap_s = max(gap_s_sec, p.start_sec)
                     overlap_e = min(gap_e_sec, p.end_sec)
                     if overlap_e - overlap_s >= 0.05 or (overlap_e > overlap_s and p.duration_sec >= 0.15):
@@ -405,7 +414,9 @@ class CtcViterbiAligner:
                 p_e = p.end_sec
                 if p_e <= p_s:
                     continue
-                for k in range(n):
+                k_start = max(0, bisect.bisect_left(s_secs, p_s - 4.0) - 2)
+                k_end = min(n, bisect.bisect_right(s_secs, p_e + 1.0) + 2)
+                for k in range(k_start, k_end):
                     # If phoneme ends inside the pause -> clamp end to pause start
                     if p_s < e_secs[k] <= p_e:
                         e_secs[k] = max(s_secs[k] + min_dur_s, p_s)
