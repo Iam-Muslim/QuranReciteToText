@@ -7,12 +7,10 @@ segmentation, gap-clamped padding, and intra-segment speech recovery.
 from __future__ import annotations
 
 import os
-import sys
 import math
 import time
 import urllib.request
 import logging
-from dataclasses import dataclass
 from typing import Optional, List, Dict, Tuple, Callable
 import queue
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -24,32 +22,19 @@ import config
 from config import (
     SAMPLE_RATE,
     BLANK_ID,
-    FRAME_STEP,
     DEFAULT_MODEL_PATH,
     DEFAULT_TOKENS_PATH,
-    VAD_MIN_PAUSE_S,
-    VAD_ONSET_DB,
-    VAD_OFFSET_DB,
-    VAD_HANGOVER_S,
-    VAD_MAX_PAD_S,
-    VAD_PREROLL_S,
-    VAD_ADAPTIVE,
     FLUSH_PAD_FRAMES,
     RESET_ENCODER_ON_SILENCE,
-    ENABLE_SPEECH_RECOVERY,
-    SPEECH_RECOVERY_MIN_HOLE_DURATION_S,
-    SPEECH_RECOVERY_MIN_PHONEMES_IN_GAP,
 )
 from src.models import (
     PhonemeToken,
-    PauseInterval,
     RawTranscriptionResult,
     RecoveryEvent,
     RecoverySummary,
     SpeechRecoveryResult,
 )
-from src.audio import AudioDecoder
-from src.vad import SpeechSegment, QuranSilenceVAD
+from src.vad import QuranSilenceVAD
 
 logger = logging.getLogger(__name__)
 
@@ -144,22 +129,16 @@ class ZipformerONNX:
         self._state_buffers = self._create_initial_states()
 
     def _create_initial_states(self) -> dict:
-        if hasattr(self, "_state_specs"):
-            states = {name: np.zeros(shape, dtype=dt) for name, shape, dt in self._state_specs}
-        else:
-            states = {}
-            for inp in self.session.get_inputs():
-                shape = [1 if dim == 'N' else dim for dim in inp.shape]
-                dtype = np.float32 if inp.type == 'tensor(float)' else np.int64
-                states[inp.name] = np.zeros(shape, dtype=dtype)
+        states = {name: np.zeros(shape, dtype=dt) for name, shape, dt in self._state_specs}
         states['processed_lens'] = np.array([0], dtype=np.int64)
         return states
 
-    def _reset_states(self) -> None:
+    def _reset_states(self, target_buffers: Optional[dict] = None) -> None:
         """In-place zeroing of recurrent state buffers (zero memory allocation overhead)."""
+        target = self._state_buffers if target_buffers is None else target_buffers
         for k in self._state_names:
-            self._state_buffers[k].fill(0)
-        self._state_buffers['processed_lens'].fill(0)
+            target[k].fill(0)
+        target['processed_lens'].fill(0)
 
     def _extract_fbank(self, audio: np.ndarray) -> np.ndarray:
         opts = knf.FbankOptions()
@@ -223,12 +202,7 @@ class ZipformerONNX:
         states = state_buffers if state_buffers is not None else self._state_buffers
         # Fast in-place zero state reset only when explicitly requested (e.g. at Waqf boundaries)
         if reset_states:
-            if state_buffers is not None:
-                for k in self._state_names:
-                    states[k].fill(0)
-                states['processed_lens'].fill(0)
-            else:
-                self._reset_states()
+            self._reset_states(states)
 
         num_frames = len(padded_feats)
         chunk_logprobs = []

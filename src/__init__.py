@@ -7,7 +7,6 @@ import sys
 import gc
 import json
 import time
-import threading
 from typing import Optional, Callable, Dict, Any, List, Union, Tuple
 import numpy as np
 
@@ -43,8 +42,7 @@ from src.aligner import CtcViterbiAligner, warmup_aligner_jit
 from src.matching import (
     QuranWordMatcher,
     MatcherConfig,
-    warmup_matcher_jit,
-    warmup_detector_jit,
+    warmup_matching,
 )
 
 
@@ -64,6 +62,9 @@ class AudioPipeline:
         ph_index_path: str = DEFAULT_PH_INDEX_PATH,
         num_threads: int = 2,
     ) -> None:
+        if "ONNX_NUM_THREADS" not in os.environ:
+            os.environ["ONNX_NUM_THREADS"] = str(num_threads)
+
         if self.transcriber is None:
             self.transcriber = ZipformerONNX.get_instance()
 
@@ -77,13 +78,9 @@ class AudioPipeline:
         # Warm up Numba JIT kernels so runtime Phase 2 and Phase 3 are instant
         try:
             warmup_aligner_jit()
-            warmup_matcher_jit()
-            warmup_detector_jit()
+            warmup_matching()
         except Exception:
             pass
-
-
-
 
     def process_audio_file(
         self,

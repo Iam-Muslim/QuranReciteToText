@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import os
+import json
+from collections import defaultdict
 from enum import Enum
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any
 import numpy as np
 
 
-@dataclass
+@dataclass(slots=True)
 class PhonemeToken:
     """Individual acoustic phoneme token with timestamps and confidence."""
     phoneme: str
@@ -48,7 +51,7 @@ class PhonemeToken:
         return d
 
 
-@dataclass
+@dataclass(slots=True)
 class PauseInterval:
     """Continuous acoustic silence interval with duration and Tajweed pause classification."""
     start_sec: float
@@ -78,7 +81,7 @@ class PauseInterval:
         return d
 
 
-@dataclass
+@dataclass(slots=True)
 class RawTranscriptionResult:
     """Consolidated result of Phase 1 pure ONNX Zipformer CTC transcription."""
     phonemes: List[PhonemeToken] = field(default_factory=list)
@@ -96,7 +99,7 @@ class RawTranscriptionResult:
         return " ".join(self.raw_tokens)
 
 
-@dataclass
+@dataclass(slots=True)
 class RecoveryEvent:
     """Recovered speech event from an untranscribed deletion hole."""
     event_id: int
@@ -123,7 +126,7 @@ class RecoveryEvent:
         }
 
 
-@dataclass
+@dataclass(slots=True)
 class RecoverySummary:
     """Statistical summary of the speech recovery pass."""
     recovery_time_seconds: float
@@ -146,7 +149,7 @@ class RecoverySummary:
         }
 
 
-@dataclass
+@dataclass(slots=True)
 class SpeechRecoveryResult:
     """Consolidated result of speech recovery."""
     recovered_phonemes: List[PhonemeToken]
@@ -154,7 +157,7 @@ class SpeechRecoveryResult:
     recovery_summary: RecoverySummary
 
 
-@dataclass
+@dataclass(slots=True)
 class QuranWord:
     """Word-level timing entry aligned to the Medina Mushaf."""
     word: str
@@ -217,7 +220,7 @@ def enforce_word_phoneme_monotonicity(word: 'QuranWord') -> None:
                 word.phonemes[i - 1]["end"] = word.phonemes[i]["start"]
 
 
-@dataclass
+@dataclass(slots=True)
 class AyahSubSegment:
     """Ayah sub-segment (e.g. for repetition or contiguous phrase tracking)."""
     sub_segment_number: int
@@ -243,7 +246,7 @@ class AyahSubSegment:
         return d
 
 
-@dataclass
+@dataclass(slots=True)
 class QuranSegment:
     """Canonical 1-Ayah segment containing aligned words, subsegments, and metadata."""
     segment_number: int
@@ -293,7 +296,7 @@ class QuranSegment:
         return d
 
 
-@dataclass
+@dataclass(slots=True)
 class PipelineProfiling:
     """Profiling breakdown for all pipeline stages."""
     audio_duration: float = 0.0
@@ -315,7 +318,7 @@ class PipelineProfiling:
         return (self.audio_duration / self.asr_time) if self.asr_time > 0 else 0.0
 
 
-@dataclass
+@dataclass(slots=True)
 class PipelineResult:
     """Consolidated result of the entire pipeline execution."""
     audio_duration_seconds: float
@@ -335,10 +338,6 @@ class PipelineResult:
 
     def export_json(self, output_dir: str = ".") -> Dict[str, str]:
         """Exports all 4 canonical JSON artifacts into the specified directory."""
-        import os
-        import json
-        from collections import defaultdict
-
         os.makedirs(output_dir, exist_ok=True)
         dur = round(self.audio_duration_seconds, 3)
         by_surah: Dict[int, List[QuranSegment]] = defaultdict(list)
@@ -400,7 +399,7 @@ class PipelineStage(str, Enum):
     error = "error"
 
 
-@dataclass
+@dataclass(slots=True)
 class PipelineProgressEvent:
     """Typed real-time progress update emitted during pipeline execution."""
     stage: PipelineStage

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sys
 import time
+import json
 import argparse
 from pathlib import Path
 
@@ -82,7 +83,7 @@ def main():
     pipeline.initialize(num_threads=threads)
     audio_pcm = AudioDecoder.load_audio_file(args.audio)
 
-    output_dir = getattr(config, "DEFAULT_OUTPUT_DIR", "output")
+    output_dir = config.DEFAULT_OUTPUT_DIR
     os.makedirs(output_dir, exist_ok=True)
 
     startup_time = max(0.0, time.time() - start_time)
@@ -96,7 +97,7 @@ def main():
     result = pipeline.process_pcm(
         audio_pcm=audio_pcm,
         output_dir=output_dir,
-        export_json_files=getattr(config, "EXPORT_ALL_ARTIFACTS", True),
+        export_json_files=config.EXPORT_ALL_ARTIFACTS,
         live_profile=not args.progress,
         json_progress=args.progress,
     )
@@ -109,7 +110,6 @@ def main():
         print(f"Total Time          : {total_time:.2f}s", flush=True)
         print("=" * 55)
     else:
-        import json
         print(json.dumps({
             "stage": "completed",
             "audio_duration": round(prof.audio_duration, 2),
