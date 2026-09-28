@@ -383,7 +383,10 @@ def _align_and_package_ayahs(
             repeated_ranges = [s.words_range for s in sub_segments if s.is_repetition] or None
             repeated_text = [s.text for s in sub_segments if s.is_repetition] or None
 
-        if qwords:
+        if sub_segments:
+            seg_start = sub_segments[0].start_time
+            seg_end = sub_segments[-1].end_time
+        elif qwords:
             seg_start = qwords[0].start or 0.0
             seg_end = qwords[-1].end or 0.0
         else:

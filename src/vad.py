@@ -672,10 +672,14 @@ def align_ayah_boundaries(
     for i in range(len(segments) - 1):
         seg_prev = segments[i]
         seg_next = segments[i + 1]
-        if not seg_prev.words or not seg_next.words:
+        
+        words_prev = seg_prev.sub_segments[-1].words if (seg_prev.sub_segments and seg_prev.sub_segments[-1].words) else seg_prev.words
+        words_next = seg_next.sub_segments[0].words if (seg_next.sub_segments and seg_next.sub_segments[0].words) else seg_next.words
+        
+        if not words_prev or not words_next:
             continue
-        w_last = seg_prev.words[-1]
-        w_first = seg_next.words[0]
+        w_last = words_prev[-1]
+        w_first = words_next[0]
 
         w_last_raw_e = w_last.raw_end if w_last.raw_end is not None else (w_last.end or 0.0)
         w_first_raw_s = w_first.raw_start if w_first.raw_start is not None else (w_first.start or 0.0)
