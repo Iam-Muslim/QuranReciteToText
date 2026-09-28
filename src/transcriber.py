@@ -37,9 +37,7 @@ from config import (
     FLUSH_PAD_FRAMES,
     RESET_ENCODER_ON_SILENCE,
     ENABLE_SPEECH_RECOVERY,
-    SPEECH_RECOVERY_ENERGY_THRESHOLD_DB,
     SPEECH_RECOVERY_MIN_HOLE_DURATION_S,
-    SPEECH_RECOVERY_PADDING_S,
     SPEECH_RECOVERY_MIN_PHONEMES_IN_GAP,
 )
 from src.models import (
@@ -234,49 +232,12 @@ class ZipformerONNX:
 
         num_frames = len(padded_feats)
         chunk_logprobs = []
-        enable_in_loop_reset = getattr(config, "ENABLE_IN_LOOP_BLANK_RESET", False)
-        min_blank_chunks = getattr(config, "IN_LOOP_RESET_MIN_CHUNKS", 1)
-        if enable_in_loop_reset:
-            # Log-energy per frame: mean of log-filterbank coefficients across mel bins.
-            # Fbank features are already in log scale (log-mel), so the per-frame mean
-            # is proportional to log-energy and gives reliable silence detection.
-            log_energy = np.mean(padded_feats, axis=-1)          # shape: (T,)  log-scale
-            # Silence floor = 10th percentile of speech-only frames (exclude flush pad)
-            # Using 10th percentile (not 20th) to robustly track the true noise floor.
-            # We add a small margin (+2.0 log-units) so only true silences fire the reset.
-            speech_energy = log_energy[:len(feats)]
-            silence_th = float(np.percentile(speech_energy, 10) + 2.0) if len(feats) > 0 else -999.0
-            consecutive_silence_chunks = 0
-
         pos = 0
         while pos + T_LEN <= num_frames:
             states['x'] = padded_feats[pos:pos + T_LEN][None, :]
             outs = self.session.run(None, states)
             states.update(zip(self._state_names, outs[1:]))
-            chunk_lp = outs[0][0]
-            chunk_logprobs.append(chunk_lp)
-
-            if enable_in_loop_reset:
-                chunk_preds = np.argmax(chunk_lp, axis=-1)
-                # Chunk log-energy: mean over all frames in this chunk (CHUNK_LEN=48 frames)
-                chunk_log_energy = float(np.mean(log_energy[pos:pos + CHUNK_LEN]))
-                # Only reset when BOTH gates fire:
-                #   1. ALL frames in this 480ms chunk predicted as CTC blank
-                #   2. Chunk log-energy is below the silence floor (genuine acoustic silence)
-                # This prevents resetting on speech-blanks caused by attention saturation.
-                is_pure_blank = bool(np.all(chunk_preds == BLANK_ID))
-                is_acoustic_silence = chunk_log_energy <= silence_th
-
-                if is_pure_blank and is_acoustic_silence:
-                    consecutive_silence_chunks += 1
-                    if consecutive_silence_chunks >= min_blank_chunks:
-                        for k in self._state_names:
-                            states[k].fill(0)
-                        states['processed_lens'].fill(0)
-                        consecutive_silence_chunks = 0  # reset counter after firing
-                else:
-                    consecutive_silence_chunks = 0
-
+            chunk_logprobs.append(outs[0][0])
             pos += CHUNK_LEN
 
         if not chunk_logprobs:
@@ -526,20 +487,15 @@ class ZipformerONNX:
         )
 
 
-@dataclass
-class _AudioGap:
-    start: float
-    end: float
-    prev_index: int
-    next_index: int
-
-    @property
-    def duration(self) -> float:
-        return self.end - self.start
-
-
 class SpeechRecoveryEngine:
-    """Scans untranscribed acoustic gaps inside speech regions and recovers deleted phonemes."""
+    """Scans untranscribed acoustic gaps inside speech regions and recovers deleted phonemes.
+
+    Guarantees:
+      1. Boundary phoneme deduplication (prevents duplicating adjacent word edge tokens).
+      2. Edge phoneme preservation (pre-roll padding + soft peak inclusion).
+      3. Anti-glitch filtering (rejects single-token noise spikes).
+      4. Trellis integrity (direct emission logprobs patching inside the gap).
+    """
 
     @classmethod
     def recover_speech(
@@ -549,102 +505,146 @@ class SpeechRecoveryEngine:
         audio_duration: float,
         transcriber: ZipformerONNX,
         logprobs_matrix: Optional[np.ndarray] = None,
-        energy_threshold_db: float = SPEECH_RECOVERY_ENERGY_THRESHOLD_DB,
-        min_hole_duration_s: float = SPEECH_RECOVERY_MIN_HOLE_DURATION_S,
-        padding_s: float = SPEECH_RECOVERY_PADDING_S,
-        min_phonemes_in_gap: int = SPEECH_RECOVERY_MIN_PHONEMES_IN_GAP,
+        min_hole_duration_s: Optional[float] = None,
         sample_rate: int = SAMPLE_RATE,
         on_progress: Optional[Callable[[float, float], None]] = None,
     ) -> SpeechRecoveryResult:
         start_time = time.time()
-        candidate_gaps: List[_AudioGap] = []
 
+        min_hole_dur = min_hole_duration_s if min_hole_duration_s is not None else getattr(config, "SPEECH_RECOVERY_MIN_HOLE_DURATION_S", 1.40)
+        pad_pre_s = getattr(config, "SPEECH_RECOVERY_PADDING_PRE_S", 0.16)
+        pad_post_s = getattr(config, "SPEECH_RECOVERY_PADDING_POST_S", 0.24)
+        min_tokens = getattr(config, "SPEECH_RECOVERY_MIN_PHONEMES_IN_GAP", 2)
+
+        candidate_gaps: List[Tuple[Optional[PhonemeToken], Optional[PhonemeToken], float, float]] = []
+
+        # Null-safe gap extraction (handling start, interior, and tail of audio)
         if not initial_phonemes:
-            if audio_duration >= min_hole_duration_s:
-                candidate_gaps.append(_AudioGap(start=0.0, end=audio_duration, prev_index=-1, next_index=-1))
+            if audio_duration >= min_hole_dur:
+                candidate_gaps.append((None, None, 0.0, audio_duration))
         else:
-            if initial_phonemes[0].start >= min_hole_duration_s:
-                candidate_gaps.append(_AudioGap(start=0.0, end=initial_phonemes[0].start, prev_index=-1, next_index=0))
+            if initial_phonemes[0].start >= min_hole_dur:
+                candidate_gaps.append((None, initial_phonemes[0], 0.0, initial_phonemes[0].start))
 
             for i in range(len(initial_phonemes) - 1):
-                g_start = initial_phonemes[i].end
-                g_end = initial_phonemes[i + 1].start
-                if g_end - g_start >= min_hole_duration_s:
-                    candidate_gaps.append(_AudioGap(start=g_start, end=g_end, prev_index=i, next_index=i + 1))
+                p_prev = initial_phonemes[i]
+                p_next = initial_phonemes[i + 1]
+                g_dur = p_next.start - p_prev.end
+                if g_dur >= min_hole_dur:
+                    candidate_gaps.append((p_prev, p_next, p_prev.end, p_next.start))
 
-            if audio_duration - initial_phonemes[-1].end >= min_hole_duration_s:
-                candidate_gaps.append(
-                    _AudioGap(start=initial_phonemes[-1].end, end=audio_duration, prev_index=len(initial_phonemes) - 1, next_index=-1)
-                )
+            if audio_duration - initial_phonemes[-1].end >= min_hole_dur:
+                candidate_gaps.append((initial_phonemes[-1], None, initial_phonemes[-1].end, audio_duration))
 
         recovery_events: List[RecoveryEvent] = []
         new_phonemes_to_insert: List[PhonemeToken] = []
         speech_holes_detected = 0
 
-        for g_idx, gap in enumerate(candidate_gaps):
-            start_sample = max(0, int(round(gap.start * sample_rate)))
-            end_sample = min(len(audio_pcm), int(round(gap.end * sample_rate)))
-            energy_db = AudioDecoder.calculate_energy_db(audio_pcm, start_idx=start_sample, end_idx=end_sample)
+        for g_idx, (prev_tok, next_tok, g_s, g_e) in enumerate(candidate_gaps):
+            gap_dur = g_e - g_s
+            s_samp = max(0, int(round(g_s * sample_rate)))
+            e_samp = min(len(audio_pcm), int(round(g_e * sample_rate)))
+            gap_audio = audio_pcm[s_samp:e_samp]
+            if len(gap_audio) == 0:
+                continue
 
-            if energy_db >= energy_threshold_db:
-                speech_holes_detected += 1
-                padded_start = max(0.0, gap.start - padding_s)
-                padded_end = min(audio_duration, gap.end + padding_s)
-                p_start_sample = int(round(padded_start * sample_rate))
-                p_end_sample = min(len(audio_pcm), int(round(padded_end * sample_rate)))
+            # Digital silence check: skip dead digital silence buffers (< -55 dB)
+            rms = np.sqrt(np.mean(gap_audio**2) + 1e-12)
+            edb = float(20.0 * np.log10(max(rms, 1e-5)))
+            if edb < -55.0:
+                continue
 
-                if p_end_sample > p_start_sample:
-                    slice_pcm = audio_pcm[p_start_sample:p_end_sample]
-                    slice_lp, slice_phonemes = transcriber.transcribe_segment(
-                        slice_pcm, sample_rate=sample_rate, silence_pad_frames=24
+            # Padded audio slicing with clean causal convolutional pre-roll & tail flush
+            p_start = max(0.0, g_s - pad_pre_s)
+            p_end = min(audio_duration, g_e + pad_post_s)
+            slice_pcm = audio_pcm[int(round(p_start * sample_rate)):int(round(p_end * sample_rate))]
+            if len(slice_pcm) == 0:
+                continue
+
+            feats = transcriber._extract_fbank(slice_pcm)
+            slice_lp, raw_ph = transcriber._transcribe_fbank_segment(feats, reset_states=True)
+            if not raw_ph:
+                continue
+
+            # Soft peak-based timestamp inclusion (protects onset & coda consonants from edge clipping)
+            slice_tokens: List[PhonemeToken] = []
+            for sp in raw_ph:
+                r_start = round(p_start + sp.start, 3)
+                r_end = round(p_start + sp.end, 3)
+                r_pk = round(p_start + (sp.peak_timestamp if sp.peak_timestamp else (sp.start + sp.end) / 2), 3)
+
+                if (g_s - 0.08) <= r_pk <= (g_e + 0.08):
+                    slice_tokens.append(
+                        PhonemeToken(
+                            phoneme=sp.phoneme,
+                            start=r_start,
+                            end=r_end,
+                            confidence=sp.confidence,
+                            is_recovered=True,
+                            start_frame=int(round(r_start / FRAME_TIME_STEP)),
+                            end_frame=int(round(r_end / FRAME_TIME_STEP)),
+                            peak_frame=int(round(r_pk / FRAME_TIME_STEP)),
+                            peak_timestamp=r_pk,
+                        )
                     )
 
-                    gap_phonemes: List[PhonemeToken] = []
-                    for sp in slice_phonemes:
-                        real_start = padded_start + sp.start
-                        real_end = padded_start + sp.end
-                        real_peak = (padded_start + sp.peak_timestamp) if sp.peak_timestamp else ((real_start + real_end) / 2)
+            if not slice_tokens:
+                continue
 
-                        if real_start >= gap.start - 0.05 and real_end <= gap.end + 0.05:
-                            gap_phonemes.append(
-                                PhonemeToken(
-                                    phoneme=sp.phoneme,
-                                    start=round(real_start, 3),
-                                    end=round(real_end, 3),
-                                    confidence=sp.confidence,
-                                    is_recovered=True,
-                                    start_frame=int(round(real_start / FRAME_TIME_STEP)),
-                                    end_frame=int(round(real_end / FRAME_TIME_STEP)),
-                                    peak_frame=int(round(real_peak / FRAME_TIME_STEP)),
-                                    peak_timestamp=round(real_peak, 3),
-                                )
-                            )
+            # Strict 1-token seam deduplication: prune only if adjacent word border token matches exactly in time
+            if prev_tok is not None and slice_tokens:
+                if slice_tokens[0].phoneme == prev_tok.phoneme and abs(slice_tokens[0].start - prev_tok.start) < 0.20:
+                    slice_tokens.pop(0)
 
-                    if len(gap_phonemes) >= min_phonemes_in_gap:
-                        event = RecoveryEvent(
-                            event_id=len(recovery_events) + 1,
-                            gap_start=gap.start,
-                            gap_end=gap.end,
-                            gap_duration=gap.duration,
-                            padded_start=padded_start,
-                            padded_end=padded_end,
-                            energy_db=energy_db,
-                            recovered_text="".join(p.phoneme for p in gap_phonemes),
-                            recovered_phonemes=gap_phonemes,
-                        )
-                        recovery_events.append(event)
-                        new_phonemes_to_insert.extend(gap_phonemes)
+            if next_tok is not None and slice_tokens:
+                if slice_tokens[-1].phoneme == next_tok.phoneme and abs(slice_tokens[-1].end - next_tok.end) < 0.20:
+                    slice_tokens.pop(-1)
 
-                        # Patch the global emission logprobs matrix if provided
-                        if logprobs_matrix is not None and len(slice_lp) > 0:
-                            s_frame = int(round(padded_start / FRAME_TIME_STEP))
-                            e_frame = min(logprobs_matrix.shape[0], s_frame + len(slice_lp))
-                            copy_f = e_frame - s_frame
-                            if copy_f > 0:
-                                logprobs_matrix[s_frame:e_frame] = np.maximum(
-                                    logprobs_matrix[s_frame:e_frame],
-                                    slice_lp[:copy_f]
-                                )
+            # Minimum length filter: reject single-token acoustic glitches
+            if len(slice_tokens) < min_tokens:
+                continue
+
+            speech_holes_detected += 1
+
+            # Boundary & sequence monotonicity clamping
+            clamped_tokens: List[PhonemeToken] = []
+            prev_end_time = prev_tok.end if prev_tok is not None else 0.0
+
+            for k, tok in enumerate(slice_tokens):
+                c_start = max(tok.start, prev_end_time)
+                c_end = max(c_start + 0.02, tok.end)
+
+                if next_tok is not None and k == len(slice_tokens) - 1:
+                    c_end = min(c_end, next_tok.start)
+                    c_start = min(c_start, c_end - 0.02)
+
+                tok.start = round(c_start, 3)
+                tok.end = round(c_end, 3)
+                prev_end_time = tok.end
+                clamped_tokens.append(tok)
+
+            event = RecoveryEvent(
+                event_id=len(recovery_events) + 1,
+                gap_start=g_s,
+                gap_end=g_e,
+                gap_duration=gap_dur,
+                padded_start=p_start,
+                padded_end=p_end,
+                energy_db=edb,
+                recovered_text="".join(p.phoneme for p in clamped_tokens),
+                recovered_phonemes=clamped_tokens,
+            )
+            recovery_events.append(event)
+            new_phonemes_to_insert.extend(clamped_tokens)
+
+            # Direct patch of global CTC emission matrix inside gap frames (restores true probabilities without blank peak)
+            if logprobs_matrix is not None and len(slice_lp) > 0:
+                s_frame = int(round(g_s / FRAME_TIME_STEP))
+                e_frame = min(logprobs_matrix.shape[0], int(round(g_e / FRAME_TIME_STEP)))
+                local_s = int(round((g_s - p_start) / FRAME_TIME_STEP))
+                local_e = local_s + (e_frame - s_frame)
+                if local_e <= len(slice_lp) and e_frame > s_frame:
+                    logprobs_matrix[s_frame:e_frame] = slice_lp[local_s:local_e]
 
             if on_progress:
                 on_progress(((g_idx + 1) / max(1, len(candidate_gaps))) * 100.0, time.time() - start_time)
@@ -659,8 +659,8 @@ class SpeechRecoveryEngine:
             speech_holes_detected=speech_holes_detected,
             recovered_events_count=len(recovery_events),
             recovered_phonemes_count=len(new_phonemes_to_insert),
-            energy_threshold_db=energy_threshold_db,
-            min_hole_duration_s=min_hole_duration_s,
+            energy_threshold_db=-55.0,
+            min_hole_duration_s=min_hole_dur,
         )
 
         return SpeechRecoveryResult(
@@ -668,3 +668,4 @@ class SpeechRecoveryEngine:
             recovery_events=recovery_events,
             recovery_summary=summary,
         )
+

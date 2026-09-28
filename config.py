@@ -88,20 +88,15 @@ FLUSH_PAD_FRAMES: int = 36                  # 360ms tail flush padding (guarante
 RESET_ENCODER_ON_SILENCE: bool = True
 SUBSEGMENT_MIN_PAUSE_S: float = 0.16        # Minimum pause duration (seconds) to split an Ayah into a Subsegment
 
-# In-loop blank reset is disabled because zeroing states during streaming chunk loop
-# destroys onset consonants and subsequent words (e.g. cutting 'طه' into 'ها', dropping 'ما').
-ENABLE_IN_LOOP_BLANK_RESET: bool = False
-IN_LOOP_RESET_MIN_CHUNKS: int = 2
-
 
 # ==============================================================================
 # 7. SPEECH RECOVERY CONTROLS (INTRA-SEGMENT HOLE RE-TRANSCRIPTION)
 # ==============================================================================
-ENABLE_SPEECH_RECOVERY: bool = False         # Targeted re-transcription of severe deletion holes
-SPEECH_RECOVERY_ENERGY_THRESHOLD_DB: float = -31.0
-SPEECH_RECOVERY_MIN_HOLE_DURATION_S: float = 0.45
-SPEECH_RECOVERY_PADDING_S: float = 0.12
-SPEECH_RECOVERY_MIN_PHONEMES_IN_GAP: int = 1
+ENABLE_SPEECH_RECOVERY: bool = True          # Targeted re-transcription of severe deletion holes
+SPEECH_RECOVERY_MIN_HOLE_DURATION_S: float = 1.40  # Minimum gap duration to inspect (captures breath pauses, skips short word gaps)
+SPEECH_RECOVERY_PADDING_PRE_S: float = 0.16        # 160ms pre-roll for causal conv states ramp-up
+SPEECH_RECOVERY_PADDING_POST_S: float = 0.24       # 240ms flush padding for trailing vowels
+SPEECH_RECOVERY_MIN_PHONEMES_IN_GAP: int = 2       # Rejects single-token noise glitches while preserving 2-phoneme words (قُلْ، مَا، طه)
 
 
 # ==============================================================================
