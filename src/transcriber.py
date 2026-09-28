@@ -237,8 +237,15 @@ class ZipformerONNX:
         enable_in_loop_reset = getattr(config, "ENABLE_IN_LOOP_BLANK_RESET", False)
         min_blank_chunks = getattr(config, "IN_LOOP_RESET_MIN_CHUNKS", 1)
         if enable_in_loop_reset:
-            slice_frame_energy = np.mean(padded_feats, axis=-1)
-            silence_th = float(np.percentile(slice_frame_energy[:len(feats)], 20) + 1.0) if len(feats) > 0 else -10.0
+            # Log-energy per frame: mean of log-filterbank coefficients across mel bins.
+            # Fbank features are already in log scale (log-mel), so the per-frame mean
+            # is proportional to log-energy and gives reliable silence detection.
+            log_energy = np.mean(padded_feats, axis=-1)          # shape: (T,)  log-scale
+            # Silence floor = 10th percentile of speech-only frames (exclude flush pad)
+            # Using 10th percentile (not 20th) to robustly track the true noise floor.
+            # We add a small margin (+2.0 log-units) so only true silences fire the reset.
+            speech_energy = log_energy[:len(feats)]
+            silence_th = float(np.percentile(speech_energy, 10) + 2.0) if len(feats) > 0 else -999.0
             consecutive_silence_chunks = 0
 
         pos = 0
@@ -251,9 +258,14 @@ class ZipformerONNX:
 
             if enable_in_loop_reset:
                 chunk_preds = np.argmax(chunk_lp, axis=-1)
-                chunk_energy = float(np.mean(slice_frame_energy[pos:pos + CHUNK_LEN]))
+                # Chunk log-energy: mean over all frames in this chunk (CHUNK_LEN=48 frames)
+                chunk_log_energy = float(np.mean(log_energy[pos:pos + CHUNK_LEN]))
+                # Only reset when BOTH gates fire:
+                #   1. ALL frames in this 480ms chunk predicted as CTC blank
+                #   2. Chunk log-energy is below the silence floor (genuine acoustic silence)
+                # This prevents resetting on speech-blanks caused by attention saturation.
                 is_pure_blank = bool(np.all(chunk_preds == BLANK_ID))
-                is_acoustic_silence = chunk_energy <= silence_th
+                is_acoustic_silence = chunk_log_energy <= silence_th
 
                 if is_pure_blank and is_acoustic_silence:
                     consecutive_silence_chunks += 1
@@ -261,6 +273,7 @@ class ZipformerONNX:
                         for k in self._state_names:
                             states[k].fill(0)
                         states['processed_lens'].fill(0)
+                        consecutive_silence_chunks = 0  # reset counter after firing
                 else:
                     consecutive_silence_chunks = 0
 
@@ -475,7 +488,7 @@ class ZipformerONNX:
 
                 # Map local segment phonemes into global timeline
                 for p in seg_phonemes:
-                    if p.start > (seg.duration_sec + 0.25):
+                    if p.start > (seg.duration_sec + 0.40):
                         continue
 
                     g_start = round(seg.padded_start_sec + p.start, 3)

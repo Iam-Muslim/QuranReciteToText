@@ -73,24 +73,25 @@ VAD_BACKEND: str = "silero_dual_check"                  # "energy" (ultra-fast 4
 VAD_SILERO_THRESHOLD: float = 0.45          # Silero speech onset probability threshold
 VAD_MADD_PERIODICITY_TH: float = 0.45       # Normalized autocorrelation peak for held Madd ("ييييي")
 VAD_MADD_MIN_ENERGY_DB: float = -38.0       # Minimum floor dB for held letter detection
-VAD_MIN_PAUSE_S: float = 0.25               # Natural Waqf pause threshold (seconds; prevents intra-Ayah splits and mega-segments)
-VAD_SAKT_MIN_PAUSE_S: float = 0.20          # Sakt pause detection threshold (seconds)
-VAD_CLOSURE_MAX_S: float = 0.16             # Max intra-word stop closure / Qalqalah bridge (seconds)
+VAD_MIN_PAUSE_S: float = 0.20               # Natural Waqf pause threshold (seconds; splits speech at genuine inter-phrase silences)
+VAD_SAKT_MIN_PAUSE_S: float = 0.16          # Sakt pause detection threshold (seconds)
+VAD_CLOSURE_MAX_S: float = 0.14             # Max intra-word stop closure / Qalqalah bridge (seconds)
 VAD_ADAPTIVE: bool = True                   # Dynamic noise-floor adaptation (works on studio & noisy phone audio)
 VAD_ONSET_DB: float = -35.0                 # Fallback speech onset energy threshold (dB)
 VAD_OFFSET_DB: float = -42.0                # Fallback speech offset energy threshold (dB)
-VAD_HANGOVER_S: float = 0.20                # Hangover buffer (protecting soft Madd & Ghunnah tails)
-VAD_MAX_PAD_S: float = 0.08                 # Post-roll margin (tight to avoid feeding silence before speech)
-VAD_PREROLL_S: float = 0.04                 # Tight pre-roll margin (prevents feeding silence before speech onset)
-FLUSH_PAD_FRAMES: int = 28                  # Optimal tail flush padding (280ms silence to emit delayed CTC spikes)
+VAD_HANGOVER_S: float = 0.08                # 80ms hangover buffer (protects soft Madd/Ghunnah tails without swallowing pauses)
+VAD_MAX_PAD_S: float = 0.25                 # 250ms clean silence margin on both sides of each segment
+VAD_PREROLL_S: float = 0.20                 # 200ms pre-roll margin (initializes encoder conv states cleanly on silence)
+FLUSH_PAD_FRAMES: int = 36                  # 360ms tail flush padding (guarantees all delayed CTC spikes exit)
 
 # Encoder state reset at Waqf boundaries (prevents repetition skipping / attention saturation)
 RESET_ENCODER_ON_SILENCE: bool = True
-SUBSEGMENT_MIN_PAUSE_S: float = 0.20        # Minimum pause duration (seconds) to split an Ayah into a Subsegment
+SUBSEGMENT_MIN_PAUSE_S: float = 0.16        # Minimum pause duration (seconds) to split an Ayah into a Subsegment
 
-# Dual-gated in-loop cache reset (clears Zipformer attention saturation on acoustic silence + CTC blanks)
-ENABLE_IN_LOOP_BLANK_RESET: bool = False      # Set to False to disable in-loop reset for testing
-IN_LOOP_RESET_MIN_CHUNKS: int = 1            # Minimum consecutive blank+silence chunks (1 chunk = 480ms)
+# In-loop blank reset is disabled because zeroing states during streaming chunk loop
+# destroys onset consonants and subsequent words (e.g. cutting 'طه' into 'ها', dropping 'ما').
+ENABLE_IN_LOOP_BLANK_RESET: bool = False
+IN_LOOP_RESET_MIN_CHUNKS: int = 2
 
 
 # ==============================================================================
