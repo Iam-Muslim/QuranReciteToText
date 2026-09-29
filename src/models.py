@@ -193,31 +193,33 @@ def enforce_word_phoneme_monotonicity(word: 'QuranWord') -> None:
     w_start = word.start if word.start is not None else 0.0
     w_end = word.end if word.end is not None else word.phonemes[-1].get("end", 0.0)
 
-    # Pin first phoneme to word start
+    num_p = len(word.phonemes)
+    w_dur = max(0.040 * num_p, round(w_end - w_start, 2))
+    min_dur = min(0.100, max(0.040, round(w_dur / num_p, 3)))
+
+    # 1. Forward pass: ensure contiguity within the word
     word.phonemes[0]["start"] = round(w_start, 2)
-    if word.phonemes[0]["end"] <= word.phonemes[0]["start"]:
-        word.phonemes[0]["end"] = round(word.phonemes[0]["start"] + 0.060, 2)
+    cur_end = word.phonemes[0].get("end", word.phonemes[0]["start"] + min_dur)
+    word.phonemes[0]["end"] = round(max(cur_end, word.phonemes[0]["start"] + min_dur), 2)
 
-    # Forward pass: ensure contiguity within the word
-    for i in range(1, len(word.phonemes)):
-        # Bridge any internal gap or resolve overlap
+    for i in range(1, num_p):
         word.phonemes[i]["start"] = word.phonemes[i - 1]["end"]
-        if word.phonemes[i]["end"] <= word.phonemes[i]["start"]:
-            word.phonemes[i]["end"] = round(word.phonemes[i]["start"] + 0.060, 2)
+        cur_end = word.phonemes[i].get("end", word.phonemes[i]["start"] + min_dur)
+        word.phonemes[i]["end"] = round(max(cur_end, word.phonemes[i]["start"] + min_dur), 2)
 
-    # Pin last phoneme to word end if word.end is set and greater than last start
-    if word.phonemes[-1]["end"] != round(w_end, 2) and round(w_end, 2) > word.phonemes[-1]["start"]:
-        word.phonemes[-1]["end"] = round(w_end, 2)
-
-    # Backward pass: resolve if end was clamped below start
-    for i in range(len(word.phonemes) - 2, -1, -1):
-        if word.phonemes[i]["end"] > word.phonemes[i + 1]["start"]:
-            word.phonemes[i]["end"] = word.phonemes[i + 1]["start"]
-        if word.phonemes[i]["start"] >= word.phonemes[i]["end"]:
-            prev_end = word.phonemes[i - 1]["end"] if i > 0 else round(w_start, 2)
-            word.phonemes[i]["start"] = round(max(prev_end, word.phonemes[i]["end"] - 0.060), 2)
-            if i > 0:
-                word.phonemes[i - 1]["end"] = word.phonemes[i]["start"]
+    # 2. Pin last phoneme to word end if word.end is set and scale proportionally if needed
+    target_end = round(w_end, 2)
+    if word.phonemes[-1]["end"] != target_end and target_end > round(w_start, 2):
+        total_p_dur = word.phonemes[-1]["end"] - word.phonemes[0]["start"]
+        target_dur = target_end - word.phonemes[0]["start"]
+        if target_dur > 0 and total_p_dur > 0:
+            scale = target_dur / total_p_dur
+            cur_s = word.phonemes[0]["start"]
+            for i in range(num_p):
+                d = max(0.030, (word.phonemes[i]["end"] - word.phonemes[i]["start"]) * scale)
+                word.phonemes[i]["start"] = round(cur_s, 2)
+                word.phonemes[i]["end"] = round(cur_s + d, 2) if i < num_p - 1 else target_end
+                cur_s = word.phonemes[i]["end"]
 
 
 @dataclass(slots=True)
