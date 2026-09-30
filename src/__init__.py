@@ -358,8 +358,8 @@ def process_audio(
     elif isinstance(audio_data, tuple):
         orig_sr, pcm = audio_data
         if orig_sr != SAMPLE_RATE:
-            import librosa
-            pcm = librosa.resample(pcm.astype(np.float32), orig_sr=orig_sr, target_sr=SAMPLE_RATE)
+            from src.audio import _resample_audio
+            pcm = _resample_audio(pcm.astype(np.float32), orig_sr, SAMPLE_RATE)
         result = pipeline.process_pcm(
             audio_pcm=pcm.astype(np.float32),
             output_dir=output_dir,
