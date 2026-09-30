@@ -372,75 +372,102 @@ class PipelineResult:
 
         raw_segments: List[Dict[str, Any]] = []
 
-        # 1. Opening Intro (Isti'adha / Basmalah)
-        if self.segments:
-            intro = getattr(self.segments[0], "intro", None)
-            if intro and intro.get("words"):
-                raw_intro_words = intro["words"]
-                ist_words = [
-                    w for w in raw_intro_words
-                    if str(w.get("location", "") if isinstance(w, dict) else getattr(w, "location", "")).startswith("0:1:")
+        def _process_intro_dict(intro_d: Dict[str, Any]) -> List[Dict[str, Any]]:
+            if not intro_d or not intro_d.get("words"):
+                return []
+            raw_intro_words = intro_d["words"]
+
+            def _get_intro_spec_type(w: Any) -> str:
+                loc = str(w.get("location", "") if isinstance(w, dict) else getattr(w, "location", ""))
+                if loc.startswith("0:2:"):
+                    return "Takbeer"
+                if loc.startswith("0:3:"):
+                    return "Tasmee"
+                if loc.startswith("0:1:"):
+                    return "Isti'adha"
+                return "Basmala"
+
+            groups_to_process = []
+            cur_type = None
+            cur_words = []
+            for w in raw_intro_words:
+                st = _get_intro_spec_type(w)
+                if st != cur_type:
+                    if cur_words and cur_type is not None:
+                        groups_to_process.append((cur_type, cur_words))
+                    cur_type = st
+                    cur_words = [w]
+                else:
+                    cur_words.append(w)
+            if cur_words and cur_type is not None:
+                groups_to_process.append((cur_type, cur_words))
+
+            if not groups_to_process and raw_intro_words:
+                text_peek = " ".join(
+                    str(w.get("word", "") if isinstance(w, dict) else getattr(w, "word", ""))
+                    for w in raw_intro_words
+                )
+                if any(x in text_peek for x in ("أَكْبَر", "اكبر")):
+                    spec = "Takbeer"
+                elif any(x in text_peek for x in ("سَمِعَ", "سمع")):
+                    spec = "Tasmee"
+                elif any(x in text_peek for x in ("أَعوذُ", "اعوذ", "أعوذ")):
+                    spec = "Isti'adha"
+                else:
+                    spec = "Basmala"
+                groups_to_process.append((spec, raw_intro_words))
+
+            intro_segs: List[Dict[str, Any]] = []
+            for spec_type, g_words in groups_to_process:
+                g_raw_starts = [
+                    float(w.get("start", intro_d.get("start", 0.0)) if isinstance(w, dict) else getattr(w, "start", 0.0))
+                    for w in g_words
                 ]
-                bas_words = [
-                    w for w in raw_intro_words
-                    if not str(w.get("location", "") if isinstance(w, dict) else getattr(w, "location", "")).startswith("0:1:")
+                g_raw_ends = [
+                    float(w.get("end", intro_d.get("end", 0.0)) if isinstance(w, dict) else getattr(w, "end", 0.0))
+                    for w in g_words
                 ]
+                g_abs_s = round(min(g_raw_starts) + offset_s, 3)
+                g_abs_e = round(max(g_raw_ends) + offset_s, 3)
+                if g_abs_e <= g_abs_s:
+                    g_abs_e = round(g_abs_s + 0.1, 3)
+                g_dur = max(0.0, round(g_abs_e - g_abs_s, 3))
 
-                groups_to_process = []
-                if ist_words and bas_words:
-                    groups_to_process.append(("Isti'adha", ist_words))
-                    groups_to_process.append(("Basmala", bas_words))
-                elif raw_intro_words:
-                    text_peek = " ".join(
-                        str(w.get("word", "") if isinstance(w, dict) else getattr(w, "word", ""))
-                        for w in raw_intro_words
-                    )
-                    spec = "Isti'adha" if any(x in text_peek for x in ("أَعوذُ", "اعوذ", "أعوذ")) else "Basmala"
-                    groups_to_process.append((spec, raw_intro_words))
-
-                for spec_type, g_words in groups_to_process:
-                    g_raw_starts = [
-                        float(w.get("start", intro.get("start", 0.0)) if isinstance(w, dict) else getattr(w, "start", 0.0))
-                        for w in g_words
-                    ]
-                    g_raw_ends = [
-                        float(w.get("end", intro.get("end", 0.0)) if isinstance(w, dict) else getattr(w, "end", 0.0))
-                        for w in g_words
-                    ]
-                    g_abs_s = round(min(g_raw_starts) + offset_s, 3)
-                    g_abs_e = round(max(g_raw_ends) + offset_s, 3)
-                    if g_abs_e <= g_abs_s:
-                        g_abs_e = round(g_abs_s + 0.1, 3)
-                    g_dur = max(0.0, round(g_abs_e - g_abs_s, 3))
-
-                    w_list = []
-                    for w in g_words:
-                        w_d = w if isinstance(w, dict) else (w.to_dict() if hasattr(w, "to_dict") else vars(w))
-                        ws = float(w_d.get("start", g_abs_s)) + offset_s
-                        we = float(w_d.get("end", g_abs_e)) + offset_s
-                        w_list.append({
-                            "word": str(w_d.get("word", "")),
-                            "location": str(w_d.get("location", "1:1:1")),
-                            "start": max(0.0, round(ws - g_abs_s, 3)),
-                            "end": min(g_dur, max(0.0, round(we - g_abs_s, 3))),
-                        })
-
-                    norm_words = _normalize_words(w_list, g_dur)
-                    text = " ".join(w["word"] for w in norm_words if w.get("word"))
-                    raw_segments.append({
-                        "segment": 0,
-                        "time_from": g_abs_s,
-                        "time_to": g_abs_e,
-                        "ref_from": spec_type,
-                        "ref_to": spec_type,
-                        "special_type": spec_type,
-                        "matched_text": text,
-                        "confidence": 1.0,
-                        "error": None,
-                        "has_missing_words": False,
-                        "potentially_undersegmented": False,
-                        "words": norm_words,
+                w_list = []
+                for w in g_words:
+                    w_d = w if isinstance(w, dict) else (w.to_dict() if hasattr(w, "to_dict") else vars(w))
+                    ws = float(w_d.get("start", g_abs_s)) + offset_s
+                    we = float(w_d.get("end", g_abs_e)) + offset_s
+                    w_list.append({
+                        "word": str(w_d.get("word", "")),
+                        "location": str(w_d.get("location", "1:1:1")),
+                        "start": max(0.0, round(ws - g_abs_s, 3)),
+                        "end": min(g_dur, max(0.0, round(we - g_abs_s, 3))),
                     })
+
+                norm_words = _normalize_words(w_list, g_dur)
+                text = " ".join(w["word"] for w in norm_words if w.get("word"))
+                intro_segs.append({
+                    "segment": 0,
+                    "time_from": g_abs_s,
+                    "time_to": g_abs_e,
+                    "ref_from": spec_type,
+                    "ref_to": spec_type,
+                    "special_type": spec_type,
+                    "matched_text": text,
+                    "confidence": 1.0,
+                    "error": None,
+                    "has_missing_words": False,
+                    "potentially_undersegmented": False,
+                    "words": norm_words,
+                })
+            return intro_segs
+
+        # 1. Intros across all Surahs (Isti'adha / Basmalah at opening and inter-surah transitions)
+        for seg in self.segments:
+            intro = getattr(seg, "intro", None)
+            if intro and isinstance(intro, dict) and intro.get("words"):
+                raw_segments.extend(_process_intro_dict(intro))
 
         # 2. Extract Ayahs and Sub-segments
         for seg in self.segments:
