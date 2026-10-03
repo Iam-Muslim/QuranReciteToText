@@ -1,7 +1,7 @@
 """Phase 2: CTC Viterbi Trellis Forced Alignment Engine.
 
 Ultra-fast, high-precision acoustic forced alignment with Zipformer lookahead compensation,
-extended Tajweed sonorant handling, adaptive Viterbi trellising, and JIT-accelerated audio features.
+canonical Tajweed sonorant handling, adaptive Viterbi trellising, and JIT-accelerated audio features.
 """
 
 from __future__ import annotations
@@ -22,16 +22,11 @@ from config import (
 from src.models import PhonemeToken, PauseInterval
 
 
-# One CTC frame preserves fast phonemes without pushing later timings past the audio.
 _MIN_PHONEME_DURATION_S = FRAME_STEP
-_MIN_PHONEME_DURATION_FRAMES = _MIN_PHONEME_DURATION_S / FRAME_STEP
+_MIN_PHONEME_DURATION_FRAMES = 1.0
 
-# Canonical Quranic Tajweed Sonorants (Madd 2-6 Harakat, Ghunnah 2-4 Harakat, Madd Silat)
-_TAJWEED_SONORANTS = (
-    "اا", "وو", "يي", "اااا", "ااااا", "اااااا", "ووو", "ييي", "ييييي",
-    "مم", "ممم", "مممم", "نن", "ننن", "نننن", "ں", "ںںں", "۾", "۾۾۾",
-    "ۥ", "ۦ", "ۥۥ", "ۦۦ", "ۥۥۥۥ", "ۦۦۦۦ", "ۥۥۥۥۥ", "ۦۦۦۦۦ", "ۥۥۥۥۥۥ", "ۦۦۦۦۦۦ",
-)
+# Essential Tajweed sonorant roots for substring matching (covers all lengths 2-6 and geminates)
+_TAJWEED_SONORANTS = ("اا", "وو", "يي", "مم", "نن", "ں", "۾", "ۥ", "ۦ")
 
 try:
     from numba import njit
@@ -43,10 +38,9 @@ except ImportError:
 
 
 @njit(fastmath=True, cache=True)
-def _fast_audio_features(pcm: np.ndarray, frame_samples: int, n_frames: int) -> Tuple[np.ndarray, np.ndarray]:
-    """Single-pass vectorized RMS energy (dB) and Zero Crossing Rate (ZCR) directly from PCM."""
+def _fast_rms_db(pcm: np.ndarray, frame_samples: int, n_frames: int) -> np.ndarray:
+    """Single-pass vectorized RMS energy (dB) directly from PCM audio buffer."""
     rms_db = np.empty(n_frames, dtype=np.float32)
-    zcr = np.empty(n_frames, dtype=np.float32)
     inv_fs = 1.0 / frame_samples
     pcm_len = len(pcm)
 
@@ -54,24 +48,16 @@ def _fast_audio_features(pcm: np.ndarray, frame_samples: int, n_frames: int) -> 
         offset = i * frame_samples
         if offset >= pcm_len:
             rms_db[i] = -60.0
-            zcr[i] = 0.0
             continue
         count = min(frame_samples, pcm_len - offset)
         sq_sum = 0.0
-        crossings = 0
-        prev_sign = pcm[offset] >= 0
         for j in range(count):
             s = pcm[offset + j]
             sq_sum += s * s
-            curr_sign = s >= 0
-            if curr_sign != prev_sign:
-                crossings += 1
-                prev_sign = curr_sign
         rms = np.sqrt(sq_sum * inv_fs + 1e-12)
         rms_db[i] = 20.0 * np.log10(rms)
-        zcr[i] = (crossings * inv_fs) * 0.5
 
-    return rms_db, zcr
+    return rms_db
 
 
 @njit(fastmath=True, cache=True)
@@ -145,7 +131,7 @@ def _fast_backtrack_and_extract(
     l: int,
     band_width: int,
     n: int,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """C-speed backtracking and boundary extraction without array allocations in Python."""
     curr_s = l - 1
     if l > 1 and v_prev[l - 2] > v_prev[l - 1]:
@@ -215,7 +201,7 @@ def _fast_backtrack_and_extract(
             peak_frames[k] = -1
             peak_confidences[k] = 0.5
 
-    return state_path, raw_starts, raw_ends, peak_frames, peak_confidences
+    return raw_starts, raw_ends, peak_frames, peak_confidences
 
 
 def warmup_aligner_jit() -> None:
@@ -227,7 +213,7 @@ def warmup_aligner_jit() -> None:
         s_b = np.zeros(2, dtype=np.int32)
         bt, vp = _ctc_viterbi_forward(lp, s_arr, sk_m, s_b, 2, 3, 3, 250, 0.5)
         _fast_backtrack_and_extract(bt, s_b, vp, lp, np.array([1], dtype=np.int32), 2, 3, 3, 1)
-        _fast_audio_features(np.zeros(640, dtype=np.float32), 640, 1)
+        _fast_rms_db(np.zeros(640, dtype=np.float32), 640, 1)
     except Exception:
         pass
 
@@ -336,7 +322,7 @@ class CtcViterbiAligner:
         )
 
         # 5. Fast Backtracking & Boundary Extraction in Numba (Sub-millisecond)
-        state_path, raw_starts, raw_ends, peak_frames, peak_confidences = _fast_backtrack_and_extract(
+        raw_starts, raw_ends, peak_frames, peak_confidences = _fast_backtrack_and_extract(
             backtrack=backtrack,
             s_base=s_base,
             v_prev=v_prev,
@@ -361,21 +347,18 @@ class CtcViterbiAligner:
                 raw_starts[k] = peak_frames[k]
                 raw_ends[k] = peak_frames[k]
 
-        # 6. Fast Audio Energy & ZCR Extraction
+        # 6. Fast Audio Energy Extraction
         frame_samples = int(cls.frame_step * 16000)
         if audio_pcm is not None and len(audio_pcm) >= frame_samples:
             n_audio_frames = min(total_frames, len(audio_pcm) // frame_samples)
-            rms_db, zcr = _fast_audio_features(audio_pcm, frame_samples, n_audio_frames)
+            rms_db = _fast_rms_db(audio_pcm, frame_samples, n_audio_frames)
             if n_audio_frames < total_frames:
                 rms_pad = np.full(total_frames - n_audio_frames, -50.0, dtype=np.float32)
-                zcr_pad = np.full(total_frames - n_audio_frames, 0.05, dtype=np.float32)
                 rms_db = np.concatenate((rms_db, rms_pad))
-                zcr = np.concatenate((zcr, zcr_pad))
             p05 = float(np.percentile(rms_db, 5))
             silence_energy_threshold = float(np.clip(p05 + 6.0, -50.0, -36.0))
         else:
             rms_db = np.full(total_frames, -30.0, dtype=np.float32)
-            zcr = np.full(total_frames, 0.10, dtype=np.float32)
             silence_energy_threshold = -36.0
 
         min_dur_s = _MIN_PHONEME_DURATION_S
@@ -463,7 +446,17 @@ class CtcViterbiAligner:
                 elif is_prev_madd and not is_curr_madd:
                     boundary = max(raw_ends[k - 1] + 1, raw_starts[k] - 1)
                 else:
-                    boundary = int(round((gap_start + raw_starts[k]) / 2.0)) if gap_end >= gap_start else raw_starts[k]
+                    # Consonant to consonant: find exact acoustic posterior crossover
+                    boundary = -1
+                    if gap_end >= gap_start and lp is not None:
+                        t_prev = int(token_ids[k - 1])
+                        t_curr = int(token_ids[k])
+                        for f in range(gap_start, min(len(lp), raw_starts[k] + 1)):
+                            if lp[f, t_curr] >= lp[f, t_prev]:
+                                boundary = f
+                                break
+                    if boundary == -1:
+                        boundary = int(round((gap_start + raw_starts[k]) / 2.0)) if gap_end >= gap_start else raw_starts[k]
 
                 b_float = float(boundary)
                 token_ends[k - 1] = max(token_starts[k - 1] + min_dur_f, b_float)
