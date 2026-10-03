@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import os
 import sys
+
+os.environ["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
+os.environ["PYLAUNCH_NO_UPDATE_CHECK"] = "1"
+
 import time
 import json
 import argparse

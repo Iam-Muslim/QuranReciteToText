@@ -8,6 +8,11 @@ from __future__ import annotations
 
 import os
 import sys
+
+# Silence pip and Python launcher background update checks
+os.environ["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
+os.environ["PYLAUNCH_NO_UPDATE_CHECK"] = "1"
+
 import ssl
 import ctypes
 import shutil
