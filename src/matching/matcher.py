@@ -134,13 +134,15 @@ def _align_and_package_ayahs(
     p_codes = np.array([ord(c) for c in asr_str], dtype=np.int32)
     r_codes = np.array([ord(c) for c in sub_r_str], dtype=np.int32)
 
-    word_starts_mask = np.zeros(n + 1, dtype=np.bool_)
-    word_ends_mask = np.zeros(n + 1, dtype=np.bool_)
-    for j in range(n + 1):
-        if j == 0 or (j < n and sub_phone_to_word[j] != sub_phone_to_word[j - 1]):
-            word_starts_mask[j] = True
-        if j == n or (j > 0 and j < n and sub_phone_to_word[j] != sub_phone_to_word[j - 1]):
-            word_ends_mask[j] = True
+    diff = sub_phone_to_word[1:] != sub_phone_to_word[:-1]
+    word_starts_mask = np.empty(n + 1, dtype=np.bool_)
+    word_ends_mask = np.empty(n + 1, dtype=np.bool_)
+    word_starts_mask[0] = True
+    word_starts_mask[1:n] = diff
+    word_starts_mask[n] = False
+    word_ends_mask[0] = False
+    word_ends_mask[1:n] = diff
+    word_ends_mask[n] = True
 
     # Fast JIT-vectorized edit costs
     ins_costs = _compute_insertion_costs_fast(p_codes, cfg.cost_insertion, cfg.acoustic_confusion_cost)
