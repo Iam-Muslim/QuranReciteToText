@@ -173,6 +173,7 @@ class ZipformerONNX:
         num_threads = int(os.environ.get("ONNX_NUM_THREADS", str(default_threads)))
         sess_opts.intra_op_num_threads = num_threads
         sess_opts.inter_op_num_threads = 1
+        sess_opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
 
         opt_model_path = os.path.splitext(DEFAULT_MODEL_PATH)[0] + ".opt.onnx"
         if os.path.exists(opt_model_path):

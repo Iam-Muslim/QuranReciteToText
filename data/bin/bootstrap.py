@@ -9,9 +9,11 @@ from __future__ import annotations
 import os
 import sys
 
-# Silence pip and Python launcher background update checks
+# Silence pip and Python launcher background update checks, prevent OpenMP thread busy-spin
 os.environ["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
 os.environ["PYLAUNCH_NO_UPDATE_CHECK"] = "1"
+os.environ.setdefault("OMP_WAIT_POLICY", "PASSIVE")
+os.environ.setdefault("KMP_BLOCKTIME", "0")
 
 import ssl
 import ctypes
