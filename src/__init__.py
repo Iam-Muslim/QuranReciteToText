@@ -42,7 +42,7 @@ from src.models import (
 )
 from src.audio import AudioDecoder, _resample_audio
 from src.transcriber import ZipformerONNX, SpeechRecoveryEngine
-from src.aligner import CtcViterbiAligner, warmup_aligner_jit
+from src.aligner.ctc_aligner import CtcViterbiAligner, warmup_aligner_jit
 from src.matching import (
     QuranWordMatcher,
     MatcherConfig,
@@ -94,6 +94,7 @@ class AudioPipeline:
         on_progress_event: Optional[Callable[[PipelineProgressEvent], None]] = None,
         target_surah: Optional[int] = None,
         start_ayah: Optional[int] = None,
+        enable_mfa: bool = False,
     ) -> PipelineResult:
         load_start = time.time()
         if on_progress_event:
@@ -112,6 +113,7 @@ class AudioPipeline:
             on_progress_event=on_progress_event,
             target_surah=target_surah,
             start_ayah=start_ayah,
+            enable_mfa=enable_mfa,
         )
 
     def process_pcm(
@@ -125,6 +127,7 @@ class AudioPipeline:
         json_progress: bool = False,
         target_surah: Optional[int] = None,
         start_ayah: Optional[int] = None,
+        enable_mfa: bool = False,
     ) -> PipelineResult:
         overall_start = time.time()
         audio_duration = len(audio_pcm) / SAMPLE_RATE
@@ -228,7 +231,8 @@ class AudioPipeline:
             pause_intervals=raw_result.pause_intervals,
             audio_pcm=audio_pcm,
         )
-        # Release raw PCM audio buffer to reclaim memory after Phase 2 CTC Alignment
+        # Retain PCM buffer if MFA is requested; otherwise release immediately
+        mfa_audio_buffer = audio_pcm if enable_mfa else None
         audio_pcm = None
         align_time = time.time() - align_start
         if live_profile:
@@ -315,6 +319,51 @@ class AudioPipeline:
         export_time = time.time() - export_start
         if live_profile:
             print(f"Phase 4 JSON Export : {export_time:.2f}s", flush=True)
+
+        # Phase 5: Montreal Forced Alignment (MFA 10ms Phone/Letter Refinement)
+        mfa_time = 0.0
+        mfa_results = None
+        if enable_mfa:
+            mfa_start = time.time()
+            if on_progress_event:
+                on_progress_event(
+                    PipelineProgressEvent(
+                        stage=PipelineStage.mfa,
+                        percent=0.0,
+                        elapsed_seconds=time.time() - overall_start,
+                        message="Running Montreal Forced Alignment (10ms)...",
+                    )
+                )
+            if json_progress:
+                sys.stdout.write(json.dumps({"stage": "mfa", "status": "started"}) + "\n")
+                sys.stdout.flush()
+
+            from src.aligner.mfa_aligner import QuranMfaAligner
+            mfa_engine = QuranMfaAligner()
+            mfa_results = mfa_engine.align_pipeline_result(
+                pipeline_result=result,
+                audio_pcm=mfa_audio_buffer,
+                output_dir=output_dir,
+            )
+            result.mfa_results = mfa_results
+            mfa_audio_buffer = None
+            mfa_time = time.time() - mfa_start
+
+            if live_profile:
+                print(f"Phase 5 MFA Align   : {mfa_time:.2f}s", flush=True)
+            if json_progress:
+                sys.stdout.write(json.dumps({"stage": "mfa", "elapsed": round(mfa_time, 2)}) + "\n")
+                sys.stdout.flush()
+            if on_progress_event:
+                on_progress_event(
+                    PipelineProgressEvent(
+                        stage=PipelineStage.mfa,
+                        percent=100.0,
+                        elapsed_seconds=time.time() - overall_start,
+                        message="MFA alignment completed",
+                    )
+                )
+
         total_time = time.time() - overall_start
 
         profiling = PipelineProfiling(
@@ -326,6 +375,7 @@ class AudioPipeline:
             alignment_time=align_time,
             match_time=match_time,
             export_time=export_time,
+            mfa_time=mfa_time,
             total_time=total_time,
         )
         result.total_processing_time_seconds = total_time

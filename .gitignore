@@ -19,3 +19,5 @@ venv/
 .vscode/
 .idea/
 benchmark
+mfa_workspace
+quran_hafs_acoustic.zip

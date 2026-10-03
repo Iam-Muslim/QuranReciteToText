@@ -56,6 +56,7 @@ def main():
     parser.add_argument("--threads", type=int, default=None, help="ONNX execution threads (default: auto/2)")
     parser.add_argument("--workers", type=int, default=None, help="Parallel segment workers (default: 1, or auto in --fast mode)")
     parser.add_argument("--progress", action="store_true", default=False, help="Emit JSON progress lines for frontend apps")
+    parser.add_argument("--mfa", action="store_true", default=False, help="Run secondary 10ms phone-level alignment using Montreal Forced Aligner (MFA)")
     args = parser.parse_args()
 
     audio_path = args.audio
@@ -120,6 +121,7 @@ def main():
         export_json_files=config.EXPORT_ALL_ARTIFACTS,
         live_profile=not args.progress,
         json_progress=args.progress,
+        enable_mfa=args.mfa,
     )
 
     total_time = time.time() - start_time
@@ -130,13 +132,16 @@ def main():
         print(f"Total Time          : {total_time:.2f}s", flush=True)
         print("=" * 55)
     else:
-        print(json.dumps({
+        out_dict = {
             "stage": "completed",
             "audio_duration": round(prof.audio_duration, 2),
             "processing_time": round(prof.total_time, 2),
             "total_time": round(total_time, 2),
             "real_time_factor": round(prof.real_time_factor, 1),
-        }), flush=True)
+        }
+        if prof.mfa_time > 0:
+            out_dict["mfa_time"] = round(prof.mfa_time, 2)
+        print(json.dumps(out_dict), flush=True)
 
 
 if __name__ == "__main__":

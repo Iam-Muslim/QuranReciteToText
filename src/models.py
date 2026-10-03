@@ -309,6 +309,7 @@ class PipelineProfiling:
     alignment_time: float = 0.0
     match_time: float = 0.0
     export_time: float = 0.0
+    mfa_time: float = 0.0
     total_time: float = 0.0
 
     @property
@@ -334,6 +335,7 @@ class PipelineResult:
     profiling: Optional[PipelineProfiling] = None
     pause_timestamps: List[float] = field(default_factory=list)
     pause_intervals: List[PauseInterval] = field(default_factory=list)
+    mfa_results: Optional[List[Any]] = None
 
     def to_output_dict(self) -> Dict[str, Any]:
         return {"total_ayahs": len(self.segments), "ayahs": [s.to_dict() for s in self.segments]}
@@ -616,6 +618,7 @@ class PipelineStage(str, Enum):
     aligning = "aligning"
     matching = "matching"
     exporting = "exporting"
+    mfa = "mfa"
     completed = "completed"
     error = "error"
 

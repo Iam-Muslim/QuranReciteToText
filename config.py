@@ -101,3 +101,13 @@ SPEECH_RECOVERY_MIN_PHONEMES_IN_GAP: int = 2       # Minimum tokens to accept re
 # ==============================================================================
 NUM_SEGMENT_WORKERS: int = 1
 
+
+# ==============================================================================
+# 9. MONTREAL FORCED ALIGNER (MFA) SECONDARY REFINEMENT (OPTIONAL --mfa)
+# ==============================================================================
+DEFAULT_MFA_DIR = DATA_PATH / "mfa"
+DEFAULT_MFA_ACOUSTIC_PATH = str(DEFAULT_MFA_DIR / "quran_hafs_acoustic.zip")
+DEFAULT_MFA_DICT_PATH = str(DEFAULT_MFA_DIR / "quran_hafs.dict")
+DEFAULT_MFA_RULES_PATH = str(DEFAULT_MFA_DIR / "rule_index.jsonl")
+CLEANUP_MFA_WORKSPACE: bool = True           # Discard temporary sliced WAVs/TextGrids after JSON export
+
