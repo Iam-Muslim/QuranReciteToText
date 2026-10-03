@@ -86,6 +86,118 @@ def _build_qword(rw: RefWord, tokens: List[PhonemeToken], score: float) -> Quran
     return qw
 
 
+def _repair_tajweed_boundary_bridges(words: List[QuranWord]) -> None:
+    """Repairs cross-word Tajweed boundary transitions where bridge phonemes were absorbed into the following word.
+
+    Covers all Quranic boundary assimilation phenomena:
+    - Idgham with Ghunnah (Meem, Noon, Waw, Yaa)
+    - Idgham Shafawi (Meem Sakinah into Meem)
+    - Idgham without Ghunnah (Lam, Raa)
+    - Idgham Mutajanisayn & Mutamathilayn (Ta into Taa, Waw into Waw, etc.)
+    - Iqlab (Noon/Tanween into Meem before Baa)
+    """
+    if len(words) < 2:
+        return
+
+    for i in range(len(words) - 1):
+        w1 = words[i]
+        w2 = words[i + 1]
+
+        if not w1.phonemes or not w2.phonemes:
+            continue
+        if w1.end is None or w2.start is None:
+            continue
+
+        # Connected speech check: only split if there is no significant acoustic pause
+        gap = w2.start - w1.end
+        if gap > 0.08:
+            continue
+
+        w1_ref = w1.ref or ""
+        w2_ref = w2.ref or ""
+        w1_matched_str = "".join(p.get("phoneme", "") for p in w1.phonemes)
+        w2_first_ph = w2.phonemes[0]
+        w2_first_str = w2_first_ph.get("phoneme", "")
+
+        bridge_category = None
+        bridge_phone = None
+
+        # 1. Idgham with Ghunnah: مم, نن, وو, يي
+        for suf in ("مم", "نن", "وو", "يي"):
+            if w1_ref.endswith(suf) and not w1_matched_str.endswith(suf[0]):
+                if any(w2_first_str.startswith(x) for x in (suf[0], suf)):
+                    bridge_category = "ghunnah"
+                    bridge_phone = suf
+                    break
+
+        # 2. Idgham Bila Ghunnah: لل, رر, ل, ر
+        if not bridge_phone:
+            for suf in ("لل", "رر", "ل", "ر"):
+                if w1_ref.endswith(suf) and not w1_matched_str.endswith(suf[0]):
+                    if w2_first_str.startswith(suf[0]):
+                        bridge_category = "bila_ghunnah"
+                        bridge_phone = suf
+                        break
+
+        # 3. Idgham Mutajanisayn & Mutamathilayn: ط, ت, د, و
+        if not bridge_phone:
+            for suf in ("ط", "د", "ت", "و"):
+                if w1_ref.endswith(suf) and not w1_matched_str.endswith(suf):
+                    if w2_first_str.startswith(suf):
+                        bridge_category = "mutajanisayn"
+                        bridge_phone = suf
+                        break
+
+        # 4. Iqlab: ۾ or مم before ب
+        if not bridge_phone:
+            if ("۾" in w1_ref or w1_ref.endswith("مم")) and not (w1_matched_str.endswith("م") or w1_matched_str.endswith("۾")):
+                if w2_first_str.startswith("م") or w2_first_str.startswith("۾"):
+                    bridge_category = "ghunnah"
+                    bridge_phone = "مم"
+
+        if bridge_phone and bridge_category:
+            ph_start = w2_first_ph.get("start", w2.start)
+            ph_end = w2_first_ph.get("end", w2.start)
+            dur = ph_end - ph_start
+
+            # Require minimum duration (at least 0.12s) to split
+            if dur >= 0.12:
+                # Dynamic tempo-scaled release duration:
+                # - Ghunnah: 80-85% to Word 1 (Tanween hold), 15-20% to Word 2 (release into vowel)
+                # - Bila Ghunnah: 60% closure to Word 1, 40% release to Word 2
+                # - Mutajanisayn: 65% mechanical closure to Word 1, 35% burst to Word 2
+                if bridge_category == "ghunnah":
+                    rel = max(0.08, min(0.16, 0.20 * dur))
+                elif bridge_category == "bila_ghunnah":
+                    rel = max(0.06, min(0.16, 0.40 * dur))
+                else:
+                    rel = max(0.06, min(0.14, 0.35 * dur))
+
+                # Align exactly to the 40ms acoustic encoder frame grid (25 Hz)
+                raw_bound = ph_end - rel
+                n_frames = round((raw_bound - ph_start) / 0.040)
+                # Ensure each word has at least 1 full acoustic frame (0.040s)
+                max_frames = max(1, int((dur - 0.040) / 0.040))
+                n_frames = max(1, min(max_frames, n_frames))
+                mid_point = round(ph_start + n_frames * 0.040, 2)
+
+                # Assign closing bridge phoneme to w1
+                w1.phonemes.append({
+                    "phoneme": bridge_phone,
+                    "start": round(ph_start, 2),
+                    "end": mid_point,
+                    "is_assimilated_bridge": True,
+                })
+                w1.end = mid_point
+
+                # Update w2's first phoneme and start
+                w2_first_ph["start"] = mid_point
+                w2.start = mid_point
+
+                enforce_word_phoneme_monotonicity(w1)
+                enforce_word_phoneme_monotonicity(w2)
+
+
 def _align_and_package_ayahs(
     aligned_tokens: List[PhonemeToken],
     ref_data: SurahReferenceData,
@@ -286,6 +398,11 @@ def _align_and_package_ayahs(
                 passes.append((current_pass, len(passes) > 0))
         else:
             passes = [(qwords, False)]
+
+        # Repair cross-word Tajweed boundary bridges across words in connected speech
+        _repair_tajweed_boundary_bridges(qwords)
+        for pass_words, _ in passes:
+            _repair_tajweed_boundary_bridges(pass_words)
 
         # Tier 2: Split passes on Phase 1 pauses with 'Never Cut Word' geometric validation
         sub_segs_list: List[AyahSubSegment] = []
