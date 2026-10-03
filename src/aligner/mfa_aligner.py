@@ -211,7 +211,7 @@ class QuranMfaAligner:
         base_dir = mfa_dir or getattr(
             config,
             "DEFAULT_MFA_DIR",
-            r"D:\there is no god unless ALLAH\The Great Quran -  Models\model\Quran - mfa",
+            Path(getattr(config, "DATA_PATH", "data")) / "mfa",
         )
         self.acoustic_model = acoustic_model_path or getattr(
             config, "DEFAULT_MFA_ACOUSTIC_PATH", str(Path(base_dir) / "quran_hafs_acoustic.zip")
@@ -253,7 +253,7 @@ class QuranMfaAligner:
         base_dir = getattr(
             config,
             "DEFAULT_MFA_DIR",
-            r"D:\there is no god unless ALLAH\The Great Quran -  Models\model\Quran - mfa",
+            Path(getattr(config, "DATA_PATH", "data")) / "mfa",
         )
         exe_name = "micromamba.exe" if sys.platform == "win32" else "micromamba"
         local_exe = Path(base_dir) / "bin" / exe_name

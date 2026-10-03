@@ -67,13 +67,12 @@ def _is_package_installed(pkg_name: str) -> bool:
 
 
 def ensure_pip_dependencies() -> None:
-    """Installs missing requirements via pip on first run, ensuring onnxruntime-gpu installs after onnxruntime."""
+    """Installs missing requirements via pip on first run."""
     base_required = ("numpy", "onnxruntime", "numba", "miniaudio", "scipy")
     missing_base = [pkg for pkg in base_required if not _is_package_installed(pkg)]
 
     pip_cmd = [sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "--no-warn-script-location"]
 
-    # 1. Install base requirements (onnxruntime finishes first)
     if missing_base:
         print("=" * 60)
         print(f"[*] Missing base dependencies: {', '.join(missing_base)}")
@@ -86,18 +85,6 @@ def ensure_pip_dependencies() -> None:
             print(f"[!] Failed to install base dependencies: {exc}", file=sys.stderr)
             print("[!] Please run manually: pip install -r requirements.txt", file=sys.stderr)
             sys.exit(1)
-
-    # 2. Install onnxruntime-gpu strictly after onnxruntime finishes
-    if not _is_package_installed("onnxruntime-gpu"):
-        print("=" * 60)
-        print("[*] Installing onnxruntime-gpu (after onnxruntime completes)...")
-        print("=" * 60, flush=True)
-        try:
-            subprocess.check_call([*pip_cmd, "onnxruntime-gpu"])
-            print("[*] onnxruntime-gpu installed successfully!\n", flush=True)
-        except Exception as exc:
-            print(f"[!] Warning: Failed to install onnxruntime-gpu: {exc}", file=sys.stderr)
-            print("[!] Continuing with CPU onnxruntime.", file=sys.stderr)
 
 
 def load_msvc_runtime() -> None:

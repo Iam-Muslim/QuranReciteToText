@@ -13,7 +13,8 @@ venv/
 *.mp3
 *.wav
 *.m4a
-*.json
+output/
+!data/*.json
 
 # Ignore IDE files
 .vscode/
