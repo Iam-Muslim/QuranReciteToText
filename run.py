@@ -9,15 +9,12 @@ import json
 import argparse
 from pathlib import Path
 
-if sys.stdout is not None:
-    try:
-        sys.stdout.reconfigure(encoding="utf-8")
-    except Exception:
-        pass
-
 _app_path = Path(__file__).parent.resolve()
 if str(_app_path) not in sys.path:
     sys.path.insert(0, str(_app_path))
+
+# Bootstrap Windows MSVC runtime, pip dependencies, and console streams
+import data.bin.bootstrap
 
 
 def get_hardware_topology() -> tuple[int, int]:
@@ -49,15 +46,36 @@ def main():
     start_time = time.time()
 
     parser = argparse.ArgumentParser(description="Quran Recitation Transcription & Forced Alignment Pipeline")
-    parser.add_argument("--audio", type=str, required=True, help="Path to input audio file")
+    parser.add_argument("--audio", type=str, default=None, help="Path to input audio file")
     parser.add_argument("--fast", action="store_true", default=False, help="Auto-configure top-speed parallel workers and threads for this CPU")
     parser.add_argument("--threads", type=int, default=None, help="ONNX execution threads (default: auto/2)")
     parser.add_argument("--workers", type=int, default=None, help="Parallel segment workers (default: 1, or auto in --fast mode)")
     parser.add_argument("--progress", action="store_true", default=False, help="Emit JSON progress lines for frontend apps")
     args = parser.parse_args()
 
-    if not os.path.exists(args.audio):
-        print(f"[!] Error: Audio file not found at: {args.audio}", file=sys.stderr)
+    audio_path = args.audio
+    if not audio_path:
+        print("=" * 60)
+        print("  Quran Recitation Transcription & Forced Alignment Pipeline")
+        print("=" * 60)
+        print("Usage: python run.py --audio <path_to_audio_file> [--fast]")
+        print("-" * 60)
+        try:
+            prompt_input = input("Enter path to audio file (or press Enter to exit): ").strip().strip('"').strip("'")
+            if prompt_input:
+                audio_path = prompt_input
+            else:
+                sys.exit(0)
+        except (EOFError, KeyboardInterrupt):
+            sys.exit(0)
+
+    if not os.path.exists(audio_path):
+        print(f"[!] Error: Audio file not found at: {audio_path}", file=sys.stderr)
+        if sys.stdin and sys.stdin.isatty():
+            try:
+                input("\nPress Enter to exit...")
+            except Exception:
+                pass
         sys.exit(1)
 
     workers, threads = resolve_concurrency(fast=args.fast, user_workers=args.workers, user_threads=args.threads)
@@ -76,7 +94,7 @@ def main():
 
     pipeline = AudioPipeline()
     pipeline.initialize(num_threads=threads)
-    audio_pcm = AudioDecoder.load_audio_file(args.audio)
+    audio_pcm = AudioDecoder.load_audio_file(audio_path)
 
     output_dir = config.DEFAULT_OUTPUT_DIR
     os.makedirs(output_dir, exist_ok=True)
@@ -115,4 +133,15 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as exc:
+        print(f"\n[!] Pipeline error: {exc}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        if sys.stdin and sys.stdin.isatty():
+            try:
+                input("\nPress Enter to exit...")
+            except Exception:
+                pass
+        sys.exit(1)

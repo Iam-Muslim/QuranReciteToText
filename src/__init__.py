@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import os
 import sys
+
+# Bootstrap Windows MSVC runtime and console streams before importing C extensions
+import data.bin.bootstrap
+
 import gc
 import json
 import time
