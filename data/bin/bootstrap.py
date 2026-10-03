@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
+import shutil
 import ctypes
 import subprocess
 import importlib.util
@@ -69,34 +70,50 @@ def ensure_pip_dependencies() -> None:
 
 def load_msvc_runtime() -> None:
     """Preloads bundled Visual C++ runtime DLLs so onnxruntime runs without vc_redist."""
-    if sys.platform != "win32":
+    if sys.platform != "win32" or not _BIN_DIR.is_dir():
         return
 
-    # Check if system already has vcruntime140_1.dll
-    try:
-        ctypes.CDLL("vcruntime140_1.dll")
-        return
-    except OSError:
-        pass
-
-    if not _BIN_DIR.is_dir():
-        return
-
-    # Add data/bin to Python 3.8+ Windows DLL search path
+    # 1. Add data/bin to Windows DLL search path (Python 3.8+)
     if hasattr(os, "add_dll_directory"):
         try:
             os.add_dll_directory(str(_BIN_DIR))
         except Exception:
             pass
 
-    # Preload essential DLLs into process memory
-    for dll in ("vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll", "vcomp140.dll"):
+    # 2. Preload essential MSVC runtime DLLs into process memory
+    all_dlls = (
+        "vcruntime140.dll",
+        "vcruntime140_1.dll",
+        "msvcp140.dll",
+        "msvcp140_1.dll",
+        "msvcp140_2.dll",
+        "msvcp140_codecvt_ids.dll",
+        "vcomp140.dll",
+    )
+    for dll in all_dlls:
         dll_path = _BIN_DIR / dll
         if dll_path.is_file():
             try:
                 ctypes.CDLL(str(dll_path))
             except Exception:
                 pass
+
+    # 3. Direct app-local fix: Copy DLLs right next to onnxruntime.dll in site-packages
+    try:
+        ort_spec = importlib.util.find_spec("onnxruntime")
+        if ort_spec and ort_spec.submodule_search_locations:
+            capi_dir = Path(list(ort_spec.submodule_search_locations)[0]) / "capi"
+            if capi_dir.is_dir():
+                for dll in all_dlls:
+                    src = _BIN_DIR / dll
+                    dst = capi_dir / dll
+                    if src.is_file() and not dst.is_file():
+                        try:
+                            shutil.copy2(str(src), str(dst))
+                        except Exception:
+                            pass
+    except Exception:
+        pass
 
 
 def bootstrap() -> None:
