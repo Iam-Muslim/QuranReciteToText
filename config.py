@@ -14,9 +14,8 @@ PROJECT_ROOT = Path(__file__).parent.absolute()
 DATA_PATH = PROJECT_ROOT / "data"
 
 ONNX_DIR = DATA_PATH / "onnx"
-MODEL_DIR = Path(os.environ.get("QC_WORD_TIMING_MODEL_DIR", ONNX_DIR))
-DEFAULT_MODEL_PATH = str(MODEL_DIR / "zipformer_p_arabic_v3.int8.onnx")
-DEFAULT_SILERO_PATH = str(MODEL_DIR / "silero_vad_half.onnx")
+DEFAULT_MODEL_PATH = str(ONNX_DIR / "zipformer_p_arabic_v3.int8.onnx")
+DEFAULT_SILERO_PATH = str(ONNX_DIR / "silero_vad_half.onnx")
 DEFAULT_TOKENS_PATH = str(ONNX_DIR / "tokens.txt")
 DEFAULT_QURAN_PHONEMES_PATH = str(DATA_PATH / "ordered_quran_phonemes.json")
 DEFAULT_REF_NORM_PH_PATH = str(DATA_PATH / "ref_norm_ph.txt")

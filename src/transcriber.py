@@ -15,10 +15,6 @@ from typing import Optional, List, Dict, Tuple, Callable
 import queue
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
-try:
-    import kaldi_native_fbank as knf
-except ImportError:
-    knf = None
 import onnxruntime as ort
 
 import config
@@ -81,7 +77,8 @@ def _get_kaldi_mel_banks(
     return bins
 
 
-_CACHED_KALDI_MEL_BANKS: Optional[np.ndarray] = None
+_CACHED_KALDI_MEL_BANKS_T: Optional[np.ndarray] = None
+_CACHED_POVEY_WINDOW: Optional[np.ndarray] = None
 
 
 def _numpy_kaldi_fbank(
@@ -94,13 +91,18 @@ def _numpy_kaldi_fbank(
     povey_power: float = 0.85,
 ) -> np.ndarray:
     """Vectorised pure NumPy replica of Kaldi Fbank (100% token-equivalent fallback for kaldi-native-fbank)."""
-    global _CACHED_KALDI_MEL_BANKS
-    if _CACHED_KALDI_MEL_BANKS is None:
-        _CACHED_KALDI_MEL_BANKS = _get_kaldi_mel_banks(num_bins=num_mel_bins, sample_rate=sample_rate)
+    global _CACHED_KALDI_MEL_BANKS_T, _CACHED_POVEY_WINDOW
+    if _CACHED_KALDI_MEL_BANKS_T is None:
+        mel_banks = _get_kaldi_mel_banks(num_bins=num_mel_bins, sample_rate=sample_rate)
+        _CACHED_KALDI_MEL_BANKS_T = np.ascontiguousarray(mel_banks.T, dtype=np.float32)
 
     frame_len = int(round(sample_rate * frame_length_ms / 1000.0))
     frame_shift = int(round(sample_rate * frame_shift_ms / 1000.0))
     n_fft = 512
+
+    if _CACHED_POVEY_WINDOW is None or len(_CACHED_POVEY_WINDOW) != frame_len:
+        n = np.arange(frame_len, dtype=np.float32)
+        _CACHED_POVEY_WINDOW = ((0.5 - 0.5 * np.cos(2 * np.pi * n / (frame_len - 1))) ** povey_power).astype(np.float32)
 
     num_samples = len(waveform)
     num_frames = (num_samples + frame_shift // 2) // frame_shift
@@ -117,15 +119,12 @@ def _numpy_kaldi_fbank(
     frames -= np.mean(frames, axis=1, keepdims=True)
     frames[:, 1:] -= preemphasis * frames[:, :-1]
     frames[:, 0] -= preemphasis * frames[:, 0]
-
-    n = np.arange(frame_len)
-    povey_window = (0.5 - 0.5 * np.cos(2 * np.pi * n / (frame_len - 1))) ** povey_power
-    frames *= povey_window
+    frames *= _CACHED_POVEY_WINDOW
 
     fft_vals = np.fft.rfft(frames, n=n_fft, axis=1)
-    power_spectrum = np.abs(fft_vals[:, : n_fft // 2]) ** 2
+    power_spectrum = (fft_vals[:, : n_fft // 2].real ** 2 + fft_vals[:, : n_fft // 2].imag ** 2)
 
-    mel_energies = np.dot(power_spectrum, _CACHED_KALDI_MEL_BANKS.T)
+    mel_energies = np.dot(power_spectrum, _CACHED_KALDI_MEL_BANKS_T)
     mel_energies = np.maximum(mel_energies, np.finfo(np.float32).eps)
     return np.log(mel_energies).astype(np.float32)
 
@@ -230,41 +229,6 @@ class ZipformerONNX:
     def _extract_fbank(self, audio: np.ndarray) -> np.ndarray:
         if not audio.flags.c_contiguous or audio.dtype != np.float32:
             audio = np.ascontiguousarray(audio, dtype=np.float32)
-
-        # 1. Primary: C++ kaldi-native-fbank (top speed)
-        if knf is not None:
-            opts = knf.FbankOptions()
-            opts.frame_opts.samp_freq = SAMPLE_RATE
-            opts.mel_opts.num_bins = 80
-            opts.frame_opts.dither = 0.0
-            opts.frame_opts.snip_edges = False
-            opts.frame_opts.window_type = "povey"
-            opts.frame_opts.remove_dc_offset = True
-            opts.frame_opts.preemph_coeff = 0.97
-            opts.mel_opts.low_freq = 20.0
-            opts.mel_opts.high_freq = -400.0
-            opts.frame_opts.frame_shift_ms = 10.0
-            opts.frame_opts.frame_length_ms = 25.0
-
-            fbank = knf.OnlineFbank(opts)
-            chunk_samples = SAMPLE_RATE * 30
-            for pos in range(0, len(audio), chunk_samples):
-                fbank.accept_waveform(SAMPLE_RATE, audio[pos:pos + chunk_samples])
-            fbank.input_finished()
-
-            num_frames = fbank.num_frames_ready
-            if num_frames == 0:
-                return np.empty((0, 80), dtype=np.float32)
-
-            feats = np.empty((num_frames, 80), dtype=np.float32)
-            get_frame = fbank.get_frame
-            for i in range(num_frames):
-                feats[i] = get_frame(i)
-
-            del fbank
-            return feats
-
-        # 2. Fallback: Vectorised pure NumPy Kaldi fbank (100% token-equivalent, 0 compiler dependencies)
         return _numpy_kaldi_fbank(audio, sample_rate=SAMPLE_RATE)
 
     def _transcribe_fbank_segment(

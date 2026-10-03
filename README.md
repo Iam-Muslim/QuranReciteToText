@@ -7,19 +7,7 @@ An automated, high-performance, lightweight CPU pipeline for transcribing and fo
 
 <img width="1379" height="869" alt="1787559568-409220-image" src="https://github.com/user-attachments/assets/ae615cf9-9d1b-493a-a706-f845c1a2fc56" />
 
-### Install Dependencies
 
-```bash
-# Recommended: create and activate a virtual environment
-py -3.11 -m venv venv
-# On Windows:
-call venv\Scripts\activate
-# On Linux/macOS:
-source venv/bin/activate
-
-# Install requirements via pre-built binary wheels (takes ~15 seconds)
-pip install -r requirements.txt
-```
 
 ## Quick Start
 
@@ -28,23 +16,15 @@ pip install -r requirements.txt
 Place your recitation audio (`audio.mp3`) in the project directory and run:
 
 ```bash
+
+pip install -r requirements.txt
+
 # High-speed parallel mode (defaults to 4 workers)
 python run.py --audio audio.mp3 --fast
 ```
 Speed varies between 20x-65x RTF (Real-Time Factor).
 
 The resulting `output.json` contains full Ayah segments, word timestamps, and letter-level phoneme breakdowns.
-
-
-### 2. View in Viewer
-
-Double-click or open `output/ui.html`
-1. Load your generated `output.json` (or drag and drop it anywhere).
-2. Load your audio file (`audio.mp3` / `.wav`).
-3. Enjoy smooth letter-by-letter and word-by-word  synchronization!
-
----
-
 
 
 
