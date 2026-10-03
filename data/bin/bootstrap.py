@@ -54,33 +54,48 @@ def fix_ssl_certificates() -> None:
         pass
 
 
-def ensure_pip_dependencies() -> None:
-    """Installs missing requirements via pip on first run."""
-    required = ("numpy", "onnxruntime", "numba", "miniaudio", "scipy")
-    missing = [pkg for pkg in required if importlib.util.find_spec(pkg) is None]
-    if not missing:
-        return
-
-    print("=" * 60)
-    print(f"[*] Missing dependencies: {', '.join(missing)}")
-    print("[*] Installing requirements via pip. Please wait...")
-    print("=" * 60, flush=True)
-
-    req_file = _PROJECT_ROOT / "requirements.txt"
-    cmd = [
-        sys.executable, "-m", "pip", "install",
-        "--disable-pip-version-check",
-        "--no-warn-script-location",
-        *([ "-r", str(req_file) ] if req_file.is_file() else list(missing)),
-    ]
-
+def _is_package_installed(pkg_name: str) -> bool:
+    """Checks if a distribution package or module is installed in the current environment."""
     try:
-        subprocess.check_call(cmd)
-        print("[*] All dependencies installed successfully!\n", flush=True)
-    except Exception as exc:
-        print(f"[!] Failed to install dependencies: {exc}", file=sys.stderr)
-        print("[!] Please run manually: pip install -r requirements.txt", file=sys.stderr)
-        sys.exit(1)
+        import importlib.metadata
+        importlib.metadata.version(pkg_name)
+        return True
+    except Exception:
+        return importlib.util.find_spec(pkg_name.replace("-", "_")) is not None
+
+
+def ensure_pip_dependencies() -> None:
+    """Installs missing requirements via pip on first run, ensuring onnxruntime-gpu installs after onnxruntime."""
+    base_required = ("numpy", "onnxruntime", "numba", "miniaudio", "scipy")
+    missing_base = [pkg for pkg in base_required if not _is_package_installed(pkg)]
+
+    pip_cmd = [sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "--no-warn-script-location"]
+
+    # 1. Install base requirements (onnxruntime finishes first)
+    if missing_base:
+        print("=" * 60)
+        print(f"[*] Missing base dependencies: {', '.join(missing_base)}")
+        print("[*] Installing base requirements via pip. Please wait...")
+        print("=" * 60, flush=True)
+        try:
+            subprocess.check_call([*pip_cmd, *missing_base])
+            print("[*] Base dependencies installed successfully!\n", flush=True)
+        except Exception as exc:
+            print(f"[!] Failed to install base dependencies: {exc}", file=sys.stderr)
+            print("[!] Please run manually: pip install -r requirements.txt", file=sys.stderr)
+            sys.exit(1)
+
+    # 2. Install onnxruntime-gpu strictly after onnxruntime finishes
+    if not _is_package_installed("onnxruntime-gpu"):
+        print("=" * 60)
+        print("[*] Installing onnxruntime-gpu (after onnxruntime completes)...")
+        print("=" * 60, flush=True)
+        try:
+            subprocess.check_call([*pip_cmd, "onnxruntime-gpu"])
+            print("[*] onnxruntime-gpu installed successfully!\n", flush=True)
+        except Exception as exc:
+            print(f"[!] Warning: Failed to install onnxruntime-gpu: {exc}", file=sys.stderr)
+            print("[!] Continuing with CPU onnxruntime.", file=sys.stderr)
 
 
 def load_msvc_runtime() -> None:
