@@ -1,15 +1,16 @@
-"""Runtime bootstrap and dependency coordinator for QuranReciteToText.
+"""Runtime bootstrap coordinator for QuranReciteToText.
 
-Handles Windows console streams, auto-loads bundled MSVC runtime DLLs (vcruntime140_1.dll),
-and automatically installs missing pip packages on first run.
+Handles Windows console streams, auto-installs missing dependencies on first run,
+bypasses SSL certificate verification issues, and preloads bundled MSVC runtime DLLs.
 """
 
 from __future__ import annotations
 
 import os
 import sys
-import shutil
+import ssl
 import ctypes
+import shutil
 import subprocess
 import importlib.util
 from pathlib import Path
@@ -19,22 +20,18 @@ _PROJECT_ROOT = _BIN_DIR.parent.parent
 
 
 def fix_windows_console() -> None:
-    """Ensures console output is visible and UTF-8 encoded on Windows."""
+    """Ensures UTF-8 console output is visible on Windows."""
     if sys.platform != "win32":
         return
 
-    # Reattach to parent console if invoked detached or via pythonw
     if sys.stdout is None or sys.stderr is None or "pythonw" in sys.executable.lower():
         try:
             if ctypes.windll.kernel32.AttachConsole(-1) != 0:
-                if sys.stdout is None:
-                    sys.stdout = open("CONOUT$", "w", encoding="utf-8")
-                if sys.stderr is None:
-                    sys.stderr = open("CONOUT$", "w", encoding="utf-8")
+                sys.stdout = sys.stdout or open("CONOUT$", "w", encoding="utf-8")
+                sys.stderr = sys.stderr or open("CONOUT$", "w", encoding="utf-8")
         except Exception:
             pass
 
-    # Ensure UTF-8 output encoding for Quranic text
     for stream in (sys.stdout, sys.stderr):
         if stream is not None:
             try:
@@ -43,45 +40,56 @@ def fix_windows_console() -> None:
                 pass
 
 
+def fix_ssl_certificates() -> None:
+    """Bypasses missing root CA certificates on fresh Windows Python installs."""
+    try:
+        if hasattr(ssl, "_create_unverified_context"):
+            ssl._create_default_https_context = ssl._create_unverified_context
+    except Exception:
+        pass
+
+
 def ensure_pip_dependencies() -> None:
-    """Detects missing dependencies and automatically installs them via pip."""
+    """Installs missing requirements via pip on first run."""
     required = ("numpy", "onnxruntime", "numba", "miniaudio", "scipy")
     missing = [pkg for pkg in required if importlib.util.find_spec(pkg) is None]
-
     if not missing:
         return
 
     print("=" * 60)
-    print(f"[*] Missing dependencies detected: {', '.join(missing)}")
+    print(f"[*] Missing dependencies: {', '.join(missing)}")
     print("[*] Installing requirements via pip. Please wait...")
     print("=" * 60, flush=True)
 
     req_file = _PROJECT_ROOT / "requirements.txt"
-    cmd = [sys.executable, "-m", "pip", "install", "-r", str(req_file)] if req_file.is_file() else [sys.executable, "-m", "pip", "install", *missing]
+    cmd = [
+        sys.executable, "-m", "pip", "install",
+        "--disable-pip-version-check",
+        "--no-warn-script-location",
+        *([ "-r", str(req_file) ] if req_file.is_file() else list(missing)),
+    ]
 
     try:
         subprocess.check_call(cmd)
         print("[*] All dependencies installed successfully!\n", flush=True)
     except Exception as exc:
-        print(f"\n[!] Failed to install dependencies: {exc}", file=sys.stderr)
+        print(f"[!] Failed to install dependencies: {exc}", file=sys.stderr)
         print("[!] Please run manually: pip install -r requirements.txt", file=sys.stderr)
         sys.exit(1)
 
 
 def load_msvc_runtime() -> None:
-    """Preloads bundled Visual C++ runtime DLLs so onnxruntime runs without vc_redist."""
+    """Preloads bundled Visual C++ runtime DLLs for onnxruntime."""
     if sys.platform != "win32" or not _BIN_DIR.is_dir():
         return
 
-    # 1. Add data/bin to Windows DLL search path (Python 3.8+)
     if hasattr(os, "add_dll_directory"):
         try:
             os.add_dll_directory(str(_BIN_DIR))
         except Exception:
             pass
 
-    # 2. Preload essential MSVC runtime DLLs into process memory
-    all_dlls = (
+    dll_names = (
         "vcruntime140.dll",
         "vcruntime140_1.dll",
         "msvcp140.dll",
@@ -90,23 +98,24 @@ def load_msvc_runtime() -> None:
         "msvcp140_codecvt_ids.dll",
         "vcomp140.dll",
     )
-    for dll in all_dlls:
-        dll_path = _BIN_DIR / dll
-        if dll_path.is_file():
+
+    for name in dll_names:
+        dll_file = _BIN_DIR / name
+        if dll_file.is_file():
             try:
-                ctypes.CDLL(str(dll_path))
+                ctypes.CDLL(str(dll_file))
             except Exception:
                 pass
 
-    # 3. Direct app-local fix: Copy DLLs right next to onnxruntime.dll in site-packages
+    # Copy DLLs into onnxruntime/capi if present so onnxruntime always finds them
     try:
         ort_spec = importlib.util.find_spec("onnxruntime")
         if ort_spec and ort_spec.submodule_search_locations:
             capi_dir = Path(list(ort_spec.submodule_search_locations)[0]) / "capi"
             if capi_dir.is_dir():
-                for dll in all_dlls:
-                    src = _BIN_DIR / dll
-                    dst = capi_dir / dll
+                for name in dll_names:
+                    src = _BIN_DIR / name
+                    dst = capi_dir / name
                     if src.is_file() and not dst.is_file():
                         try:
                             shutil.copy2(str(src), str(dst))
@@ -117,8 +126,9 @@ def load_msvc_runtime() -> None:
 
 
 def bootstrap() -> None:
-    """Executes full environment bootstrap."""
+    """Executes environment bootstrap."""
     fix_windows_console()
+    fix_ssl_certificates()
     ensure_pip_dependencies()
     load_msvc_runtime()
 

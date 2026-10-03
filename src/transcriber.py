@@ -152,8 +152,18 @@ class ZipformerONNX:
             os.makedirs(os.path.dirname(DEFAULT_MODEL_PATH), exist_ok=True)
             url = "https://github.com/Iam-Muslim/Natlu/releases/download/models-latest/zipformer_p_arabic_v3.int8.onnx"
             logger.info(f"Downloading Zipformer ONNX model from {url}...")
-            urllib.request.urlretrieve(url, DEFAULT_MODEL_PATH)
+            print("[*] Downloading Zipformer ONNX acoustic model (~72 MB)...", flush=True)
+            try:
+                urllib.request.urlretrieve(url, DEFAULT_MODEL_PATH)
+            except Exception:
+                import ssl
+                import shutil
+                ctx = ssl._create_unverified_context() if hasattr(ssl, "_create_unverified_context") else None
+                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, context=ctx) as resp, open(DEFAULT_MODEL_PATH, "wb") as out:
+                    shutil.copyfileobj(resp, out)
             logger.info("Zipformer ONNX model downloaded successfully.")
+            print("[*] Zipformer ONNX model downloaded successfully.", flush=True)
 
         sess_opts = ort.SessionOptions()
         sess_opts.log_severity_level = 3

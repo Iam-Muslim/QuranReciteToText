@@ -72,9 +72,18 @@ def _get_silero_session():
             try:
                 urllib.request.urlretrieve(SILERO_VAD_URL, model_path)
                 logger.info("Silero VAD ONNX model downloaded successfully.")
-            except Exception as e:
-                logger.warning(f"Failed to auto-download Silero VAD ONNX model: {e}")
-                return None, None
+            except Exception:
+                try:
+                    import ssl
+                    import shutil
+                    ctx = ssl._create_unverified_context() if hasattr(ssl, "_create_unverified_context") else None
+                    req = urllib.request.Request(SILERO_VAD_URL, headers={"User-Agent": "Mozilla/5.0"})
+                    with urllib.request.urlopen(req, context=ctx) as resp, open(model_path, "wb") as out:
+                        shutil.copyfileobj(resp, out)
+                    logger.info("Silero VAD ONNX model downloaded successfully.")
+                except Exception as e:
+                    logger.warning(f"Failed to auto-download Silero VAD ONNX model: {e}")
+                    return None, None
 
         try:
             sess_opts = ort.SessionOptions()
