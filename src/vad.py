@@ -363,7 +363,16 @@ class QuranSilenceVAD:
             & (lowband_db > silence_energy_threshold + 5.0)
             & (pitch_ac >= 0.35)
         )
-        speech_frame = (silero_probs >= self.silero_threshold) | is_madd | is_ghunnah
+        # Deep acoustic silence floor: when energy drops significantly below speech (>=15-20dB drop)
+        deep_silence_floor = min(-36.0, silence_energy_threshold - 6.0)
+        is_deep_silence = energy_db_arr <= deep_silence_floor
+
+        # Compensate for Silero LSTM state bleed: do not keep speech alive when energy is in true deep silence
+        speech_frame = (
+            ((silero_probs >= self.silero_threshold) & ~is_deep_silence)
+            | is_madd
+            | is_ghunnah
+        )
 
         # ── 4. Hangover buffer (protect consonant tails & transitions) ─────
         hangover_frames = max(1, int(self.hangover_s / frame_dur))
@@ -374,7 +383,8 @@ class QuranSilenceVAD:
             if speech_frame[i]:
                 sil_run = 0
             else:
-                if sil_run < hangover_frames and i > 0 and smoothed[i - 1]:
+                # Hangover protects unvoiced consonants & transitions, but never bridges true deep acoustic silence
+                if sil_run < hangover_frames and i > 0 and smoothed[i - 1] and not is_deep_silence[i]:
                     smoothed[i] = True
                     sil_run += 1
                 else:
@@ -436,7 +446,7 @@ class QuranSilenceVAD:
             # Validate whether this gap is an acoustic silence or continuous speech
             has_madd = voiced_pitch_ratio > 0.25 and mean_e > silence_energy_threshold
             is_tonal_speech = avg_flatness < 0.25 and mean_e > silence_energy_threshold
-            no_energy_drop = (gap < 0.35) and (min_e > (silence_energy_threshold + 6.0))
+            no_energy_drop = (gap < 0.25) and (min_e > (silence_energy_threshold + 6.0))
 
             is_false_silence = has_madd or is_tonal_speech or no_energy_drop
 
