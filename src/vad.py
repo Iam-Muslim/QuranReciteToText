@@ -16,17 +16,10 @@ import numpy as np
 import os
 import urllib.request
 
-try:
-    from scipy.ndimage import median_filter
-except ImportError:
-    median_filter = None
+from scipy.ndimage import median_filter
+import onnxruntime as ort
 
-try:
-    import onnxruntime as ort
-    _HAS_ORT = True
-except ImportError:
-    _HAS_ORT = False
-    ort = None
+_HAS_ORT = True
 
 import config
 from config import (

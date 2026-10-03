@@ -36,7 +36,7 @@ from src.models import (
     PipelineStage,
     PipelineProgressEvent,
 )
-from src.audio import AudioDecoder
+from src.audio import AudioDecoder, _resample_audio
 from src.transcriber import ZipformerONNX, SpeechRecoveryEngine
 from src.aligner import CtcViterbiAligner, warmup_aligner_jit
 from src.matching import (
@@ -358,7 +358,6 @@ def process_audio(
     elif isinstance(audio_data, tuple):
         orig_sr, pcm = audio_data
         if orig_sr != SAMPLE_RATE:
-            from src.audio import _resample_audio
             pcm = _resample_audio(pcm.astype(np.float32), orig_sr, SAMPLE_RATE)
         result = pipeline.process_pcm(
             audio_pcm=pcm.astype(np.float32),

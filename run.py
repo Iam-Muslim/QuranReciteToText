@@ -21,14 +21,9 @@ if str(_app_path) not in sys.path:
 
 
 def get_hardware_topology() -> tuple[int, int]:
-    """Detects physical and logical CPU cores."""
-    try:
-        import psutil
-        phys = psutil.cpu_count(logical=False) or 4
-        log = psutil.cpu_count(logical=True) or 8
-    except Exception:
-        log = os.cpu_count() or 4
-        phys = max(1, log // 2)
+    """Detects physical and logical CPU cores using standard library."""
+    log = os.cpu_count() or 4
+    phys = max(1, log // 2)
     return phys, log
 
 

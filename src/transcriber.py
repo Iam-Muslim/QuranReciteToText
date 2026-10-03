@@ -90,7 +90,7 @@ def _numpy_kaldi_fbank(
     preemphasis: float = 0.97,
     povey_power: float = 0.85,
 ) -> np.ndarray:
-    """Vectorised pure NumPy replica of Kaldi Fbank (100% token-equivalent fallback for kaldi-native-fbank)."""
+    """High-performance vectorized pure NumPy implementation of Daniel Povey's Kaldi Mel filterbank."""
     global _CACHED_KALDI_MEL_BANKS_T, _CACHED_POVEY_WINDOW
     if _CACHED_KALDI_MEL_BANKS_T is None:
         mel_banks = _get_kaldi_mel_banks(num_bins=num_mel_bins, sample_rate=sample_rate)
@@ -372,7 +372,7 @@ class ZipformerONNX:
         if on_vad_done is not None:
             on_vad_done(vad_time)
 
-        # 2. Extract Mel Filterbank ONCE globally across entire audio (blazing fast in C++)
+        # 2. Extract Mel Filterbank ONCE globally across entire audio (blazing fast vectorized NumPy)
         global_feats = self._extract_fbank(audio_pcm)
         total_fbank_frames = len(global_feats)
         if total_fbank_frames == 0:
