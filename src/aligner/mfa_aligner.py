@@ -8,14 +8,18 @@ Operates as an independent, non-intrusive add-on module.
 from __future__ import annotations
 
 import os
+import re
 import sys
+import time
+import math
 import json
 import shutil
 import logging
 import subprocess
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any, Tuple
+from collections import defaultdict
+from typing import Optional, List, Dict, Any, Tuple, Callable
 import numpy as np
 import scipy.io.wavfile as wavfile
 
@@ -589,6 +593,14 @@ class QuranMfaAligner:
 
         return chunks
 
+    @staticmethod
+    def _clean_lab_word(text: str) -> str:
+        """Strips decorative Quranic pause/sajda marks not present in the pronunciation dictionary."""
+        if not text:
+            return ""
+        cleaned = re.sub(r"[\u06D6-\u06DB\u06DE\u06E9]", "", text).strip()
+        return cleaned or text
+
     def prepare_corpus(
         self,
         segments: List[Any],
@@ -631,7 +643,12 @@ class QuranMfaAligner:
 
             clip_idx = 1
             for chunk_words in linear_units:
-                uthmani_words = [w.word for w in chunk_words if getattr(w, "word", None)]
+                uthmani_words = [
+                    self._clean_lab_word(w.word)
+                    for w in chunk_words
+                    if getattr(w, "word", None)
+                ]
+                uthmani_words = [w for w in uthmani_words if w]
                 if not uthmani_words:
                     continue
 
@@ -643,10 +660,10 @@ class QuranMfaAligner:
                 w_start = min(valid_starts)
                 w_end = max(valid_ends)
 
-                # Add 40ms safety margins clamped to total audio duration
+                # Add 200ms safety margins clamped to total audio duration for clean silence modeling
                 total_duration = len(audio_pcm) / sample_rate
-                s_time = max(0.0, w_start - 0.04)
-                e_time = min(total_duration, w_end + 0.04)
+                s_time = max(0.0, w_start - 0.20)
+                e_time = min(total_duration, w_end + 0.20)
 
                 if e_time <= s_time:
                     continue
@@ -680,9 +697,13 @@ class QuranMfaAligner:
         self,
         corpus_dir: str,
         output_dir: str,
-        beam: int = 10,
-        retry_beam: int = 40,
-        num_jobs: int = 2,
+        temp_dir: Optional[str] = None,
+        beam: Optional[int] = None,
+        retry_beam: Optional[int] = None,
+        num_jobs: Optional[int] = None,
+        on_progress: Optional[Callable[[float, float], None]] = None,
+        start_time: Optional[float] = None,
+        est_duration: float = 35.0,
     ) -> bool:
         """Executes Montreal Forced Aligner command-line subprocess in fast single-speaker mode."""
         micromamba_exe = self.find_micromamba_executable()
@@ -699,21 +720,28 @@ class QuranMfaAligner:
             logger.error(f"MFA dictionary not found at: {self.dictionary}")
             return False
 
+        eff_beam = beam if beam is not None else getattr(config, "MFA_BEAM", 40)
+        eff_retry_beam = retry_beam if retry_beam is not None else getattr(config, "MFA_RETRY_BEAM", 160)
+        eff_num_jobs = num_jobs if num_jobs is not None else getattr(config, "MFA_NUM_JOBS", 2)
+
         align_args = [
             "align",
             corpus_dir,
             self.dictionary,
             self.acoustic_model,
             output_dir,
-            "--single_speaker",
+            "--clean",
+            "--overwrite",
             "--use_threading",
             "--no_textgrid_cleanup",
-            "--num_jobs", str(num_jobs),
-            "--beam", str(beam),
-            "--retry_beam", str(retry_beam),
-            "--overwrite",
+            "--num_jobs", str(eff_num_jobs),
+            "--beam", str(eff_beam),
+            "--retry_beam", str(eff_retry_beam),
             "--quiet",
         ]
+
+        if temp_dir:
+            align_args.extend(["--temporary_directory", temp_dir])
 
         if micromamba_exe:
             cmd = [micromamba_exe, "run", "-n", "aligner", "mfa"] + align_args
@@ -729,14 +757,92 @@ class QuranMfaAligner:
             scripts_dir = env_dir / "Scripts"
             env_vars["PATH"] = f"{lib_bin};{scripts_dir};{env_dir};{env_vars.get('PATH', '')}"
 
+        align_start = start_time if start_time is not None else time.time()
         logger.info(f"Running MFA alignment: {' '.join(cmd)}")
         try:
-            res = subprocess.run(cmd, capture_output=True, text=True, check=True, env=env_vars)
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env_vars,
+            )
+            while process.poll() is None:
+                if on_progress:
+                    elp = max(0.0, time.time() - align_start)
+                    ratio = elp / max(5.0, est_duration)
+                    pct = 5.0 + 87.0 * (1.0 - math.exp(-1.8 * ratio))
+                    on_progress(min(92.0, max(5.0, pct)), elp)
+                time.sleep(0.20)
+
+            stdout, stderr = process.communicate()
+            if process.returncode != 0:
+                logger.error(f"MFA execution failed with exit code {process.returncode}: {stderr}")
+                return False
+
             logger.info("MFA alignment completed successfully.")
             return True
-        except subprocess.CalledProcessError as e:
-            logger.error(f"MFA execution failed with exit code {e.returncode}: {e.stderr}")
+        except Exception as e:
+            logger.error(f"MFA execution error: {e}")
             return False
+
+    @staticmethod
+    def _align_words_to_chunk(
+        chunk_words: List[Any],
+        words_raw: List[Tuple[float, float, str]],
+    ) -> List[Tuple[Any, Optional[Tuple[float, float, str]]]]:
+        """Aligns Praat TextGrid words to chunk QuranWord objects using sequence edit distance.
+
+        Guarantees that missing or dropped MFA intervals NEVER shift indices for subsequent words.
+        """
+        if not chunk_words:
+            return []
+        if not words_raw:
+            return [(qw, None) for qw in chunk_words]
+
+        tashkeel_re = re.compile(r"[\u0617-\u061A\u064B-\u065F\u0670\u06D6-\u06DC\u06DF-\u06E8\u06EA-\u06ED]")
+
+        def norm_text(t: str) -> str:
+            if not t:
+                return ""
+            t = tashkeel_re.sub("", t)
+            t = t.replace("ٱ", "ا").replace("إ", "ا").replace("أ", "ا").replace("آ", "ا").replace("ـٰ", "").replace(" ", "")
+            return t
+
+        ref_keys = [norm_text(getattr(qw, "word", "")) for qw in chunk_words]
+        hyp_keys = [norm_text(t) for _, _, t in words_raw]
+
+        n, m = len(ref_keys), len(hyp_keys)
+        dp = [[0] * (m + 1) for _ in range(n + 1)]
+        for i in range(n + 1):
+            dp[i][0] = i
+        for j in range(m + 1):
+            dp[0][j] = j
+
+        for i in range(1, n + 1):
+            for j in range(1, m + 1):
+                match_cost = 0 if ref_keys[i - 1] == hyp_keys[j - 1] else 2
+                dp[i][j] = min(
+                    dp[i - 1][j] + 1,
+                    dp[i][j - 1] + 1,
+                    dp[i - 1][j - 1] + match_cost,
+                )
+
+        i, j = n, m
+        pairs: List[Tuple[int, Optional[int]]] = []
+        while i > 0 or j > 0:
+            if i > 0 and j > 0 and dp[i][j] == dp[i - 1][j - 1] + (0 if ref_keys[i - 1] == hyp_keys[j - 1] else 2):
+                pairs.append((i - 1, j - 1))
+                i -= 1
+                j -= 1
+            elif i > 0 and dp[i][j] == dp[i - 1][j] + 1:
+                pairs.append((i - 1, None))
+                i -= 1
+            else:
+                j -= 1
+
+        pairs.reverse()
+        return [(chunk_words[r], words_raw[h] if h is not None else None) for r, h in pairs]
 
     def parse_aligned_outputs(
         self,
@@ -751,61 +857,88 @@ class QuranMfaAligner:
 
         for base_name, surah, ayah, clip_num, global_offset, chunk_words in ayah_clips:
             tg_path = os.path.join(output_dir, f"{base_name}.TextGrid")
-            if not os.path.exists(tg_path):
-                continue
-
-            tiers = parse_praat_textgrid(tg_path)
-            words_raw = tiers.get("words", [])
-            phones_raw = tiers.get("phones", [])
+            words_raw: List[Tuple[float, float, str]] = []
+            phones_raw: List[Tuple[float, float, str]] = []
+            if os.path.exists(tg_path):
+                tiers = parse_praat_textgrid(tg_path)
+                words_raw = tiers.get("words", [])
+                phones_raw = tiers.get("phones", [])
 
             ayah_rules = rules.get((surah, ayah), [])
-            rule_by_phone_idx = {r["i"]: r for r in ayah_rules if "i" in r}
+            rules_by_word_idx: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+            for r in ayah_rules:
+                w_pos = r.get("word")
+                if w_pos is not None and r.get("rule"):
+                    rules_by_word_idx[w_pos].append(r)
 
-            phone_idx = 0
+            # Robust alignment: pair each QuranWord in chunk_words to its TextGrid word interval (or None)
+            matched_pairs = self._align_words_to_chunk(chunk_words, words_raw)
             mfa_words: List[MfaWord] = []
 
-            for w_idx, (w_s, w_e, w_text) in enumerate(words_raw):
-                w_glob_s = round(w_s + global_offset, 3)
-                w_glob_e = round(w_e + global_offset, 3)
-                w_dur = round(w_glob_e - w_glob_s, 3)
+            for target_qword, w_interval in matched_pairs:
+                ctc_s = getattr(target_qword, "start", 0.0)
+                ctc_e = getattr(target_qword, "end", 0.0)
+                if ctc_e <= ctc_s:
+                    ctc_e = ctc_s + 0.10
+
+                final_w_s = round(ctc_s, 3)
+                final_w_e = round(ctc_e, 3)
+                final_w_dur = round(final_w_e - final_w_s, 3)
 
                 cur_phones: List[MfaPhone] = []
-                for p_s, p_e, p_text in phones_raw:
-                    if p_s >= (w_s - 0.015) and p_e <= (w_e + 0.015):
-                        p_glob_s = round(p_s + global_offset, 3)
-                        p_glob_e = round(p_e + global_offset, 3)
-                        p_dur = round(p_glob_e - p_glob_s, 3)
-
-                        r_info = rule_by_phone_idx.get(phone_idx)
-                        r_name = r_info.get("rule") if r_info else None
-                        g_len = r_info.get("golden_len") if r_info else None
-
-                        cur_phones.append(
-                            MfaPhone(
-                                phone=p_text,
-                                start=p_glob_s,
-                                end=p_glob_e,
-                                duration=p_dur,
-                                rule=r_name,
-                                golden_len=g_len,
+                if w_interval is not None:
+                    w_s, w_e, _ = w_interval
+                    # Collect phones whose midpoint lies inside the word's acoustic interval
+                    for p_s, p_e, p_text in phones_raw:
+                        p_mid = (p_s + p_e) / 2.0
+                        if (w_s - 0.005) <= p_mid <= (w_e + 0.005):
+                            p_glob_s = round(p_s + global_offset, 3)
+                            p_glob_e = round(p_e + global_offset, 3)
+                            cur_phones.append(
+                                MfaPhone(
+                                    phone=p_text,
+                                    start=p_glob_s,
+                                    end=p_glob_e,
+                                    duration=round(p_glob_e - p_glob_s, 3),
+                                )
                             )
+
+                # Fetch Tajweed rules for this word if available
+                loc = getattr(target_qword, "location", "")
+                parts = loc.split(":")
+                w_pos_0idx = int(parts[-1]) - 1 if len(parts) >= 3 and parts[-1].isdigit() else -1
+                w_rules = rules_by_word_idx.get(w_pos_0idx, [])
+
+                # If MFA produced valid constituent phones, use pure 10ms MFA acoustic boundaries
+                if cur_phones:
+                    mfa_w_s = cur_phones[0].start
+                    mfa_w_e = cur_phones[-1].end
+                    mfa_w_dur = round(mfa_w_e - mfa_w_s, 3)
+
+                    # Attach Tajweed rule annotations directly to the 10ms physical phones
+                    refined_phones: List[MfaPhone] = []
+                    for p in cur_phones:
+                        r_match = next(
+                            (r for r in w_rules if r.get("base") == p.phone or r.get("symbol", "").startswith(p.phone)),
+                            None,
                         )
-                        phone_idx += 1
+                        if r_match:
+                            p.rule = r_match.get("rule")
+                            p.golden_len = r_match.get("golden_len")
+                        refined_phones.append(p)
 
-                m_word = MfaWord(
-                    word=w_text,
-                    start=w_glob_s,
-                    end=w_glob_e,
-                    duration=w_dur,
-                    phones=cur_phones,
-                )
-                mfa_words.append(m_word)
+                    m_word = MfaWord(
+                        word=target_qword.word,
+                        start=mfa_w_s,
+                        end=mfa_w_e,
+                        duration=mfa_w_dur,
+                        phones=refined_phones,
+                    )
+                    mfa_words.append(m_word)
 
-                # Directly update in-memory QuranWord object for this pass
-                if chunk_words and w_idx < len(chunk_words):
-                    target_qword = chunk_words[w_idx]
-                    target_qword.start = w_glob_s
-                    target_qword.end = w_glob_e
+                    # Update in-memory QuranWord with true 10ms MFA timestamps
+                    target_qword.start = mfa_w_s
+                    target_qword.end = mfa_w_e
                     target_qword.phonemes = [
                         {
                             "phoneme": p.phone,
@@ -814,8 +947,28 @@ class QuranMfaAligner:
                             **({"rule": p.rule} if p.rule else {}),
                             **({"golden_len": p.golden_len} if p.golden_len else {}),
                         }
-                        for p in cur_phones
+                        for p in refined_phones
                     ]
+                else:
+                    # Graceful Fallback: keep CTC boundaries and CTC phonemes so NO words or phones are lost!
+                    existing_phones = getattr(target_qword, "phonemes", []) or []
+                    fallback_phones = [
+                        MfaPhone(
+                            phone=ep.get("phoneme", ""),
+                            start=ep.get("start", final_w_s),
+                            end=ep.get("end", final_w_e),
+                            duration=round(ep.get("end", final_w_e) - ep.get("start", final_w_s), 3),
+                        )
+                        for ep in existing_phones
+                    ]
+                    m_word = MfaWord(
+                        word=target_qword.word,
+                        start=final_w_s,
+                        end=final_w_e,
+                        duration=final_w_dur,
+                        phones=fallback_phones,
+                    )
+                    mfa_words.append(m_word)
 
             key = (surah, ayah)
             if key not in ayah_groups:
@@ -841,8 +994,13 @@ class QuranMfaAligner:
         pipeline_result: Any,
         audio_pcm: np.ndarray,
         output_dir: str = ".",
+        on_progress: Optional[Callable[[float, float], None]] = None,
     ) -> Optional[List[MfaAyahResult]]:
         """Main end-to-end interface to run MFA refinement on an existing PipelineResult."""
+        start_t = time.time()
+        if on_progress:
+            on_progress(1.0, 0.0)
+
         if not self.is_mfa_installed():
             print("\n" + "=" * 70)
             print("[*] Montreal Forced Aligner ('mfa') requested via --mfa.")
@@ -862,27 +1020,51 @@ class QuranMfaAligner:
         work_dir = os.path.join(output_dir, "mfa_workspace")
         corpus_dir = os.path.join(work_dir, "corpus")
         mfa_out_dir = os.path.join(work_dir, "aligned_textgrids")
+        temp_dir = os.path.join(work_dir, "mfa_temp")
 
         # Ensure a clean workspace with no leftover files from previous recitations
         if os.path.exists(work_dir):
             shutil.rmtree(work_dir, ignore_errors=True)
         os.makedirs(work_dir, exist_ok=True)
+        os.makedirs(temp_dir, exist_ok=True)
 
-        print("[*] Preparing Ayah audio clips for MFA alignment...", flush=True)
+        logger.info("Preparing Ayah audio clips for MFA alignment...")
         clips = self.prepare_corpus(segments, audio_pcm, corpus_dir)
         if not clips:
             logger.warning("No valid Ayah clips could be prepared for MFA.")
             return None
 
-        print(f"[*] Running MFA on {len(clips)} Ayah clips (10ms resolution)...", flush=True)
-        success = self.run_alignment(corpus_dir, mfa_out_dir)
+        if on_progress:
+            on_progress(5.0, time.time() - start_t)
+
+        audio_dur = getattr(pipeline_result, "audio_duration_seconds", None)
+        if not audio_dur and audio_pcm is not None:
+            audio_dur = len(audio_pcm) / getattr(config, "SAMPLE_RATE", 16000)
+        audio_dur = audio_dur or 300.0
+        est_mfa_time = max(5.0, audio_dur / 13.0)
+
+        logger.info(f"Running MFA on {len(clips)} Ayah clips (10ms resolution)...")
+        success = self.run_alignment(
+            corpus_dir,
+            mfa_out_dir,
+            temp_dir=temp_dir,
+            on_progress=on_progress,
+            start_time=start_t,
+            est_duration=est_mfa_time,
+        )
         if not success:
             if getattr(config, "CLEANUP_MFA_WORKSPACE", True):
                 shutil.rmtree(work_dir, ignore_errors=True)
             return None
 
-        print("[*] Parsing MFA Praat TextGrids & Tajweed rules...", flush=True)
+        if on_progress:
+            on_progress(94.0, time.time() - start_t)
+
+        logger.info("Parsing MFA Praat TextGrids & Tajweed rules...")
         mfa_results = self.parse_aligned_outputs(mfa_out_dir, clips)
+
+        if on_progress:
+            on_progress(97.0, time.time() - start_t)
 
         # Discard temporary intermediate WAV/TextGrid files once parsed into memory
         if getattr(config, "CLEANUP_MFA_WORKSPACE", True):
@@ -917,35 +1099,25 @@ class QuranMfaAligner:
         with open(flat_json_path, "w", encoding="utf-8") as f:
             json.dump({"total_phones": len(flat_phones), "phones": flat_phones}, f, ensure_ascii=False, indent=2)
 
-        # Update pipeline_result in memory so output.json also receives the 10ms MFA timings
-        for m_ayah in mfa_results:
-            for seg in getattr(pipeline_result, "segments", []):
-                if seg.surah_number == m_ayah.surah and seg.ayah == m_ayah.ayah:
-                    seg.start_time = m_ayah.start_time
-                    seg.end_time = m_ayah.end_time
-                    for w_idx, m_w in enumerate(m_ayah.words):
-                        if w_idx < len(seg.words):
-                            target_word = seg.words[w_idx]
-                            target_word.start = m_w.start
-                            target_word.end = m_w.end
-                            target_word.phonemes = [
-                                {
-                                    "phoneme": p.phone,
-                                    "start": round(p.start, 3),
-                                    "end": round(p.end, 3),
-                                    **({"rule": p.rule} if p.rule else {}),
-                                    **({"golden_len": p.golden_len} if p.golden_len else {}),
-                                }
-                                for p in m_w.phones
-                            ]
+        # Synchronize segment and subsegment boundaries with refined words
+        for seg in getattr(pipeline_result, "segments", []) or []:
+            if seg.words:
+                seg.start_time = seg.words[0].start
+                seg.end_time = seg.words[-1].end
+            for sub in getattr(seg, "sub_segments", []) or []:
+                if sub.words:
+                    sub.start_time = sub.words[0].start
+                    sub.end_time = sub.words[-1].end
 
         # Re-export output.json with updated MFA letter-level timings
         if hasattr(pipeline_result, "export_json"):
             pipeline_result.export_json(output_dir=output_dir)
 
-        print(f"[+] MFA Alignment complete! Artifacts saved:")
-        print(f"    - {mfa_json_path}")
-        print(f"    - {flat_json_path}")
-        print(f"    - {os.path.join(output_dir, 'output.json')} (synced with MFA phone timings)")
+        logger.info(
+            f"MFA Alignment complete! Artifacts saved: {mfa_json_path}, {flat_json_path}, and synced with output.json"
+        )
+
+        if on_progress:
+            on_progress(100.0, time.time() - start_t)
 
         return mfa_results

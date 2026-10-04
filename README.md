@@ -27,7 +27,7 @@
   <a href="#cli-usage">CLI Usage</a> &bull;
   <a href="#python-api">Python API</a> &bull;
   <a href="#output-files">Output Files</a> &bull;
-  <a href="#optional-montreal-forced-aligner---mfa">MFA (Optional)</a> &bull;
+  <a href="#montreal-forced-aligner---mfa-experimental--not-recommended">MFA (Experimental)</a> &bull;
   <a href="#benchmarks">Benchmarks</a>
 </p>
 
@@ -37,7 +37,8 @@
 
 ## Features
 
-- **Optional Montreal Forced Aligner (MFA)**: Built-in support for secondary 10ms phone-level refinement via `--mfa` using pre-trained [Quran Hafs acoustic models](https://huggingface.co/Quran-Lab/mfa-quran-hafs), alongside the default fast Zipformer CTC aligner.
+- **Neural Zipformer CTC Forced Alignment (Recommended)**: Powered by a 65.5M-parameter Transformer model trained on 59,000+ hours of recitation for fast, sub-frame, highly accurate word and Tajweed phoneme boundaries.
+- **Montreal Forced Aligner (MFA) [Experimental / Research Only]**: Optional secondary alignment pass via `--mfa` using pre-trained [Quran Hafs acoustic models](https://huggingface.co/Quran-Lab/mfa-quran-hafs). *Note: MFA is experimental and NOT recommended for general use; stick to the default neural CTC aligner for production alignment.*
 - **Word & Letter Timestamps**: Millisecond-accurate start and end boundaries for each word and its individual Tajweed phonemes.
 - **Automatic Surah & Ayah Detection**: Identifies recited verses automatically from audio without needing text input or prior labels.
 - **Handles Pauses, Restarts & Repetitions**: Sequence matcher natively tracks reciter pauses (*Waqf*), restarts (*Ibtida'*), and repeated verses (*Takrar*) without breaking timeline alignment.
@@ -85,10 +86,7 @@ python run.py --audio recitation.mp3 --fast --progress
 | :--- | :--- |
 | `--audio <path>` | Path to input recitation audio file (`.mp3`, `.wav`, `.m4a`, etc.). |
 | `--fast` | Auto-configures parallel workers for maximum CPU throughput. |
-| `--progress` | Emits single-line JSON progress events to `stdout`. |
-| `--workers <n>` | Explicit number of worker processes. |
-| `--threads <n>` | ONNX execution threads per worker. |
-| `--mfa` | Optional secondary alignment using Montreal Forced Aligner. |
+| `--mfa` | **[Experimental — Not Recommended]** Secondary alignment via Montreal Forced Aligner (Kaldi GMM-HMM). Useful only for academic Tajweed rule duration research. Stick to default CTC alignment for best speed and accuracy. |
 
 <details>
 <summary><small>View sample JSON progress stream (--progress)</small></summary>
@@ -196,7 +194,6 @@ Tested on a consumer laptop CPU (AMD Ryzen 7 / Intel Core i7, CPU only):
 | :--- | :---: | :---: | :---: |
 | Short (Al-Fatiha) | 42s | ~1.3s | **~32x RTF** |
 | Medium (Ar-Rahman) | 14m 20s | ~26s | **~33x RTF** |
-| Full Juz' (Juz' Amma) | 1h 05m | ~2m 10s | **~30x RTF** |
 
 ---
 
@@ -209,12 +206,27 @@ Tested on a consumer laptop CPU (AMD Ryzen 7 / Intel Core i7, CPU only):
 
 ---
 
-## Optional: Montreal Forced Aligner (`--mfa`)
+## Montreal Forced Aligner (`--mfa`) [Experimental & Not Recommended]
 
-The default built-in CTC aligner handles alignment out-of-the-box without MFA.
+> [!WARNING]
+> **MFA is experimental and NOT recommended for general transcription or alignment.**
+> We strongly recommend sticking to the **default built-in CTC aligner**, which is significantly faster (~35x RTF), far more robust, and produces more accurate word and phoneme boundaries.
 
-If you want an additional 10ms phone refinement pass using Montreal Forced Aligner:
+### Why Stick to the Default CTC Aligner?
 
+| Feature | Default Zipformer CTC (Recommended) | Montreal Forced Aligner (`--mfa`) |
+| :--- | :--- | :--- |
+| **Model Architecture** | Deep 65.5M-parameter Transformer with bidirectional self-attention | Classical Kaldi Triphone GMM-HMM (13 MFCCs) |
+| **Training Data** | **59,000+ hours** of authentic Quranic recitation | ~68.5 hours (131 reciters) |
+| **Speed** | **20x–40x Real-Time Factor (RTF)** on CPU | ~1x–2x RTF (requires heavy external Kaldi process) |
+| **Recitation Dynamics** | Natively tracks reciter breath pauses (*Waqf*), restarts (*Takrar*), vibrato (*Tarannum*), and melodic modulations (*Maqamat*) | Rigid GMM distributions can lose search paths during pitch glides and multi-second *Madd*, sometimes pruning words |
+| **Pausal Forms** | Natively accommodates acoustic pause closures and transitions | Rigid contextual *Wasl* dictionary enforces continuous recitation forms even at breath pauses |
+| **Dependencies** | Self-contained INT8 ONNX Runtime (zero external setup) | Requires external micromamba/Kaldi environment |
+
+### When to Use `--mfa`?
+The `--mfa` flag is retained purely as an **academic/experimental research tool** to extract fine-grained Tajweed rule duration metrics (`rule_index.jsonl` golden durations for Madd, Ghunnah, and Qalqalah). 
+
+If you specifically want to run the experimental MFA research pass:
 1. Download [`quran_hafs_acoustic.zip`](https://huggingface.co/Quran-Lab/mfa-quran-hafs) from Hugging Face.
 2. Place `quran_hafs_acoustic.zip` into the `data/mfa/` directory.
 3. Run with the `--mfa` flag:

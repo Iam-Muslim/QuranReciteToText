@@ -325,18 +325,29 @@ class AudioPipeline:
         mfa_results = None
         if enable_mfa:
             mfa_start = time.time()
-            if on_progress_event:
-                on_progress_event(
-                    PipelineProgressEvent(
-                        stage=PipelineStage.mfa,
-                        percent=0.0,
-                        elapsed_seconds=time.time() - overall_start,
-                        message="Running Montreal Forced Alignment (10ms)...",
-                    )
-                )
-            if json_progress:
-                sys.stdout.write(json.dumps({"stage": "mfa", "status": "started"}) + "\n")
-                sys.stdout.flush()
+            last_mfa_progress = [0.0]
+
+            def _on_mfa_progress(pct: float, elp: float) -> None:
+                now = time.time()
+                if (now - last_mfa_progress[0] >= 0.20) or pct >= 100.0:
+                    last_mfa_progress[0] = now
+                    if json_progress:
+                        sys.stdout.write(json.dumps({"stage": "mfa", "percent": round(pct, 1), "elapsed": round(elp, 1)}) + "\n")
+                        sys.stdout.flush()
+                    elif live_profile:
+                        filled = int(20 * pct / 100.0)
+                        bar = "=" * filled + " " * (20 - filled)
+                        sys.stdout.write(f"\rPhase 5 MFA Align   : [{bar}] {pct:3.0f}% ({elp:.1f}s)")
+                        sys.stdout.flush()
+                    if on_progress_event:
+                        on_progress_event(
+                            PipelineProgressEvent(
+                                stage=PipelineStage.mfa,
+                                percent=pct,
+                                elapsed_seconds=elp,
+                                message=f"MFA Aligning {pct:.0f}%",
+                            )
+                        )
 
             from src.aligner.mfa_aligner import QuranMfaAligner
             mfa_engine = QuranMfaAligner()
@@ -344,13 +355,15 @@ class AudioPipeline:
                 pipeline_result=result,
                 audio_pcm=mfa_audio_buffer,
                 output_dir=output_dir,
+                on_progress=_on_mfa_progress if (live_profile or json_progress or on_progress_event) else None,
             )
             result.mfa_results = mfa_results
             mfa_audio_buffer = None
             mfa_time = time.time() - mfa_start
 
             if live_profile:
-                print(f"Phase 5 MFA Align   : {mfa_time:.2f}s", flush=True)
+                sys.stdout.write("\r" + " " * 75 + f"\rPhase 5 MFA Align   : {mfa_time:.2f}s\n")
+                sys.stdout.flush()
             if json_progress:
                 sys.stdout.write(json.dumps({"stage": "mfa", "elapsed": round(mfa_time, 2)}) + "\n")
                 sys.stdout.flush()

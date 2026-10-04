@@ -110,4 +110,8 @@ DEFAULT_MFA_ACOUSTIC_PATH = str(DEFAULT_MFA_DIR / "quran_hafs_acoustic.zip")
 DEFAULT_MFA_DICT_PATH = str(DEFAULT_MFA_DIR / "quran_hafs.dict")
 DEFAULT_MFA_RULES_PATH = str(DEFAULT_MFA_DIR / "rule_index.jsonl")
 CLEANUP_MFA_WORKSPACE: bool = True           # Discard temporary sliced WAVs/TextGrids after JSON export
+MFA_BEAM: int = 40                           # MFA search beam width (tuned for recitation madd vowels)
+MFA_RETRY_BEAM: int = 160                    # MFA retry beam width on difficult elongations
+MFA_NUM_JOBS: int = 2                        # Parallel acoustic alignment worker threads
+
 
