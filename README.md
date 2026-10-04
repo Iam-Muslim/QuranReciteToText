@@ -1,8 +1,9 @@
 <div align="right" dir="rtl">
 
-<sub>رَبَّنَا تَقَبَّلْ مِنَّا ۖ إِنَّكَ أَنتَ السَّمِيعُ الْعَلِيمُ &bull; بِفَضْلِ اللَّهِ وَبِرَحْمَتِهِ، الْحَمْدُ لِلَّهِ رَبِّ الْعَالَمِينَ</sub>
+<sub>ربنا تقبل منا انك انت السميع العليم &bull; الحمد لله رب العالمين &bull; بفضل الله وبرحمته </sub>
 
 </div>
+<img width="1200" height="286" alt="New Project (4)" src="https://github.com/user-attachments/assets/596ee40b-9289-429c-9d49-867f48f39b5e" />
 
 <div align="center">
 
@@ -240,3 +241,21 @@ Parameters can be adjusted in [`config.py`](config.py):
 <div align="center">
 <sub><b>Integration</b>: Automatically generates <code>output/qurancaption_segments.json</code> for 1-click use with <a href="https://github.com/zonetecde/QuranCaption">QuranCaption</a></sub>
 </div>
+
+
+## License (لوجه الله تعالى)
+
+### **مَا أَسْأَلُكُمْ عَلَيْهِ مِنْ أَجْرٍ ۖ إِنْ أَجْرِيَ إِلَّا عَلَىٰ رَبِّ الْعَالَمِينَ**
+
+> **THIS PACKAGE AND SOURCE CODE ARE DEDICATED FOR THE SAKE OF ALLAH ALONE.**
+
+Before viewing, using, distributing, or modifying any part of this repository, you explicitly agree to the following covenants:
+
+1. **100% Free to End Users**:
+   You may use, study, and redistribute this software or its logic **ONLY** in applications and services that are completely free of charge to all end users forever.
+2. **Strict Prohibition on Commercialization & Profit**:
+   You are **STRICTLY FORBIDDEN** from selling this application, placing it behind paywalls, subscription models, in-app purchases, charging download fees, monetizing it with advertisements (AdMob, Unity Ads, etc.), or extracting any financial revenue from this codebase, models, or outputs.
+3. **Pass-Through**:
+   These terms are immutable and strictly pass on to any fork, derivative work, or redistributed component.
+
+---------
