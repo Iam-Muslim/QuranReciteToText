@@ -185,7 +185,7 @@ class AudioPipeline:
         vad_time = getattr(raw_result, "vad_time", 0.0)
         pure_asr_time = max(0.0, (time.time() - asr_start) - vad_time)
         if live_profile:
-            sys.stdout.write("\r" + " " * 75 + f"\rPhase 1 Transcribe  : {pure_asr_time:.2f}s\n")
+            sys.stdout.write(f"\r\033[2KPhase 1 Transcribe  : {pure_asr_time:.2f}s\n")
             sys.stdout.flush()
 
         # Phase 1.1: Speech Recovery (if enabled)
@@ -362,7 +362,7 @@ class AudioPipeline:
             mfa_time = time.time() - mfa_start
 
             if live_profile:
-                sys.stdout.write("\r" + " " * 75 + f"\rPhase 5 MFA Align   : {mfa_time:.2f}s\n")
+                sys.stdout.write(f"\r\033[2KPhase 5 MFA Align   : {mfa_time:.2f}s\n")
                 sys.stdout.flush()
             if json_progress:
                 sys.stdout.write(json.dumps({"stage": "mfa", "elapsed": round(mfa_time, 2)}) + "\n")
