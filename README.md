@@ -25,9 +25,9 @@
   <a href="#features">Features</a> &bull;
   <a href="#quick-start">Quick Start</a> &bull;
   <a href="#cli-usage">CLI Usage</a> &bull;
+  <a href="#batch-directory-processing---dir">Batch Processing</a> &bull;
   <a href="#python-api">Python API</a> &bull;
   <a href="#output-files">Output Files</a> &bull;
-  <a href="#montreal-forced-aligner---mfa-experimental--not-recommended">MFA (Experimental)</a> &bull;
   <a href="#benchmarks">Benchmarks</a>
 </p>
 
@@ -41,6 +41,7 @@
 - **Montreal Forced Aligner (MFA) [Experimental / Research Only]**: Optional secondary alignment pass via `--mfa` using pre-trained [Quran Hafs acoustic models](https://huggingface.co/Quran-Lab/mfa-quran-hafs). *Note: MFA is experimental and NOT recommended for general use; stick to the default neural CTC aligner for production alignment.*
 - **Word & Letter Timestamps**: Millisecond-accurate start and end boundaries for each word and its individual Tajweed phonemes.
 - **Automatic Surah & Ayah Detection**: Identifies recited verses automatically from audio without needing text input or prior labels.
+- **Batch Directory Processing**: Recursively processes folders of audio or video recitations, preserving folder trees, exporting per-file `<stem>.json` files, and generating merged `all_surahs.json` sets.
 - **Handles Pauses, Restarts & Repetitions**: Sequence matcher natively tracks reciter pauses (*Waqf*), restarts (*Ibtida'*), and repeated verses (*Takrar*) without breaking timeline alignment.
 - **Tajweed Acoustic VAD ("Madd Guardian")**: Specialized silence detection protects prolonged vowels (*Madd* 2/4/6 counts) and plosive stop closures (*Qalqalah*).
 - **Tajweed Boundary Repair**: Automatically reconciles cross-word assimilations like Idgham (with/without Ghunnah), Iqlab, and Shaddah.
@@ -56,41 +57,56 @@
 git clone https://github.com/Iam-Muslim/QuranReciteToText.git
 cd QuranReciteToText
 
-# Run alignment (dependencies and default models auto-setup on first run)
+# Process a single audio/video file
 python run.py --audio recitation.mp3
+
+# Or process an entire folder recursively
+python run.py --dir ./my_recitations
 ```
 
 > [!NOTE]
 > Missing Python packages and the default acoustic model ([Quran-Lab/zipformer_p-arabic-v3](https://huggingface.co/Quran-Lab/zipformer_p-arabic-v3)) are downloaded and configured automatically.
 
-Supported audio formats: `.mp3`, `.wav`, `.m4a`, `.ogg`, `.flac`.
+**Supported Media Formats**:
+- **Audio**: `.mp3`, `.wav`, `.m4a`, `.flac`, `.ogg`, `.opus`, `.aac`, `.wma`, `.aiff`
+- **Video Containers**: `.webm`, `.mp4`, `.mkv`, `.mov`, `.avi`, `.m4v`, `.flv`
 
 ---
 
 ## CLI Usage
 
 ```bash
-# Default mode: built-in CTC aligner (no external tools required)
+# 1. Single file alignment
 python run.py --audio recitation.mp3
 
-# Fast parallel mode: utilizes all physical CPU cores
-python run.py --audio recitation.mp3 --fast
+# 2. Batch directory processing (recursive)
+python run.py --dir ./my_recitations
 
-# Progress mode: streams single-line JSON events to stdout for frontends/APIs
+# 3. Maximum CPU throughput (parallel workers)
+python run.py --audio recitation.mp3 --fast
+python run.py --dir ./my_recitations --fast
+
+# 4. Stream real-time JSON progress for frontends / APIs
 python run.py --audio recitation.mp3 --fast --progress
+python run.py --dir ./my_recitations --fast --progress
+
+# 5. Interactive prompt (drag & drop file or folder)
+python run.py
 ```
 
 ### Options
 
 | Option | Description |
 | :--- | :--- |
-| `--audio <path>` | Path to input recitation audio file (`.mp3`, `.wav`, `.m4a`, etc.). |
+| `--audio <path>` | Path to a single input recitation file (`.mp3`, `.wav`, `.webm`, etc.). Mutually exclusive with `--dir`. |
+| `--dir <folder>` | Path to a directory for recursive batch processing. Preserves subfolders, outputs `<stem>.json` for each file, and creates `all_surahs.json`. |
 | `--fast` | Auto-configures parallel workers for maximum CPU throughput. |
-| `--mfa` | **[Experimental — Not Recommended]** Secondary alignment via Montreal Forced Aligner (Kaldi GMM-HMM). Useful only for academic Tajweed rule duration research. Stick to default CTC alignment for best speed and accuracy. |
+| `--progress` | Streams single-line JSON events to stdout for frontends/UIs/APIs. |
 
 <details>
-<summary><small>View sample JSON progress stream (--progress)</small></summary>
+<summary><small>View sample JSON progress streams (--progress)</small></summary>
 
+**Single-File Mode:**
 ```json
 {"stage": "vad", "elapsed": 0.35}
 {"stage": "transcribing", "percent": 50.0, "elapsed": 1.2, "speed_x": 32.0}
@@ -98,7 +114,78 @@ python run.py --audio recitation.mp3 --fast --progress
 {"stage": "completed", "audio_duration": 112.5, "processing_time": 3.8, "total_time": 4.1, "real_time_factor": 27.4}
 ```
 
+**Batch Directory Mode:**
+```json
+{"stage": "batch_start", "total_files": 114}
+{"stage": "batch_file_done", "index": 1, "total": 114, "file": "001.mp3", "saved": "output/001.json", "elapsed": 1.25}
+{"stage": "batch_file_done", "index": 2, "total": 114, "file": "002.webm", "saved": "output/002.json", "elapsed": 12.40}
+{"stage": "batch_completed", "total_files": 114, "succeeded": 114, "failed": 0, "total_time": 128.5}
+```
+
 </details>
+
+---
+
+## Batch Directory Processing (`--dir`)
+
+When processing collections of recitations, `--dir` scans the target folder recursively, mirrors the folder hierarchy into `output/`, and creates clean production JSON files.
+
+### Folder Mapping
+
+```text
+Input Directory (e.g. ./my_audio):
+my_audio/
+├── 001.mp3
+├── 002.webm
+└── reciter_husary/
+    ├── 112.m4a
+    └── 114.wav
+
+Output Directory (./output):
+output/
+├── 001.json                 # Aligned Surah 1 (same schema as output.json)
+├── 002.json                 # Aligned Surah 2
+├── all_surahs.json          # Consolidated & sorted Surahs for root level
+└── reciter_husary/
+    ├── 112.json             # Aligned Surah 112
+    ├── 114.json             # Aligned Surah 114
+    └── all_surahs.json      # Consolidated & sorted Surahs for reciter_husary
+```
+
+### Batch Output Rules
+1. **Stem-Matched JSON**: Every media file outputs an individual JSON named after its filename stem (`1.mp3` $\rightarrow$ `1.json`, `recitation.webm` $\rightarrow$ `recitation.json`). Each file shares the exact canonical schema with `output.json`.
+2. **Consolidated `all_surahs.json`**: Generated in each directory folder containing media. All Surahs are sorted numerically ($1 \dots 114$) with Ayahs ordered sequentially, preserving each Surah's `intro` (Basmalah / Isti'adha).
+3. **Clean Output**: Debug files (`raw_transcription.json`, `recovered_speech.json`, etc.) are omitted during batch runs to keep directories neat and compact.
+
+### Common Batch Scenarios
+
+#### Scenario 1: Complete Quran / Surah Collection
+Transcribe a flat folder of Surahs (`001.mp3` through `114.mp3`):
+```bash
+python run.py --dir ./quran_audio --fast
+```
+*Result*: Produces `001.json` ... `114.json` plus a single unified `all_surahs.json` containing the entire aligned Quran.
+
+#### Scenario 2: Multi-Reciter / Subfolder Organization
+Organize audio by reciter or riwayah:
+```text
+audio/
+├── mishary/
+│   ├── 001.mp3
+│   └── 002.mp3
+└── minshawi/
+    └── 001.mp3
+```
+```bash
+python run.py --dir ./audio --fast
+```
+*Result*: Output structure perfectly mirrors the input: `output/mishary/all_surahs.json` and `output/minshawi/all_surahs.json`.
+
+#### Scenario 3: Mixed Audio & Video Files
+Process mixed folders containing `.mp3`, `.m4a`, and `.webm` video files seamlessly without converting them first:
+```bash
+python run.py --dir ./recordings
+```
 
 ---
 
@@ -111,33 +198,53 @@ from src import AudioPipeline
 pipeline = AudioPipeline()
 pipeline.initialize()
 
-# 2. Process recitation audio file
+# 2. Option A: Process a single file
 result = pipeline.process_audio_file(
     audio_file_path="recitation.mp3",
     output_dir="./output"
 )
 
-# 3. Read aligned verses, words, and letter phonemes
+# Access segments, words, and Tajweed phonemes
 for segment in result.segments:
     print(f"\nSurah {segment.surah_number}, Ayah {segment.ayah} [{segment.start_time:.2f}s -> {segment.end_time:.2f}s]")
     for word in segment.words:
         print(f"  {word.word:<12} [{word.start:.2f}s -> {word.end:.2f}s] ({word.location})")
         for ph in (word.phonemes or []):
             print(f"    - {ph['phoneme']:<4} [{ph['start']:.2f}s -> {ph['end']:.2f}s]")
+
+# 2. Option B: Batch process an entire directory
+summary = pipeline.process_directory(
+    input_dir="./my_recitations",
+    output_dir="./output",
+    live_profile=True,
+)
+print(f"Batch complete: {len(summary['succeeded'])}/{summary['total_files']} files processed successfully.")
 ```
 
 ---
 
 ## Output Files
 
-All output files are saved to `./output`:
+Depending on the execution mode, outputs are saved to `./output`:
+
+### Single-File Mode (`--audio`)
+Generates 5 files in `./output`:
 
 | File | Description |
 | :--- | :--- |
-| **`output.json`** | Canonical JSON with Ayahs, words, Uthmani text, locations, and phoneme timings. |
+| **`output.json`** | Canonical JSON with Surahs, Ayahs, words, Uthmani text, locations, and phoneme timings. |
 | **`ctc_aligned_phonemes.json`** | All recognized Tajweed phonemes aligned to exact audio frame boundaries. |
 | **`raw_transcription.json`** | Raw unconstrained phonemes and detected pause timestamps. |
 | **`recovered_speech.json`** | Diagnostics of acoustic speech recovery events. |
+| **`qurancaption_segments.json`** | Segments format ready for QuranCaption subtitle generators. |
+
+### Batch Directory Mode (`--dir`)
+Generates clean, production-ready JSON files mirroring the source directory structure:
+
+| File | Description |
+| :--- | :--- |
+| **`<filename>.json`** | Canonical JSON for each media file (uses the exact same schema as `output.json`). |
+| **`all_surahs.json`** | Consolidated and numerically sorted Surahs ($1 \dots 114$) with sequential Ayahs and preserved `intro` for each folder. |
 
 <details>
 <summary><b>View sample output.json payload</b></summary>
@@ -203,36 +310,6 @@ Tested on a consumer laptop CPU (AMD Ryzen 7 / Intel Core i7, CPU only):
 2. **Phoneme Recognition**: The Zipformer-v3 INT8 model transcribes each chunk into Arabic Tajweed phonemes.
 3. **CTC Forced Alignment**: Banded Viterbi alignment calculates exact audio boundaries for each phoneme.
 4. **Text Matching**: Matches recognized phonemes against the Quran reference to determine Surah/Ayah and build word boundaries.
-
----
-
-## Montreal Forced Aligner (`--mfa`) [Experimental & Not Recommended]
-
-> [!WARNING]
-> **MFA is experimental and NOT recommended for general transcription or alignment.**
-> We strongly recommend sticking to the **default built-in CTC aligner**, which is significantly faster (~35x RTF), far more robust, and produces more accurate word and phoneme boundaries.
-
-### Why Stick to the Default CTC Aligner?
-
-| Feature | Default Zipformer CTC (Recommended) | Montreal Forced Aligner (`--mfa`) |
-| :--- | :--- | :--- |
-| **Model Architecture** | Deep 65.5M-parameter Transformer with bidirectional self-attention | Classical Kaldi Triphone GMM-HMM (13 MFCCs) |
-| **Training Data** | **59,000+ hours** of authentic Quranic recitation | ~68.5 hours (131 reciters) |
-| **Speed** | **20x–40x Real-Time Factor (RTF)** on CPU | ~1x–2x RTF (requires heavy external Kaldi process) |
-| **Recitation Dynamics** | Natively tracks reciter breath pauses (*Waqf*), restarts (*Takrar*), vibrato (*Tarannum*), and melodic modulations (*Maqamat*) | Rigid GMM distributions can lose search paths during pitch glides and multi-second *Madd*, sometimes pruning words |
-| **Pausal Forms** | Natively accommodates acoustic pause closures and transitions | Rigid contextual *Wasl* dictionary enforces continuous recitation forms even at breath pauses |
-| **Dependencies** | Self-contained INT8 ONNX Runtime (zero external setup) | Requires external micromamba/Kaldi environment |
-
-### When to Use `--mfa`?
-The `--mfa` flag is retained purely as an **academic/experimental research tool** to extract fine-grained Tajweed rule duration metrics (`rule_index.jsonl` golden durations for Madd, Ghunnah, and Qalqalah). 
-
-If you specifically want to run the experimental MFA research pass:
-1. Download [`quran_hafs_acoustic.zip`](https://huggingface.co/Quran-Lab/mfa-quran-hafs) from Hugging Face.
-2. Place `quran_hafs_acoustic.zip` into the `data/mfa/` directory.
-3. Run with the `--mfa` flag:
-   ```bash
-   python run.py --audio recitation.mp3 --mfa
-   ```
 
 ---
 

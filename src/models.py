@@ -558,13 +558,28 @@ class PipelineResult:
 
         return raw_segments
 
+    def to_output_dict(self) -> Dict[str, Any]:
+        """Returns the canonical output dictionary containing surahs, ayahs, and word timings."""
+        by_surah: Dict[int, List[QuranSegment]] = defaultdict(list)
+        for s in self.segments:
+            by_surah[s.surah_number].append(s)
+
+        return {
+            "total_surahs": len(by_surah),
+            "surahs": [
+                {
+                    "surah": k,
+                    **({"intro": v[0].intro} if v and getattr(v[0], "intro", None) else {}),
+                    "ayahs": [s.to_dict() for s in v],
+                }
+                for k, v in by_surah.items()
+            ],
+        }
+
     def export_json(self, output_dir: str = ".") -> Dict[str, str]:
         """Exports all canonical JSON artifacts into the specified directory."""
         os.makedirs(output_dir, exist_ok=True)
         dur = round(self.audio_duration_seconds, 3)
-        by_surah: Dict[int, List[QuranSegment]] = defaultdict(list)
-        for s in self.segments:
-            by_surah[s.surah_number].append(s)
 
         artifacts = {
             "raw_transcription.json": {
@@ -586,17 +601,7 @@ class PipelineResult:
                 "raw_text": "".join(p.phoneme for p in self.ctc_aligned_phonemes),
                 "aligned_phonemes": [p.to_aligned_dict(i + 1) for i, p in enumerate(self.ctc_aligned_phonemes)],
             },
-            "output.json": {
-                "total_surahs": len(by_surah),
-                "surahs": [
-                    {
-                        "surah": k,
-                        **({"intro": v[0].intro} if v and getattr(v[0], "intro", None) else {}),
-                        "ayahs": [s.to_dict() for s in v],
-                    }
-                    for k, v in by_surah.items()
-                ],
-            },
+            "output.json": self.to_output_dict(),
             "qurancaption_segments.json": {
                 "segments": self.to_qurancaption_response(),
             },

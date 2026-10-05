@@ -52,6 +52,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="Quran Recitation Transcription & Forced Alignment Pipeline")
     parser.add_argument("--audio", type=str, default=None, help="Path to input audio file")
+    parser.add_argument("--dir", type=str, default=None, help="Path to directory containing audio files for batch transcription")
     parser.add_argument("--fast", action="store_true", default=False, help="Auto-configure top-speed parallel workers and threads for this CPU")
     parser.add_argument("--threads", type=int, default=None, help="ONNX execution threads (default: auto/2)")
     parser.add_argument("--workers", type=int, default=None, help="Parallel segment workers (default: 1, or auto in --fast mode)")
@@ -62,23 +63,41 @@ def main():
         parser.error("--mfa is temporarily disabled.")
 
     audio_path = args.audio
-    if not audio_path:
+    dir_path = args.dir
+
+    if audio_path and dir_path:
+        parser.error("Specify either --audio (single file) or --dir (batch directory), not both.")
+
+    if not audio_path and not dir_path:
         print("=" * 60)
         print("  Quran Recitation Transcription & Forced Alignment Pipeline")
         print("=" * 60)
         print("Usage: python run.py --audio <path_to_audio_file> [--fast]")
+        print("       python run.py --dir <path_to_audio_dir> [--fast]")
         print("-" * 60)
         try:
-            prompt_input = input("Enter path to audio file (or press Enter to exit): ").strip().strip('"').strip("'")
+            prompt_input = input("Enter path to audio file or directory (or press Enter to exit): ").strip().strip('"').strip("'")
             if prompt_input:
-                audio_path = prompt_input
+                if os.path.isdir(prompt_input):
+                    dir_path = prompt_input
+                else:
+                    audio_path = prompt_input
             else:
                 sys.exit(0)
         except (EOFError, KeyboardInterrupt):
             sys.exit(0)
 
-    if not os.path.exists(audio_path):
+    if audio_path and not os.path.exists(audio_path):
         print(f"[!] Error: Audio file not found at: {audio_path}", file=sys.stderr)
+        if sys.stdin and sys.stdin.isatty():
+            try:
+                input("\nPress Enter to exit...")
+            except Exception:
+                pass
+        sys.exit(1)
+
+    if dir_path and not os.path.isdir(dir_path):
+        print(f"[!] Error: Audio directory not found at: {dir_path}", file=sys.stderr)
         if sys.stdin and sys.stdin.isatty():
             try:
                 input("\nPress Enter to exit...")
@@ -99,6 +118,26 @@ def main():
     from src import AudioPipeline
     from src.audio import AudioDecoder
 
+    # Batch Directory Mode
+    if dir_path:
+        output_dir = config.DEFAULT_OUTPUT_DIR
+        os.makedirs(output_dir, exist_ok=True)
+        if not args.progress:
+            print("Initializing pipeline...", flush=True)
+        pipeline = AudioPipeline()
+        pipeline.initialize(num_threads=threads)
+        batch_result = pipeline.process_directory(
+            input_dir=dir_path,
+            output_dir=output_dir,
+            live_profile=not args.progress,
+            json_progress=args.progress,
+            enable_mfa=args.mfa,
+        )
+        if batch_result.get("total_files", 0) == 0:
+            sys.exit(1)
+        return
+
+    # Single File Mode
     if not args.progress:
         print("Initializing pipeline and decoding audio...", flush=True)
 
