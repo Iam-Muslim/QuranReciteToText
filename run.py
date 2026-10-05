@@ -58,6 +58,8 @@ def main():
     parser.add_argument("--progress", action="store_true", default=False, help="Emit JSON progress lines for frontend apps")
     parser.add_argument("--mfa", action="store_true", default=False, help="Run secondary 10ms phone-level alignment using Montreal Forced Aligner (MFA)")
     args = parser.parse_args()
+    if args.mfa:
+        parser.error("--mfa is temporarily disabled.")
 
     audio_path = args.audio
     if not audio_path:
