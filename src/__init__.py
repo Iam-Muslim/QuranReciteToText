@@ -162,7 +162,7 @@ class AudioPipeline:
                 elif live_profile:
                     filled = int(20 * pct / 100.0)
                     bar = "=" * filled + " " * (20 - filled)
-                    sys.stdout.write(f"\rPhase 1 Transcribe  : [{bar}] {pct:3.0f}% ({elp:.1f}s)")
+                    sys.stdout.write(f"\r\033[2KPhase 1 Transcribe  : [{bar}] {pct:3.0f}% ({elp:.1f}s)")
                     sys.stdout.flush()
                 if on_progress_event:
                     on_progress_event(
@@ -202,6 +202,7 @@ class AudioPipeline:
                 audio_duration=audio_duration,
                 transcriber=self.transcriber,
                 logprobs_matrix=raw_result.logprobs_matrix,
+                noise_floor_db=getattr(raw_result, "noise_floor_db", None),
             )
             effective_phonemes = rec_res.recovered_phonemes
             recovery_events = rec_res.recovery_events

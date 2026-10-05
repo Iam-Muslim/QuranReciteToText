@@ -198,6 +198,8 @@ class QuranSilenceVAD:
 
         self.pause_timestamps: List[float] = []
         self.pause_intervals: List[PauseInterval] = []
+        self.noise_floor_db: Optional[float] = None
+        self.silence_threshold_db: Optional[float] = None
 
     def detect_speech_and_pauses(
         self, audio: np.ndarray
@@ -278,6 +280,9 @@ class QuranSilenceVAD:
         else:
             silence_energy_threshold = self.offset_db
             noise_floor_db = self.offset_db
+
+        self.noise_floor_db = noise_floor_db
+        self.silence_threshold_db = silence_energy_threshold
 
         # ── 2. Silero ONNX Forward Pass (with Silence-Valley Guided Batching)
         has_sr_input = input_names is not None and "sr" in input_names
@@ -596,9 +601,13 @@ class QuranSilenceVAD:
             dyn_range = max(6.0, p85 - p15)
             onset_th = max(self.onset_db, p15 + 0.38 * dyn_range)
             offset_th = max(self.offset_db, p15 + 0.22 * dyn_range)
+            self.noise_floor_db = p15
+            self.silence_threshold_db = offset_th
         else:
             onset_th = self.onset_db
             offset_th = self.offset_db
+            self.noise_floor_db = self.offset_db
+            self.silence_threshold_db = self.offset_db
 
         # 3. Dual-threshold Schmitt trigger with hangover buffer
         is_speech = np.zeros(num_frames, dtype=bool)

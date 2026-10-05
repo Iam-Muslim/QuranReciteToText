@@ -93,6 +93,8 @@ class RawTranscriptionResult:
     pause_timestamps: List[float] = field(default_factory=list)
     pause_intervals: List[PauseInterval] = field(default_factory=list)
     vad_time: float = 0.0
+    noise_floor_db: Optional[float] = None
+    silence_threshold_db: Optional[float] = None
 
     @property
     def raw_text(self) -> str:

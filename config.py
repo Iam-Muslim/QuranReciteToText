@@ -90,6 +90,7 @@ SUBSEGMENT_MIN_PAUSE_S: float = 0.25        # Minimum pause duration (seconds) t
 # 7. SPEECH RECOVERY CONTROLS (INTRA-SEGMENT HOLE RE-TRANSCRIPTION)
 # ==============================================================================
 ENABLE_SPEECH_RECOVERY: bool = True          # Targeted re-transcription of severe deletion holes
+SPEECH_RECOVERY_MODE: str = "legacy"             # "legacy" (default, exact original -55dB brute-force), "adaptive" (VAD noise floor), or "off"
 SPEECH_RECOVERY_MIN_HOLE_DURATION_S: float = 1.40  # Minimum gap duration to inspect
 SPEECH_RECOVERY_PADDING_PRE_S: float = 0.16        # 160ms pre-roll for causal conv states ramp-up
 SPEECH_RECOVERY_PADDING_POST_S: float = 0.24       # 240ms flush padding for trailing vowels
