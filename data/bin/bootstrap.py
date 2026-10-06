@@ -68,7 +68,19 @@ def _is_package_installed(pkg_name: str) -> bool:
 
 def ensure_pip_dependencies() -> None:
     """Installs missing requirements via pip on first run."""
-    base_required = ("numpy", "onnxruntime", "numba", "miniaudio", "scipy")
+    base_required = (
+        "numpy",
+        "onnxruntime",
+        "numba",
+        "miniaudio",
+        "scipy",
+        "fastapi",
+        "uvicorn",
+        "pywebview",
+        "requests",
+        "python-multipart",
+        "pydantic",
+    )
     missing_base = [pkg for pkg in base_required if not _is_package_installed(pkg)]
 
     pip_cmd = [sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "--no-warn-script-location"]

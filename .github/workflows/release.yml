@@ -24,7 +24,27 @@ on:
 
 jobs:
   build-and-release:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            args: '--target aarch64-apple-darwin --bundles app,dmg'
+            assetNamePattern: 'QuranRecite2Text.MacOS.ARM[ext]'
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            args: '--target x86_64-apple-darwin --bundles app,dmg'
+            assetNamePattern: 'QuranRecite2Text.MacOS.Intel[ext]'
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            args: '--bundles nsis'
+            assetNamePattern: 'QuranRecite2Text.Windows[ext]'
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            args: '--bundles appimage,deb'
+            assetNamePattern: 'QuranRecite2Text.Linux[ext]'
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: write
 
@@ -44,8 +64,84 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-pc-windows-msvc
+          targets: ${{ matrix.target }}
 
+      - name: Configure build environment
+        run: |
+          echo "CARGO_BUILD_JOBS=2" >> $GITHUB_ENV
+          echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> $GITHUB_ENV
+        shell: bash
+
+      # ─── macOS binary setup ───
+      - name: Install ffmpeg and copy binaries (macOS)
+        if: startsWith(matrix.os, 'macos')
+        run: |
+          brew update
+          if brew list --versions openssl@1.1 >/dev/null 2>&1; then
+            brew unlink openssl@1.1
+          fi
+          brew install ffmpeg
+          mkdir -p app/src-tauri/binaries
+          cp "$(brew --prefix ffmpeg)/bin/ffprobe" app/src-tauri/binaries/ffprobe
+          cp "$(brew --prefix ffmpeg)/bin/ffmpeg" app/src-tauri/binaries/ffmpeg
+          chmod +x app/src-tauri/binaries/ffprobe
+          chmod +x app/src-tauri/binaries/ffmpeg
+
+      # ─── Windows binary setup ───
+      - name: Download and extract ffmpeg and ffprobe (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $binDir = "app/src-tauri/binaries"
+          New-Item -ItemType Directory -Path $binDir -Force | Out-Null
+
+          $ffmpegArchive = "ffmpeg.7z"
+          curl.exe -L -o $ffmpegArchive "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full.7z"
+
+          $extractDir = "ffmpeg-extracted"
+          if (Test-Path $extractDir) { Remove-Item -Recurse -Force $extractDir }
+          New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
+
+          $sevenZip = (Get-Command 7z -ErrorAction SilentlyContinue).Source
+          if (-not $sevenZip) {
+            curl.exe -L -o 7zr.exe "https://www.7-zip.org/a/7zr.exe"
+            $sevenZip = (Resolve-Path ".\7zr.exe").Path
+          }
+          & $sevenZip x $ffmpegArchive "-o$extractDir" -y
+
+          $rootDir = Get-ChildItem -Directory -Path $extractDir | Select-Object -First 1
+          Copy-Item -Path (Join-Path $rootDir.FullName "bin/ffmpeg.exe") -Destination $binDir -Force
+          Copy-Item -Path (Join-Path $rootDir.FullName "bin/ffprobe.exe") -Destination $binDir -Force
+
+      # ─── Linux binary & library setup ───
+      - name: Install Linux build dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libasound2-dev file curl ca-certificates xz-utils
+          sudo apt-get install -y libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y libwebkit2gtk-4.1-dev || sudo apt-get install -y libwebkit2gtk-4.0-dev
+          sudo apt-get install -y xdg-utils desktop-file-utils
+
+      - name: Download and extract ffmpeg and ffprobe (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          mkdir -p app/src-tauri/binaries
+          curl -L -o ffmpeg.tar.xz "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz"
+          rm -rf ffmpeg-extracted
+          mkdir ffmpeg-extracted
+          tar -xJf ffmpeg.tar.xz -C ffmpeg-extracted
+          ffmpeg_bin=$(find ffmpeg-extracted -type f -name ffmpeg | head -n 1)
+          ffprobe_bin=$(find ffmpeg-extracted -type f -name ffprobe | head -n 1)
+          if [ -z "$ffmpeg_bin" ] || [ -z "$ffprobe_bin" ]; then
+            echo "Unable to find ffmpeg/ffprobe in extracted archive"
+            exit 1
+          fi
+          cp "$ffmpeg_bin" app/src-tauri/binaries/ffmpeg
+          cp "$ffprobe_bin" app/src-tauri/binaries/ffprobe
+          chmod +x app/src-tauri/binaries/ffmpeg app/src-tauri/binaries/ffprobe
+
+      # ─── Build & Publish ───
       - name: Install Frontend Dependencies
         working-directory: app
         run: npm ci || npm install
@@ -54,7 +150,7 @@ jobs:
         working-directory: app
         run: npm run build
 
-      - name: Build & Publish Tauri Release (NSIS Installer)
+      - name: Build & Publish Tauri Release
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -67,5 +163,6 @@ jobs:
           releaseBody: 'See release notes below for changes and improvements.'
           releaseDraft: ${{ inputs.draft || false }}
           prerelease: ${{ inputs.prerelease || false }}
-          args: '--bundles nsis'
+          args: ${{ matrix.args }}
+          assetNamePattern: ${{ matrix.assetNamePattern }}
         timeout-minutes: 60

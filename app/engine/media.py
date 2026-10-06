@@ -48,6 +48,55 @@ except (ImportError, ValueError):
     )
 
 
+import shutil
+
+
+def resolve_ffmpeg_bin() -> str:
+    """Finds ffmpeg binary from PATH or bundled binary directories."""
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    curr = Path(__file__).resolve()
+    for parent in list(curr.parents)[:6]:
+        for sub in (
+            "binaries/ffmpeg.exe",
+            "app/binaries/ffmpeg.exe",
+            "src-tauri/binaries/ffmpeg.exe",
+            "app/src-tauri/binaries/ffmpeg.exe",
+            "binaries/ffmpeg",
+            "app/binaries/ffmpeg",
+            "src-tauri/binaries/ffmpeg",
+            "app/src-tauri/binaries/ffmpeg",
+        ):
+            cand = parent / sub
+            if cand.is_file():
+                return str(cand)
+    return "ffmpeg"
+
+
+def resolve_ffprobe_bin() -> str:
+    """Finds ffprobe binary from PATH or bundled binary directories."""
+    found = shutil.which("ffprobe")
+    if found:
+        return found
+    curr = Path(__file__).resolve()
+    for parent in list(curr.parents)[:6]:
+        for sub in (
+            "binaries/ffprobe.exe",
+            "app/binaries/ffprobe.exe",
+            "src-tauri/binaries/ffprobe.exe",
+            "app/src-tauri/binaries/ffprobe.exe",
+            "binaries/ffprobe",
+            "app/binaries/ffprobe",
+            "src-tauri/binaries/ffprobe",
+            "app/src-tauri/binaries/ffprobe",
+        ):
+            cand = parent / sub
+            if cand.is_file():
+                return str(cand)
+    return "ffprobe"
+
+
 def get_audio_peaks(file_path: Path, points_per_second: int = 100) -> Tuple[List[float], float]:
     """
     Computes downsampled amplitude peaks and duration using QuranCaption's exact FFmpeg pipeline:
@@ -67,7 +116,7 @@ def get_audio_peaks(file_path: Path, points_per_second: int = 100) -> Tuple[List
             pass
 
     cmd = [
-        "ffmpeg", "-y", "-i", str(file_path),
+        resolve_ffmpeg_bin(), "-y", "-i", str(file_path),
         "-ac", "1",
         "-filter:a", "aresample=4000",
         "-map", "0:a",
@@ -121,7 +170,7 @@ def get_audio_peaks(file_path: Path, points_per_second: int = 100) -> Tuple[List
 def get_exact_media_duration(file_path: Path) -> float:
     """Gets precise audio duration in seconds via ffprobe (QuranCaption approach)."""
     cmd = [
-        "ffprobe", "-v", "error",
+        resolve_ffprobe_bin(), "-v", "error",
         "-show_entries", "format=duration",
         "-of", "default=noprint_wrappers=1:nokey=1",
         str(file_path)
@@ -150,7 +199,7 @@ def check_audio_timestamp_stretch(file_path: Path) -> int:
     Directly adapted from QuranCaption's media.rs `audio_timestamp_stretch_ms`.
     """
     cmd = [
-        "ffprobe", "-v", "error",
+        resolve_ffprobe_bin(), "-v", "error",
         "-select_streams", "a:0",
         "-show_entries", "format=duration:stream=duration",
         "-of", "json",
