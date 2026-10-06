@@ -29,6 +29,7 @@ try:
         PROJECTS_DIR,
         OUTPUT_DIR,
         PROJECT_ROOT,
+        USER_DATA_DIR,
         get_unique_destination,
         sanitize_filename,
     )
@@ -52,11 +53,13 @@ try:
     from .pipeline import (
         stream_alignment_pipeline,
         scan_directory_for_audio,
+        kill_pipeline_process,
     )
     from .quran import get_verse_word_from_location
     from .system import (
         get_storage_diagnostics,
         open_in_explorer,
+        native_pick_directory,
     )
 except (ImportError, ValueError):
     from engine.config import (
@@ -64,6 +67,7 @@ except (ImportError, ValueError):
         PROJECTS_DIR,
         OUTPUT_DIR,
         PROJECT_ROOT,
+        USER_DATA_DIR,
         get_unique_destination,
         sanitize_filename,
     )
@@ -87,11 +91,13 @@ except (ImportError, ValueError):
     from engine.pipeline import (
         stream_alignment_pipeline,
         scan_directory_for_audio,
+        kill_pipeline_process,
     )
     from engine.quran import get_verse_word_from_location
     from engine.system import (
         get_storage_diagnostics,
         open_in_explorer,
+        native_pick_directory,
     )
 
 router = APIRouter()
@@ -268,9 +274,16 @@ async def upload_audio_endpoint(
         with open(target_path, "wb") as f:
             f.write(content)
 
-    peaks, duration = await asyncio.to_thread(get_audio_peaks, target_path, 100)
-    stretch_ms = check_audio_timestamp_stretch(target_path)
     stream_url = make_audio_stream_url(target_path)
+    peaks = []
+    duration = 0.0
+    stretch_ms = 0.0
+
+    # Only extract peaks if explicitly requested (skips 15-20s FFmpeg blocking during alignment upload)
+    extract_param = request.query_params.get("extract_peaks", "").lower() in ("1", "true")
+    if extract_param:
+        peaks, duration = await asyncio.to_thread(get_audio_peaks, target_path, 100)
+        stretch_ms = check_audio_timestamp_stretch(target_path)
 
     return {
         "success": True,
@@ -308,14 +321,83 @@ async def list_cached_audio():
 # 3. Alignment Pipeline & Batch Scanner
 # ==============================================================================
 
+@router.post("/system/pick_dir")
+@router.get("/system/pick_dir")
+async def pick_directory_endpoint(title: Optional[str] = Query("Select Quran Recitations Folder")):
+    """Opens native host OS folder picker directly on desktop and automatically scans the selected folder."""
+    selected = await asyncio.to_thread(native_pick_directory, title)
+    if selected:
+        scan_result = scan_directory_for_audio(selected)
+        return {
+            "success": True,
+            "directory": selected,
+            "path": selected,
+            **scan_result,
+        }
+    return {
+        "success": False,
+        "directory": "",
+        "path": "",
+        "files": [],
+        "audio_files": [],
+    }
+
+
 @router.post("/scan_dir")
-async def scan_directory(request: Request):
+@router.get("/scan_dir")
+async def scan_directory(request: Request, dir_path: Optional[str] = Query(None)):
     """Scans a local directory for audio files for batch alignment."""
-    body = await request.json()
-    dir_path = body.get("dir_path") or body.get("directory")
-    if not dir_path:
-        raise HTTPException(status_code=400, detail="Missing dir_path")
-    return scan_directory_for_audio(dir_path)
+    target = dir_path
+    if not target and request.method == "POST":
+        try:
+            body = await request.json()
+            target = body.get("dir_path") or body.get("directory")
+        except Exception:
+            pass
+    if not target:
+        raise HTTPException(status_code=400, detail="Missing dir_path parameter")
+    return scan_directory_for_audio(target)
+
+
+@router.post("/batch/upload_folder")
+async def upload_batch_folder(request: Request, files: list[UploadFile] = File(...)):
+    """
+    Saves multiple browser-loaded audio files into an isolated batch directory in USER_DATA_DIR.
+    Enables native high-speed parallel alignment even for browser-dragged or browser-selected files.
+    """
+    batch_dir = USER_DATA_DIR / "batch" / f"batch_{int(time.time() * 1000)}"
+    batch_dir.mkdir(parents=True, exist_ok=True)
+    saved_files = []
+    for f in files:
+        if not f.filename:
+            continue
+        safe_name = sanitize_filename(Path(f.filename).name)
+        target = batch_dir / safe_name
+        content = await f.read()
+        target.write_bytes(content)
+        saved_files.append({
+            "name": safe_name,
+            "rel_path": safe_name,
+            "path": str(target).replace("\\", "/"),
+            "size": len(content),
+            "size_bytes": len(content),
+        })
+    return {
+        "success": True,
+        "directory": str(batch_dir).replace("\\", "/"),
+        "total_files": len(saved_files),
+        "files": saved_files,
+        "audio_files": saved_files,
+    }
+
+
+@router.post("/align/stop")
+@router.get("/align/stop")
+async def stop_alignment_pipeline():
+    """Immediately stops and terminates active alignment pipeline subprocess tree, dropping CPU to 0%."""
+    killed = kill_pipeline_process()
+    return {"success": True, "stopped": killed}
+
 
 
 class AlignRequest(BaseModel):
@@ -375,6 +457,14 @@ async def align_audio_sse(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.post("/align/stop")
+@router.post("/align/cancel")
+async def stop_alignment_pipeline():
+    """Terminates active alignment process tree immediately, stopping all CPU consumption."""
+    stopped = kill_pipeline_process()
+    return {"success": True, "stopped": stopped}
 
 
 @router.get("/load_latest")
@@ -542,7 +632,8 @@ async def setup_aligner_stream():
 
         # 1. Install missing core aligner packages
         if missing:
-            yield f"data: {json.dumps({'step': 'packages', 'progress': 10, 'message': f'Installing aligner libraries ({', '.join(missing)})...'})}\n\n"
+            missing_str = ", ".join(missing)
+            yield f"data: {json.dumps({'step': 'packages', 'progress': 10, 'message': f'Installing aligner libraries ({missing_str})...'})}\n\n"
             pip_cmd = [sys.executable, "-m", "pip", "install", "--no-warn-script-location", "--disable-pip-version-check"] + missing
             kwargs = {
                 "stdout": asyncio.subprocess.PIPE,

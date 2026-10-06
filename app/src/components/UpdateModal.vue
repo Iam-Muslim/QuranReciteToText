@@ -50,7 +50,7 @@
             <CheckCircle2 v-if="currentProgress >= 30" :size="13" class="text-success" />
             <div v-else class="bullet-dot"></div>
           </div>
-          <span class="check-label">{{ dialogMode === 'app_init' ? 'Portable Python 3.11 Runtime (~10MB)' : 'Core Acoustic Aligner Libraries' }}</span>
+          <span class="check-label">{{ dialogMode === 'app_init' ? 'Portable Python 3.14 Runtime (~10MB)' : 'Core Acoustic Aligner Libraries' }}</span>
         </div>
         <div class="checklist-item" :class="{ 'done': currentProgress >= 70, 'active': currentProgress >= 30 && currentProgress < 70 }">
           <div class="check-bullet">

@@ -132,3 +132,38 @@ def get_storage_diagnostics() -> Dict[str, Any]:
             "total_mb": round(total_user_bytes / (1024 * 1024), 2),
         },
     }
+
+
+def native_pick_directory(title: str = "Select Quran Recitations Folder") -> str:
+    """
+    Attempts to open a native OS folder picker dialog directly on Windows/host machine.
+    Returns real absolute filesystem path if available, or empty string.
+    """
+    try:
+        sub_code = (
+            "import sys, os, tkinter as tk\n"
+            "from tkinter import filedialog\n"
+            "root = tk.Tk()\n"
+            "root.withdraw()\n"
+            "root.attributes('-topmost', True)\n"
+            "t = sys.argv[1] if len(sys.argv) > 1 else 'Select Folder'\n"
+            "d = filedialog.askdirectory(title=t)\n"
+            "root.destroy()\n"
+            "if d:\n"
+            "    print(os.path.normpath(d))\n"
+        )
+        res = subprocess.run(
+            [sys.executable, "-c", sub_code, title],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+        out = res.stdout.strip()
+        if out and os.path.isdir(out):
+            return str(Path(out).resolve()).replace("\\", "/")
+    except Exception:
+        pass
+
+    return ""
+

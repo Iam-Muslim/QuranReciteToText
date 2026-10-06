@@ -14,7 +14,7 @@ use crate::process_utils::configure_command_no_window;
 
 pub const MIN_PYTHON_MAJOR: u8 = 3;
 pub const MIN_PYTHON_MINOR: u8 = 10;
-pub const MAX_PYTHON_MINOR: u8 = 13;
+pub const MAX_PYTHON_MINOR: u8 = 14;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EngineStatus {
@@ -109,15 +109,21 @@ fn python_version_meets_min(major: u8, minor: u8) -> bool {
 /// Probes for a compatible system Python in PATH.
 pub fn resolve_system_python() -> Option<PathBuf> {
     let candidates = if cfg!(target_os = "windows") {
-        vec!["python3.12", "python3.11", "python3.10", "python", "python3"]
+        vec!["python3.14", "python3.13", "python3.12", "python3.11", "python3.10", "python", "python3"]
     } else if cfg!(target_os = "macos") {
         vec![
+            "/opt/homebrew/bin/python3.14",
+            "/opt/homebrew/bin/python3.13",
             "/opt/homebrew/bin/python3.12",
             "/opt/homebrew/bin/python3.11",
             "/opt/homebrew/bin/python3.10",
+            "/usr/local/bin/python3.14",
+            "/usr/local/bin/python3.13",
             "/usr/local/bin/python3.12",
             "/usr/local/bin/python3.11",
             "/usr/local/bin/python3.10",
+            "python3.14",
+            "python3.13",
             "python3.12",
             "python3.11",
             "python3.10",
@@ -125,7 +131,7 @@ pub fn resolve_system_python() -> Option<PathBuf> {
             "python",
         ]
     } else {
-        vec!["python3.12", "python3.11", "python3.10", "python3", "python"]
+        vec!["python3.14", "python3.13", "python3.12", "python3.11", "python3.10", "python3", "python"]
     };
 
     for candidate in candidates {
@@ -167,25 +173,25 @@ pub fn get_portable_python_exe(app_handle: &AppHandle) -> Result<PathBuf, String
 pub fn get_portable_python_download_info() -> Result<(&'static str, &'static str), String> {
     if cfg!(target_os = "windows") {
         Ok((
-            "https://www.python.org/ftp/python/3.11.0/python-3.11.0-embed-amd64.zip",
-            "python-3.11.0-embed-amd64.zip",
+            "https://www.python.org/ftp/python/3.14.0/python-3.14.0-embed-amd64.zip",
+            "python-3.14.0-embed-amd64.zip",
         ))
     } else if cfg!(target_os = "macos") {
         if cfg!(target_arch = "aarch64") {
             Ok((
-                "https://github.com/astral-sh/python-build-standalone/releases/download/20261001/cpython-3.11.17%2B20261001-aarch64-apple-darwin-install_only_stripped.tar.gz",
-                "cpython-3.11-macos-arm64.tar.gz",
+                "https://github.com/astral-sh/python-build-standalone/releases/download/20261001/cpython-3.14.0%2B20261001-aarch64-apple-darwin-install_only_stripped.tar.gz",
+                "cpython-3.14-macos-arm64.tar.gz",
             ))
         } else {
             Ok((
-                "https://github.com/astral-sh/python-build-standalone/releases/download/20261001/cpython-3.11.17%2B20261001-x86_64-apple-darwin-install_only_stripped.tar.gz",
-                "cpython-3.11-macos-x64.tar.gz",
+                "https://github.com/astral-sh/python-build-standalone/releases/download/20261001/cpython-3.14.0%2B20261001-x86_64-apple-darwin-install_only_stripped.tar.gz",
+                "cpython-3.14-macos-x64.tar.gz",
             ))
         }
     } else if cfg!(target_os = "linux") {
         Ok((
-            "https://github.com/astral-sh/python-build-standalone/releases/download/20261001/cpython-3.11.17%2B20261001-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
-            "cpython-3.11-linux-x64.tar.gz",
+            "https://github.com/astral-sh/python-build-standalone/releases/download/20261001/cpython-3.14.0%2B20261001-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+            "cpython-3.14-linux-x64.tar.gz",
         ))
     } else {
         Err("Unsupported operating system for portable Python.".to_string())
@@ -258,7 +264,7 @@ async fn download_file(url: &str, destination: &Path) -> Result<(), String> {
     download_file_with_progress(None, url, destination, "Downloading", 0, 100).await
 }
 
-/// Ensures a valid portable Python 3.11 is present on fresh devices.
+/// Ensures a valid portable Python 3.14 is present on fresh devices.
 pub async fn ensure_portable_python(app_handle: &AppHandle) -> Result<PathBuf, String> {
     let portable_exe = get_portable_python_exe(app_handle)?;
     if portable_exe.exists() {
@@ -279,13 +285,13 @@ pub async fn ensure_portable_python(app_handle: &AppHandle) -> Result<PathBuf, S
         Some(app_handle),
         url,
         &archive_path,
-        "Downloading Python 3.11 runtime",
+        "Downloading Python 3.14 runtime",
         5,
         20,
     )
     .await?;
 
-    set_status_progress(Some(app_handle), "Extracting Python 3.11 runtime...", 28, false);
+    set_status_progress(Some(app_handle), "Extracting Python 3.14 runtime...", 28, false);
     let python_dir = root.join("python");
     fs::create_dir_all(&python_dir).map_err(|e| e.to_string())?;
 
@@ -328,28 +334,33 @@ pub async fn ensure_portable_python(app_handle: &AppHandle) -> Result<PathBuf, S
     }
 
     if cfg!(target_os = "windows") {
-        // Configure python311._pth to import site and Lib/site-packages
-        let pth_file = python_dir.join("python311._pth");
-        if pth_file.exists() {
-            if let Ok(content) = fs::read_to_string(&pth_file) {
-                let mut lines: Vec<String> = content
-                    .lines()
-                    .map(|l| {
-                        let t = l.trim();
-                        if t == "#import site" || t == "# import site" {
-                            "import site".to_string()
-                        } else {
-                            l.to_string()
+        // Dynamically find and configure python3*._pth to import site and Lib/site-packages
+        if let Ok(entries) = fs::read_dir(&python_dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with("python3") && name.ends_with("._pth") {
+                    let pth_file = entry.path();
+                    if let Ok(content) = fs::read_to_string(&pth_file) {
+                        let mut lines: Vec<String> = content
+                            .lines()
+                            .map(|l| {
+                                let t = l.trim();
+                                if t == "#import site" || t == "# import site" {
+                                    "import site".to_string()
+                                } else {
+                                    l.to_string()
+                                }
+                            })
+                            .collect();
+                        if !lines.iter().any(|l| l.trim() == "import site") {
+                            lines.push("import site".to_string());
                         }
-                    })
-                    .collect();
-                if !lines.iter().any(|l| l.trim() == "import site") {
-                    lines.push("import site".to_string());
+                        if !lines.iter().any(|l| l.trim() == "Lib/site-packages" || l.trim() == "Lib\\site-packages") {
+                            lines.push("Lib/site-packages".to_string());
+                        }
+                        let _ = fs::write(&pth_file, lines.join("\n"));
+                    }
                 }
-                if !lines.iter().any(|l| l.trim() == "Lib/site-packages" || l.trim() == "Lib\\site-packages") {
-                    lines.push("Lib/site-packages".to_string());
-                }
-                let _ = fs::write(&pth_file, lines.join("\n"));
             }
         }
         let _ = fs::create_dir_all(python_dir.join("Lib").join("site-packages"));

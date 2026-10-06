@@ -96,14 +96,22 @@ def main():
                 pass
         sys.exit(1)
 
-    if dir_path and not os.path.isdir(dir_path):
-        print(f"[!] Error: Audio directory not found at: {dir_path}", file=sys.stderr)
-        if sys.stdin and sys.stdin.isatty():
-            try:
-                input("\nPress Enter to exit...")
-            except Exception:
-                pass
-        sys.exit(1)
+    if dir_path:
+        dir_path = dir_path.strip().strip('"').strip("'")
+        if not os.path.isdir(dir_path):
+            for base in [_app_path, Path.cwd(), Path.home()]:
+                cand = (base / dir_path).resolve()
+                if cand.is_dir():
+                    dir_path = str(cand)
+                    break
+        if not os.path.isdir(dir_path):
+            print(f"[!] Error: Audio directory not found at: {dir_path}", file=sys.stderr)
+            if sys.stdin and sys.stdin.isatty():
+                try:
+                    input("\nPress Enter to exit...")
+                except Exception:
+                    pass
+            sys.exit(1)
 
     workers, threads = resolve_concurrency(fast=args.fast, user_workers=args.workers, user_threads=args.threads)
 

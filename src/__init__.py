@@ -414,6 +414,8 @@ class AudioPipeline:
 
         # Phase 2: CTC Viterbi Trellis Alignment (Acoustic-Neural Hybrid)
         align_start = time.time()
+        if json_progress:
+            print(json.dumps({"stage": "aligning", "percent": 0.0, "message": "Aligning word timings (CTC)..."}), flush=True)
         if on_progress_event:
             on_progress_event(
                 PipelineProgressEvent(
@@ -439,6 +441,8 @@ class AudioPipeline:
         align_time = time.time() - align_start
         if live_profile:
             print(f"Phase 2 CTC Align   : {align_time:.2f}s", flush=True)
+        elif json_progress:
+            print(json.dumps({"stage": "aligning", "percent": 100.0, "elapsed": round(align_time, 2)}), flush=True)
         if on_progress_event:
             on_progress_event(
                 PipelineProgressEvent(
@@ -455,6 +459,8 @@ class AudioPipeline:
 
         # Phase 3: Quran Text Matcher & Sequencer
         match_start = time.time()
+        if json_progress:
+            print(json.dumps({"stage": "matching", "percent": 0.0, "message": "Matching verses"}), flush=True)
         if on_progress_event:
             on_progress_event(
                 PipelineProgressEvent(
@@ -475,6 +481,8 @@ class AudioPipeline:
         match_time = time.time() - match_start
         if live_profile:
             print(f"Phase 3 Text Match  : {match_time:.2f}s", flush=True)
+        elif json_progress:
+            print(json.dumps({"stage": "matching", "percent": 100.0, "elapsed": round(match_time, 2)}), flush=True)
         if on_progress_event:
             on_progress_event(
                 PipelineProgressEvent(

@@ -21,15 +21,21 @@ from fastapi.staticfiles import StaticFiles
 
 _CURRENT_DIR = Path(__file__).parent.resolve()
 _APP_DIR = _CURRENT_DIR.parent.resolve()
-if str(_APP_DIR) not in sys.path:
-    sys.path.insert(0, str(_APP_DIR))
+_PROJECT_ROOT = _APP_DIR.parent.resolve()
+for p in (str(_CURRENT_DIR), str(_APP_DIR), str(_PROJECT_ROOT)):
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
 try:
-    from .config import APP_DIR, USER_DATA_DIR
-    from .routes import router
-except (ImportError, ValueError):
     from engine.config import APP_DIR, USER_DATA_DIR
     from engine.routes import router
+except (ImportError, ValueError):
+    try:
+        from config import APP_DIR, USER_DATA_DIR
+        from routes import router
+    except (ImportError, ValueError):
+        from .config import APP_DIR, USER_DATA_DIR
+        from .routes import router
 
 
 def is_port_in_use(port: int, host: str = "127.0.0.1") -> bool:

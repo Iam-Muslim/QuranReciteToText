@@ -117,22 +117,6 @@
             </div>
           </div>
 
-          <!-- Quick Select Cached / Recent Audio -->
-          <div class="cached-chips-row" v-if="cachedAudios.length > 0">
-            <span class="subtle-label">Workspace Recitations:</span>
-            <div class="cached-chips-scroll">
-              <button 
-                v-for="item in cachedAudios" 
-                :key="item.filename"
-                class="audio-pill"
-                @click="addCachedAudioToQueue(item)"
-                :title="`Add ${item.filename} to queue`"
-              >
-                <Plus :size="10" />
-                <span>{{ item.filename }}</span>
-              </button>
-            </div>
-          </div>
         </div>
 
         <!-- MODE 2: Folder Batch Mode (--dir) -->
@@ -141,11 +125,15 @@
             <input 
               v-model="dirPath" 
               type="text" 
-              placeholder="Full folder path containing audio files (e.g. D:/Quran/Surahs/)..." 
+              placeholder="Select folder or enter path (e.g. D:/Quran/Surahs/)..." 
               class="form-input"
               @keydown.enter="scanDirectory"
             />
-            <button class="btn-secondary" @click="scanDirectory" :disabled="isScanningDir || !dirPath">
+            <button class="btn-secondary" @click="pickDirectory" type="button" title="Browse for folder">
+              <FolderOpen :size="13" />
+              <span>Browse Folder</span>
+            </button>
+            <button class="btn-primary" @click="scanDirectory" :disabled="isScanningDir || !dirPath" type="button">
               <Search :size="13" />
               <span>{{ isScanningDir ? 'Scanning...' : 'Scan Folder' }}</span>
             </button>
@@ -154,17 +142,17 @@
           <!-- Scanned Directory Results -->
           <div v-if="scannedFiles.length > 0" class="dir-scan-results">
             <div class="dir-results-header">
-              <span class="text-emerald">Found {{ scannedFiles.length }} audio recitations</span>
+              <span class="text-emerald font-semibold">Found {{ scannedFiles.length }} audio recitations ready for batch alignment</span>
               <span class="text-dim">{{ formatBytes(scannedTotalBytes) }}</span>
             </div>
             <div class="dir-files-preview">
-              <div v-for="f in scannedFiles.slice(0, 10)" :key="f.rel_path" class="dir-file-row">
+              <div v-for="f in scannedFiles.slice(0, 15)" :key="f.full_path || f.name" class="dir-file-row">
                 <FileAudio :size="12" class="text-accent" />
-                <span class="dir-file-name">{{ f.rel_path }}</span>
+                <span class="dir-file-name">{{ f.name || f.rel_path }}</span>
                 <span class="dir-file-size">{{ formatBytes(f.size) }}</span>
               </div>
-              <div v-if="scannedFiles.length > 10" class="dir-files-more">
-                + {{ scannedFiles.length - 10 }} more files in directory
+              <div v-if="scannedFiles.length > 15" class="dir-files-more">
+                + {{ scannedFiles.length - 15 }} more files in directory
               </div>
             </div>
           </div>
@@ -177,7 +165,7 @@
           <div class="dir-help-box">
             <p class="dir-help-title">Batch Directory Mode (--dir):</p>
             <p class="dir-help-sub">
-              Transcribes all audio files in the folder recursively. Perfect for complete Quran reciters or Juz archives.
+              Transcribes and forced-aligns all audio files in the folder recursively. Perfect for complete Quran reciters or Juz archives.
             </p>
           </div>
         </div>
@@ -369,8 +357,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, nextTick } from 'vue';
+import { ref, computed, nextTick } from 'vue';
 import { projectStore } from '../services/projectStore';
+import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { 
   Activity, 
   X, 
@@ -380,7 +369,7 @@ import {
   AlertTriangle,
   Files,
   FolderTree,
-  Plus,
+  FolderOpen,
   Trash2,
   Search,
   FileAudio,
@@ -406,14 +395,8 @@ interface ScannedAudioFile {
   rel_path: string;
   full_path: string;
   size: number;
-  ext: string;
-}
-
-interface CachedAudioItem {
-  filename: string;
-  path: string;
-  size: number;
-  url: string;
+  ext?: string;
+  file?: File;
 }
 
 interface LogEntry {
@@ -451,7 +434,6 @@ const statusMessage = ref('Ready');
 
 const fileInput = ref<HTMLInputElement | null>(null);
 const consoleBoxRef = ref<HTMLElement | null>(null);
-const cachedAudios = ref<CachedAudioItem[]>([]);
 const consoleLogs = ref<LogEntry[]>([]);
 
 const currentProcessingFileName = computed(() => {
@@ -496,20 +478,6 @@ async function checkAlignerReady(): Promise<boolean> {
   return true;
 }
 
-onMounted(() => {
-  fetchCachedAudio();
-});
-
-async function fetchCachedAudio() {
-  try {
-    const res = await fetch('/api/engine/cached_audio');
-    if (res.ok) {
-      const data = await res.json();
-      cachedAudios.value = data.audio_files || [];
-    }
-  } catch {}
-}
-
 function open() {
   visible.value = true;
   isMinimized.value = false;
@@ -519,13 +487,15 @@ function open() {
   errorMessage.value = '';
   progressPercent.value = 0;
   consoleLogs.value = [];
-  fetchCachedAudio();
+  // Reset queue on new session so previous completed items do not linger
+  filesQueue.value = [];
 }
 
 function close() {
   if (!isRunning.value) {
     visible.value = false;
     isMinimized.value = false;
+    filesQueue.value = [];
   }
 }
 
@@ -545,6 +515,7 @@ function handleContinueToStudio() {
   projectStore.currentTab.value = 'studio';
   visible.value = false;
   isMinimized.value = false;
+  filesQueue.value = [];
 }
 
 function stopBatch() {
@@ -555,6 +526,9 @@ function stopBatch() {
     } catch {}
     currentAbortController = null;
   }
+  // Terminate backend subprocess tree immediately on OS level (cuts CPU to 0%)
+  fetch('/api/engine/align/stop', { method: 'POST' }).catch(() => {});
+
   // Mark current and pending items as cancelled
   for (let i = currentQueueIndex.value; i < filesQueue.value.length; i++) {
     const item = filesQueue.value[i];
@@ -603,15 +577,111 @@ function clearQueue() {
   filesQueue.value = [];
 }
 
-function addCachedAudioToQueue(item: CachedAudioItem) {
-  const dummyFile = new File([], item.filename);
-  filesQueue.value.push({
-    id: `${item.filename}_${Date.now()}`,
-    file: dummyFile,
-    status: 'pending',
-    uploadedPath: item.path,
-    uploadedUrl: item.url,
-  });
+async function pickDirectory() {
+  isScanningDir.value = true;
+  dirScanError.value = '';
+  try {
+    // Tier 1: If running inside Tauri desktop application, use Tauri native dialog plugin
+    const isTauri = typeof window !== 'undefined' && (('__TAURI__' in (window as any)) || ('__TAURI_INTERNALS__' in (window as any)));
+    if (isTauri) {
+      try {
+        const selected = await openDialog({
+          directory: true,
+          multiple: false,
+          title: 'Select Folder Containing Quran Recitations',
+        });
+        if (selected && typeof selected === 'string') {
+          dirPath.value = selected;
+          await scanDirectory();
+          return;
+        }
+        if (selected !== undefined) return; // User cancelled
+      } catch (tErr) {
+        console.warn('Tauri dialog error, trying browser picker:', tErr);
+      }
+    }
+
+    // Tier 2: Modern Chromium Browser (Chrome / Edge / Opera) native File System Access API
+    // Opens the genuine Windows folder picker without any browser "upload confirmation" prompt
+    if (typeof window !== 'undefined' && 'showDirectoryPicker' in window) {
+      try {
+        const dirHandle = await (window as any).showDirectoryPicker({
+          id: 'quran-recitations-folder',
+          mode: 'read',
+        });
+        if (dirHandle) {
+          dirPath.value = dirHandle.name;
+          const audioExts = ['.mp3', '.wav', '.m4a', '.ogg', '.flac', '.aac', '.opus'];
+          const files: ScannedAudioFile[] = [];
+          for await (const entry of dirHandle.values()) {
+            if (entry.kind === 'file') {
+              const fileObj = await entry.getFile();
+              if (audioExts.some(ext => fileObj.name.toLowerCase().endsWith(ext))) {
+                files.push({
+                  name: fileObj.name,
+                  rel_path: fileObj.name,
+                  full_path: fileObj.name,
+                  size: fileObj.size,
+                  file: fileObj,
+                });
+              }
+            }
+          }
+          scannedFiles.value = files.sort((a, b) => a.name.localeCompare(b.name));
+          if (scannedFiles.value.length === 0) {
+            dirScanError.value = 'No audio files found in directory.';
+          }
+          return;
+        }
+      } catch (pickerErr: any) {
+        if (pickerErr.name === 'AbortError') {
+          // User cancelled folder picker
+          return;
+        }
+        console.warn('showDirectoryPicker error, trying input fallback:', pickerErr);
+      }
+    }
+
+    // Tier 3: Universal fallback: programmatic directory input
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.webkitdirectory = true;
+    (input as any).directory = true;
+    input.style.display = 'none';
+    input.onchange = (e: Event) => {
+      const target = e.target as HTMLInputElement;
+      if (target.files && target.files.length > 0) {
+        const audioExts = ['.mp3', '.wav', '.m4a', '.ogg', '.flac', '.aac', '.opus'];
+        const audioFiles = Array.from(target.files).filter(f => audioExts.some(ext => f.name.toLowerCase().endsWith(ext)));
+        scannedFiles.value = audioFiles.map(f => ({
+          name: f.name,
+          rel_path: f.webkitRelativePath || f.name,
+          full_path: f.name,
+          size: f.size,
+          file: f,
+        }));
+        const first = target.files[0];
+        const rel = first.webkitRelativePath || '';
+        const folder = rel.split('/')[0] || '';
+        if (folder) {
+          dirPath.value = folder;
+        }
+        if (scannedFiles.value.length === 0) {
+          dirScanError.value = 'No audio files found in directory.';
+        }
+      }
+      input.remove();
+    };
+    document.body.appendChild(input);
+    input.click();
+
+  } catch (err: any) {
+    if (err.name !== 'AbortError') {
+      dirScanError.value = err.message || 'Failed to select folder';
+    }
+  } finally {
+    isScanningDir.value = false;
+  }
 }
 
 async function scanDirectory() {
@@ -629,12 +699,19 @@ async function scanDirectory() {
 
     if (res.ok) {
       const data = await res.json();
-      scannedFiles.value = data.files || [];
+      const files = data.audio_files || data.files || [];
+      scannedFiles.value = files.map((f: any) => ({
+        name: f.name || f.rel_path,
+        rel_path: f.rel_path || f.name,
+        full_path: f.path || f.full_path || '',
+        size: f.size || f.size_bytes || 0,
+        ext: f.ext || '',
+      }));
       if (scannedFiles.value.length === 0) {
         dirScanError.value = 'No audio files found in directory.';
       }
     } else {
-      const err = await res.json();
+      const err = await res.json().catch(() => ({ detail: 'Failed to scan directory' }));
       dirScanError.value = err.detail || 'Failed to scan directory';
     }
   } catch (err: any) {
@@ -667,7 +744,7 @@ async function startFilesAlignmentQueue() {
     const item = filesQueue.value[i];
 
     try {
-      // 1. Upload if not already cached
+      // 1. Upload instantly without blocking on waveform peak extraction (extract_peaks=false)
       let audioPath = item.uploadedPath;
       let audioUrl = item.uploadedUrl;
 
@@ -681,7 +758,7 @@ async function startFilesAlignmentQueue() {
         formData.append('file', item.file);
 
         currentAbortController = new AbortController();
-        const uploadUrl = '/api/engine/audio/upload';
+        const uploadUrl = '/api/engine/audio/upload?extract_peaks=false';
 
         const upRes = await fetch(uploadUrl, {
           method: 'POST',
@@ -702,7 +779,7 @@ async function startFilesAlignmentQueue() {
 
       if (isAborted.value) break;
 
-      // 2. Start Real AI Alignment
+      // 2. Start Real AI Alignment (starts instantly without 15s delay)
       item.status = 'aligning';
       statusMessage.value = `Aligning ${item.file.name}...`;
       addLog(`Processing [${i + 1}/${filesQueue.value.length}] ${item.file.name}`, 'info');
@@ -731,14 +808,69 @@ async function startFilesAlignmentQueue() {
     isComplete.value = true;
     statusMessage.value = `Batch alignment finished! Processed ${filesQueue.value.length} recitation(s).`;
   }
-  await fetchCachedAudio();
 }
 
 async function startDirAlignment() {
-  if (!dirPath.value.trim()) return;
+  if (!dirPath.value.trim() && scannedFiles.value.length === 0) return;
 
   const isReady = await checkAlignerReady();
   if (!isReady) return;
+
+  // Handle files that are in browser memory (File objects)
+  const browserFiles = scannedFiles.value.filter(f => f.file instanceof File);
+  if (browserFiles.length > 0) {
+    isRunning.value = true;
+    isComplete.value = false;
+    isAborted.value = false;
+    errorMessage.value = '';
+    consoleLogs.value = [];
+    statusMessage.value = `Preparing ${browserFiles.length} recitation(s) for batch alignment...`;
+
+    try {
+      const formData = new FormData();
+      for (const bf of browserFiles) {
+        formData.append('files', bf.file!);
+      }
+      currentAbortController = new AbortController();
+      const upRes = await fetch('/api/engine/batch/upload_folder', {
+        method: 'POST',
+        body: formData,
+        signal: currentAbortController.signal,
+      });
+
+      if (upRes.ok) {
+        const upData = await upRes.json();
+        if (upData.success && upData.directory) {
+          dirPath.value = upData.directory;
+        }
+      } else {
+        // Fallback to queue sequential processing
+        filesQueue.value = browserFiles.map(bf => ({
+          id: `${bf.name}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+          file: bf.file!,
+          status: 'pending',
+        }));
+        activeMode.value = 'files';
+        await startFilesAlignmentQueue();
+        return;
+      }
+    } catch (upErr: any) {
+      if (upErr.name === 'AbortError') {
+        isRunning.value = false;
+        return;
+      }
+      filesQueue.value = browserFiles.map(bf => ({
+        id: `${bf.name}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        file: bf.file!,
+        status: 'pending',
+      }));
+      activeMode.value = 'files';
+      await startFilesAlignmentQueue();
+      return;
+    }
+  }
+
+  if (!dirPath.value.trim()) return;
 
   isRunning.value = true;
   isComplete.value = false;
@@ -869,9 +1001,17 @@ function handleSSEEvent(event: any, fallbackAudioPath?: string, fallbackAudioUrl
       statusMessage.value = `VAD (${p.elapsed}s)`;
     } else if (p.stage === 'transcribing') {
       currentStage.value = 'transcribing';
-      progressPercent.value = Math.min(85, 15 + (p.percent * 0.70));
+      progressPercent.value = Math.min(80, 15 + (p.percent * 0.65));
       speedX.value = p.speed_x || 0;
       statusMessage.value = `ASR: ${p.percent.toFixed(0)}%`;
+    } else if (p.stage === 'aligning') {
+      currentStage.value = 'aligning';
+      progressPercent.value = 85;
+      statusMessage.value = p.message || 'CTC Trellis Alignment...';
+    } else if (p.stage === 'matching') {
+      currentStage.value = 'matching';
+      progressPercent.value = 93;
+      statusMessage.value = p.message || 'Medina Quran Matching...';
     } else if (p.stage === 'batch_file_start') {
       statusMessage.value = `[${p.index}/${p.total}] Aligning ${p.file}...`;
       addLog(`Batch File [${p.index}/${p.total}]: ${p.file}`, 'info');
