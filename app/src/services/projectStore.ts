@@ -26,6 +26,9 @@ const EMPTY_PROJECT: AlignerProject = {
   surahs: [],
 };
 
+import { getApiBaseUrl, getAudioStreamUrl } from './api';
+export { getApiBaseUrl, getAudioStreamUrl };
+
 class ProjectStore {
   // Main Project Document (Starts empty, 0 demo surahs)
   public project = reactive<AlignerProject>(JSON.parse(JSON.stringify(EMPTY_PROJECT)));
@@ -527,7 +530,7 @@ class ProjectStore {
       this.activeAyahNumber.value = s.ayahs[0].ayah;
       this.currentTime.value = s.ayahs[0].start;
       
-      const effectiveAudioUrl = s.audio_url || (s.audio_file ? `/api/engine/audio/stream?path=${encodeURIComponent(s.audio_file.replace(/\\/g, '/'))}` : null);
+      const effectiveAudioUrl = s.audio_url || (s.audio_file ? getAudioStreamUrl(s.audio_file) : null);
       if (effectiveAudioUrl) {
         s.audio_url = effectiveAudioUrl;
         this.activeAudioUrl.value = effectiveAudioUrl;
@@ -1243,7 +1246,7 @@ class ProjectStore {
         surah_name_arabic: meta ? meta.surah_name_arabic : `سورة ${sNum}`,
         surah_name_english: meta ? meta.surah_name_english : `Surah ${sNum}`,
         audio_file: audioPath,
-        audio_url: audioUrl || (audioPath ? `/api/engine/audio?path=${encodeURIComponent(audioPath)}` : undefined),
+        audio_url: audioUrl || (audioPath ? `${getApiBaseUrl()}/api/engine/audio?path=${encodeURIComponent(audioPath)}` : undefined),
         audio_duration_seconds: totalDur,
         status: 'needs_review',
         intro: sData.intro,
@@ -1393,7 +1396,7 @@ class ProjectStore {
       if (firstSurah.audio_url) {
         this.activeAudioUrl.value = firstSurah.audio_url;
       } else if (firstSurah.audio_file) {
-        this.activeAudioUrl.value = `/api/engine/audio/stream?path=${encodeURIComponent(firstSurah.audio_file.replace(/\\/g, '/'))}`;
+        this.activeAudioUrl.value = getAudioStreamUrl(firstSurah.audio_file);
       }
       if (firstSurah.audio_file) {
         this.activeAudioFilePath.value = firstSurah.audio_file;

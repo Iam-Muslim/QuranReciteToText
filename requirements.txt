@@ -3,9 +3,4 @@ onnxruntime
 numba
 miniaudio
 scipy
-fastapi
-uvicorn
-pywebview
-requests
-python-multipart
-pydantic
+

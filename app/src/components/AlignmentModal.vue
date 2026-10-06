@@ -477,6 +477,25 @@ const scannedTotalBytes = computed(() => {
   return scannedFiles.value.reduce((acc, f) => acc + (f.size || 0), 0);
 });
 
+const emit = defineEmits<{
+  (e: 'open-aligner-setup'): void;
+}>();
+
+async function checkAlignerReady(): Promise<boolean> {
+  try {
+    const res = await fetch('/api/engine/aligner/status');
+    if (res.ok) {
+      const data = await res.json();
+      if (!data.ready) {
+        emit('open-aligner-setup');
+        return false;
+      }
+      return true;
+    }
+  } catch {}
+  return true;
+}
+
 onMounted(() => {
   fetchCachedAudio();
 });
@@ -631,6 +650,9 @@ async function scanDirectory() {
 async function startFilesAlignmentQueue() {
   if (filesQueue.value.length === 0) return;
 
+  const isReady = await checkAlignerReady();
+  if (!isReady) return;
+
   isRunning.value = true;
   isComplete.value = false;
   isAborted.value = false;
@@ -714,6 +736,9 @@ async function startFilesAlignmentQueue() {
 
 async function startDirAlignment() {
   if (!dirPath.value.trim()) return;
+
+  const isReady = await checkAlignerReady();
+  if (!isReady) return;
 
   isRunning.value = true;
   isComplete.value = false;

@@ -35,3 +35,4 @@ app/.engine_port
 app/.cache/
 app/userData/
 *.qproj
+output

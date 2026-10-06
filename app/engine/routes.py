@@ -491,3 +491,99 @@ async def get_quran_verse_word(
 
     res = get_verse_word_from_location(surah, ayah, word)
     return JSONResponse(status_code=200, content=res)
+
+
+# ==============================================================================
+# 6. Aligner Dependency & Model Readiness Management
+# ==============================================================================
+
+@router.get("/aligner/status")
+async def get_aligner_status():
+    """Checks whether the offline aligner dependencies and ONNX models are installed and ready."""
+    import importlib.util
+    from engine.config import DATA_DIR
+
+    required_packages = ["numpy", "onnxruntime", "numba", "miniaudio", "scipy"]
+    missing_packages = []
+    for pkg in required_packages:
+        if importlib.util.find_spec(pkg) is None:
+            missing_packages.append(pkg)
+
+    onnx_dir = DATA_DIR / "onnx"
+    zipformer_path = onnx_dir / "zipformer_p_arabic_v3.int8.onnx"
+    vad_path = onnx_dir / "silero_vad_half.onnx"
+
+    missing_models = []
+    if not zipformer_path.is_file() or zipformer_path.stat().st_size < 1_000_000:
+        missing_models.append("zipformer_p_arabic_v3.int8.onnx")
+    if not vad_path.is_file() or vad_path.stat().st_size < 500_000:
+        missing_models.append("silero_vad_half.onnx")
+
+    ready = len(missing_packages) == 0 and len(missing_models) == 0
+    return {
+        "ready": ready,
+        "packages_ready": len(missing_packages) == 0,
+        "models_ready": len(missing_models) == 0,
+        "missing_packages": missing_packages,
+        "missing_models": missing_models,
+    }
+
+
+@router.get("/aligner/setup")
+async def setup_aligner_stream():
+    """Streams SSE events as the aligner downloads missing packages and ONNX models."""
+    async def event_generator():
+        import urllib.request
+        import importlib.util
+        from engine.config import DATA_DIR, CREATE_NO_WINDOW
+
+        required_packages = ["numpy", "onnxruntime", "numba", "miniaudio", "scipy"]
+        missing = [pkg for pkg in required_packages if importlib.util.find_spec(pkg) is None]
+
+        # 1. Install missing core aligner packages
+        if missing:
+            yield f"data: {json.dumps({'step': 'packages', 'progress': 10, 'message': f'Installing aligner libraries ({', '.join(missing)})...'})}\n\n"
+            pip_cmd = [sys.executable, "-m", "pip", "install", "--no-warn-script-location", "--disable-pip-version-check"] + missing
+            kwargs = {
+                "stdout": asyncio.subprocess.PIPE,
+                "stderr": asyncio.subprocess.PIPE,
+            }
+            if sys.platform == "win32":
+                kwargs["creationflags"] = CREATE_NO_WINDOW
+            proc = await asyncio.create_subprocess_exec(*pip_cmd, **kwargs)
+            await proc.communicate()
+            yield f"data: {json.dumps({'step': 'packages', 'progress': 40, 'message': 'Aligner libraries installed successfully.'})}\n\n"
+        else:
+            yield f"data: {json.dumps({'step': 'packages', 'progress': 40, 'message': 'Aligner libraries verified.'})}\n\n"
+
+        # 2. Ensure Silero VAD ONNX model
+        onnx_dir = DATA_DIR / "onnx"
+        onnx_dir.mkdir(parents=True, exist_ok=True)
+        vad_path = onnx_dir / "silero_vad_half.onnx"
+        if not vad_path.is_file() or vad_path.stat().st_size < 500_000:
+            yield f"data: {json.dumps({'step': 'models', 'progress': 50, 'message': 'Downloading Silero VAD speech detector (~1.3 MB)...'})}\n\n"
+            vad_url = "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx"
+            try:
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, urllib.request.urlretrieve, vad_url, str(vad_path))
+            except Exception as e:
+                print(f"[!] Warning downloading VAD: {e}")
+
+        # 3. Ensure Zipformer Arabic Acoustic ONNX model (~72 MB)
+        zipformer_path = onnx_dir / "zipformer_p_arabic_v3.int8.onnx"
+        if not zipformer_path.is_file() or zipformer_path.stat().st_size < 1_000_000:
+            yield f"data: {json.dumps({'step': 'models', 'progress': 60, 'message': 'Downloading Zipformer Arabic acoustic model (~72 MB)...'})}\n\n"
+            model_url = "https://github.com/Iam-Muslim/Natlu/releases/download/models-latest/zipformer_p_arabic_v3.int8.onnx"
+            temp_path = zipformer_path.with_suffix(".onnx.download")
+
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, urllib.request.urlretrieve, model_url, str(temp_path))
+            if temp_path.exists():
+                if zipformer_path.exists():
+                    zipformer_path.unlink()
+                temp_path.rename(zipformer_path)
+
+        yield f"data: {json.dumps({'step': 'done', 'progress': 100, 'message': 'Quran Recite Aligner is ready!'})}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+

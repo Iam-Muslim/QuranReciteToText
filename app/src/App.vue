@@ -35,7 +35,10 @@
     />
     <EditWordModal ref="editWordModalRef" />
     <ExportModal ref="exportModalRef" />
-    <AlignmentModal ref="alignmentModalRef" />
+    <AlignmentModal 
+      ref="alignmentModalRef" 
+      @open-aligner-setup="updateModalRef?.open('aligner_init')" 
+    />
     <UpdateModal ref="updateModalRef" />
   </div>
 </template>
@@ -62,9 +65,25 @@ const exportModalRef = ref<InstanceType<typeof ExportModal> | null>(null);
 const alignmentModalRef = ref<InstanceType<typeof AlignmentModal> | null>(null);
 const updateModalRef = ref<InstanceType<typeof UpdateModal> | null>(null);
 
-onMounted(() => {
+onMounted(async () => {
   projectStore.currentTab.value = 'projects';
-  versionService.init();
+
+  const isTauri = typeof window !== 'undefined' && (('__TAURI__' in (window as any)) || ('__TAURI_INTERNALS__' in (window as any)));
+  if (isTauri) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const status = await invoke<{ ready: boolean }>('get_engine_status');
+      if (!status || !status.ready) {
+        updateModalRef.value?.open('app_init');
+      } else {
+        versionService.init();
+      }
+    } catch {
+      versionService.init();
+    }
+  } else {
+    versionService.init();
+  }
 });
 
 function handleWordContextMenu(e: MouseEvent, word: AlignedWord) {
