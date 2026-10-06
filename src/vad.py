@@ -373,11 +373,9 @@ class QuranSilenceVAD:
         is_deep_silence = energy_db_arr <= deep_silence_floor
 
         # Compensate for Silero LSTM state bleed: do not keep speech alive when energy is in true deep silence
-        speech_frame = (
-            ((silero_probs >= self.silero_threshold) & ~is_deep_silence)
-            | is_madd
-            | is_ghunnah
-        )
+        #speech_frame = (
+        #    ((silero_probs >= self.silero_threshold) & ~is_deep_silence)| is_madd| is_ghunnah)
+        speech_frame = (silero_probs >= self.silero_threshold) | is_madd | is_ghunnah
 
         # ── 4. Hangover buffer (protect consonant tails & transitions) ─────
         hangover_frames = max(1, int(self.hangover_s / frame_dur))

@@ -22,3 +22,16 @@ output/
 benchmark
 mfa_workspace
 quran_hafs_acoustic.zip
+
+# Node & Tauri build artifacts
+node_modules/
+app/node_modules/
+dist/
+app/dist/
+src-tauri/target/
+app/src-tauri/target/
+.engine_port
+app/.engine_port
+app/.cache/
+app/userData/
+*.qproj
