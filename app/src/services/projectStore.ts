@@ -27,6 +27,7 @@ const EMPTY_PROJECT: AlignerProject = {
 };
 
 import { getApiBaseUrl, getAudioStreamUrl } from './api';
+import { auditSurah } from './auditorEngine';
 export { getApiBaseUrl, getAudioStreamUrl };
 
 class ProjectStore {
@@ -56,6 +57,7 @@ class ProjectStore {
   public autoScrollMushaf = ref<boolean>(true);
   public issuesDrawerOpen = ref<boolean>(false);
   public isAuditing = ref<boolean>(true);
+  public resolvedIssueIds = ref<Set<string>>(new Set());
 
   // Undo / Redo Stack & Auto-Save
   private historyStack: HistoryAction[] = [];
@@ -292,45 +294,6 @@ class ProjectStore {
       }
     }
 
-    // QuranCaption Verse Coverage Gap Detection (verse-ref.ts)
-    for (let i = 0; i < list.length - 1; i++) {
-      const currentSeg = list[i];
-      const nextSeg = list[i + 1];
-
-      if (currentSeg.ayahNumber > 0 && nextSeg.ayahNumber > 0) {
-        const curLastWord = currentSeg.words[currentSeg.words.length - 1];
-        const nextFirstWord = nextSeg.words[0];
-
-        if (curLastWord && nextFirstWord) {
-          const curParts = curLastWord.location.split(':').map(Number);
-          const nextParts = nextFirstWord.location.split(':').map(Number);
-
-          if (curParts.length === 3 && nextParts.length === 3) {
-            const [, cA, cW] = curParts;
-            const [, nA, nW] = nextParts;
-
-            if (cA === nA && nW > cW + 1) {
-              const gapMsg = `سقطت كلمات بين (${cW}) و (${nW}) في الآية ${cA}`;
-              currentSeg.hasIssues = true;
-              currentSeg.hasCoverageGap = true;
-              currentSeg.gapWarning = gapMsg;
-              nextSeg.hasIssues = true;
-              nextSeg.hasCoverageGap = true;
-              nextSeg.gapWarning = gapMsg;
-            } else if (nA > cA + 1) {
-              const gapMsg = `سقطت آيات بين الآية ${cA} والآية ${nA}`;
-              currentSeg.hasIssues = true;
-              currentSeg.hasCoverageGap = true;
-              currentSeg.gapWarning = gapMsg;
-              nextSeg.hasIssues = true;
-              nextSeg.hasCoverageGap = true;
-              nextSeg.gapWarning = gapMsg;
-            }
-          }
-        }
-      }
-    }
-
     return list;
   });
 
@@ -387,104 +350,86 @@ class ProjectStore {
   // Surah Health Stats
   public surahStats = computed(() => {
     const words = this.activeWords.value;
-    if (words.length === 0) return { totalWords: 0, avgConfidence: 100, cleanWords: 0, warningWords: 0, criticalWords: 0 };
-    let sumScore = 0;
-    let clean = 0;
-    let warn = 0;
-    let crit = 0;
+    const allIssues = this.issues.value;
+    const unresolvedIssues = allIssues.filter(i => !i.resolved);
+    const criticalCount = unresolvedIssues.filter(i => i.severity === 'critical').length;
+    const warningCount = unresolvedIssues.filter(i => i.severity === 'warning').length;
 
-    for (const w of words) {
-      sumScore += w.score;
-      if (w.score >= 0.90) clean++;
-      else if (w.score >= 0.80) warn++;
-      else crit++;
+    if (words.length === 0) {
+      return {
+        totalWords: 0,
+        avgConfidence: 100,
+        cleanWords: 0,
+        warningWords: 0,
+        criticalWords: 0,
+        totalIssues: 0,
+        unresolvedIssues: 0,
+        resolvedIssues: 0,
+      };
     }
+
+    const cleanWords = Math.max(0, words.length - unresolvedIssues.length);
+    const cleanPercent = Math.round((cleanWords / words.length) * 100);
 
     return {
       totalWords: words.length,
-      avgConfidence: Math.round((sumScore / words.length) * 100),
-      cleanWords: clean,
-      warningWords: warn,
-      criticalWords: crit,
+      avgConfidence: cleanPercent,
+      cleanWords,
+      warningWords: warningCount,
+      criticalWords: criticalCount,
+      totalIssues: allIssues.length,
+      unresolvedIssues: unresolvedIssues.length,
+      resolvedIssues: allIssues.length - unresolvedIssues.length,
     };
   });
 
-  // Automated Confidence Auditor Issues
+  // Automated Confidence Auditor Issues (Pure-TS Engine)
   public issues = computed<ConfidenceIssue[]>(() => {
     if (!this.activeSurah.value) return [];
-    const list: ConfidenceIssue[] = [];
-    const surahNum = this.activeSurah.value.surah_number;
     const threshold = this.project.settings.confidence_warning_threshold || 0.85;
+    return auditSurah(this.activeSurah.value, this.resolvedIssueIds.value, threshold);
+  });
 
-    for (const a of this.activeSurah.value.ayahs) {
-      for (const seg of a.segments) {
-        for (let i = 0; i < seg.words.length; i++) {
-          const w = seg.words[i];
-          // Check 1: Low Confidence Score
-          if (w.score < threshold) {
-            list.push({
-              id: `low_conf_${w.location}`,
-              surah_number: surahNum,
-              ayah_number: a.ayah,
-              location: w.location,
-              word: w.word,
-              timestamp: w.start,
-              score: w.score,
-              type: 'low_confidence',
-              message: `Acoustic uncertainty (Score: ${(w.score * 100).toFixed(0)}%)`,
-              severity: w.score < 0.80 ? 'critical' : 'warning',
-              resolved: false,
-            });
-          }
+  // Manual Verification & Auditor Actions
+  public toggleIssueVerified(issueId: string) {
+    const nextSet = new Set(this.resolvedIssueIds.value);
+    const isNowResolved = !nextSet.has(issueId);
+    if (isNowResolved) {
+      nextSet.add(issueId);
+    } else {
+      nextSet.delete(issueId);
+    }
+    this.resolvedIssueIds.value = nextSet;
 
-          // Check 2: Large silence gap before next word
-          if (i < seg.words.length - 1) {
-            const nextW = seg.words[i + 1];
-            const gap = nextW.start - w.end;
-            if (gap > 0.45) {
-              list.push({
-                id: `gap_${w.location}`,
-                surah_number: surahNum,
-                ayah_number: a.ayah,
-                location: w.location,
-                word: w.word,
-                timestamp: w.end,
-                score: w.score,
-                type: 'large_gap',
-                message: `Silence gap (${gap.toFixed(2)}s) between "${w.word}" and "${nextW.word}"`,
-                severity: gap > 0.8 ? 'critical' : 'warning',
-                resolved: false,
-              });
-            }
-
-            // Check 3: Missing Word / Coverage Gap (QuranCaption algorithm: verse-ref.ts)
-            const curParts = w.location.split(':').map(Number);
-            const nextParts = nextW.location.split(':').map(Number);
-            if (curParts.length === 3 && nextParts.length === 3) {
-              const [, cA, cW] = curParts;
-              const [, nA, nW] = nextParts;
-              if (cA === nA && nW > cW + 1) {
-                list.push({
-                  id: `cov_gap_${w.location}`,
-                  surah_number: surahNum,
-                  ayah_number: a.ayah,
-                  location: w.location,
-                  word: w.word,
-                  timestamp: w.end,
-                  score: 0.5,
-                  type: 'coverage_gap',
-                  message: `سقطت كلمات بين (${cW}) و (${nW}) في الآية ${cA}`,
-                  severity: 'critical',
-                  resolved: false,
-                });
-              }
-            }
-          }
-        }
+    // Persist on word object so verification survives in project JSON
+    const issue = this.issues.value.find(i => i.id === issueId);
+    if (issue) {
+      const word = this.findWordByLocation(issue.location, issue.timestamp);
+      if (word) {
+        word.is_verified = isNowResolved;
+        this.isDirty.value = true;
       }
     }
-    return list;
-  });
+  }
+
+  public markIssueResolved(issueId: string, resolved: boolean = true) {
+    const nextSet = new Set(this.resolvedIssueIds.value);
+    if (resolved) {
+      nextSet.add(issueId);
+    } else {
+      nextSet.delete(issueId);
+    }
+    this.resolvedIssueIds.value = nextSet;
+
+    const issue = this.issues.value.find(i => i.id === issueId);
+    if (issue) {
+      const word = this.findWordByLocation(issue.location, issue.timestamp);
+      if (word) {
+        word.is_verified = resolved;
+        this.isDirty.value = true;
+      }
+    }
+  }
 
   // Update State & History
   private recordHistory(action: HistoryAction) {
@@ -553,12 +498,12 @@ class ProjectStore {
     }
   }
 
-  public selectWord(location: string, seekAudio: boolean = true) {
+  public selectWord(location: string, seekAudio: boolean = true, targetTimestamp?: number) {
     this.activeWordLocation.value = location;
-    const word = this.findWordByLocation(location);
+    const word = this.findWordByLocation(location, targetTimestamp);
     if (word) {
       if (seekAudio) {
-        this.currentTime.value = word.start;
+        this.currentTime.value = targetTimestamp !== undefined ? targetTimestamp : word.start;
       }
       // Also update active ayah if different
       const [, aStr] = location.split(':');
@@ -568,8 +513,21 @@ class ProjectStore {
     }
   }
 
-  public findWordByLocation(location: string): AlignedWord | undefined {
-    return this.activeWords.value.find(w => w.location === location);
+  public findWordByLocation(location: string, nearTime?: number): AlignedWord | undefined {
+    const matches = this.activeWords.value.filter(w => w.location === location);
+    if (matches.length === 0) return undefined;
+    if (nearTime === undefined || matches.length === 1) return matches[0];
+
+    let closest = matches[0];
+    let minDiff = Math.abs(matches[0].start - nearTime);
+    for (let i = 1; i < matches.length; i++) {
+      const diff = Math.abs(matches[i].start - nearTime);
+      if (diff < minDiff) {
+        minDiff = diff;
+        closest = matches[i];
+      }
+    }
+    return closest;
   }
 
   public setLoadedAudio(filePath: string, url: string, duration?: number) {
@@ -607,12 +565,23 @@ class ProjectStore {
   }
 
   public jumpToNextIssue() {
-    const list = this.issues.value;
-    if (list.length === 0) return;
+    const allList = this.issues.value;
+    if (allList.length === 0) return;
+    const pending = allList.filter(i => !i.resolved);
+    const targetList = pending.length > 0 ? pending : allList;
     const curLoc = this.activeWordLocation.value;
-    const idx = list.findIndex(i => i.location === curLoc);
-    const nextIssue = (idx === -1 || idx === list.length - 1) ? list[0] : list[idx + 1];
-    this.selectWord(nextIssue.location, true);
+    const curTime = this.currentTime.value;
+
+    let idx = -1;
+    if (curLoc) {
+      idx = targetList.findIndex(i => i.location === curLoc && Math.abs(i.timestamp - curTime) < 1.0);
+      if (idx === -1) {
+        idx = targetList.findIndex(i => i.location === curLoc);
+      }
+    }
+
+    const nextIssue = (idx === -1 || idx === targetList.length - 1) ? targetList[0] : targetList[idx + 1];
+    this.selectWord(nextIssue.location, true, nextIssue.timestamp);
   }
 
   // History Commit on MouseUp for Shared Dividers (Prevents flood during mousemove)
@@ -1383,6 +1352,29 @@ class ProjectStore {
     this.clearScheduledAutosave();
     this.isDirty.value = false;
     this.saveStatus.value = 'saved';
+
+    // Hydrate verified issue IDs from words marked verified
+    const verified = new Set<string>();
+    if (this.project.surahs) {
+      for (const s of this.project.surahs) {
+        for (const a of s.ayahs || []) {
+          for (const seg of a.segments || []) {
+            for (const w of seg.words || []) {
+              if (w.is_verified && w.location) {
+                // Match common issue ID prefixes
+                verified.add(`trunc_${w.location}`);
+                verified.add(`short_${w.location}`);
+                verified.add(`collapse_${w.location}`);
+                verified.add(`vad_cut_${w.location}`);
+                verified.add(`absorbed_${w.location}`);
+                verified.add(`low_conf_${w.location}`);
+              }
+            }
+          }
+        }
+      }
+    }
+    this.resolvedIssueIds.value = verified;
 
     if (this.project.file_name) {
       try {

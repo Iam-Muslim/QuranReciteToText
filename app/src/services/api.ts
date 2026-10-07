@@ -19,11 +19,25 @@ export function isTauriEnvironment(): boolean {
   );
 }
 
+// Automatically subscribe to engine-status from Tauri Rust
+if (isTauriEnvironment()) {
+  import('@tauri-apps/api/event').then(({ listen }) => {
+    listen<{ port?: number; ready?: boolean; message?: string }>('engine-status', (event) => {
+      if (event.payload?.port && event.payload.port > 0) {
+        dynamicBaseUrl = `http://127.0.0.1:${event.payload.port}`;
+      }
+      if (event.payload?.ready) {
+        window.dispatchEvent(new CustomEvent('engine-ready', { detail: event.payload }));
+      }
+    });
+  }).catch(() => {});
+}
+
 /**
  * Initializes the dynamic API routing by querying the Tauri Rust engine supervisor.
  */
 export async function initApiRouting(): Promise<string> {
-  if (isInitialized) {
+  if (isInitialized && dynamicBaseUrl) {
     return dynamicBaseUrl;
   }
 
@@ -49,20 +63,21 @@ export async function initApiRouting(): Promise<string> {
   }
 
   // Globally configure fetch routing if running in Tauri desktop production
-  if (isTauriEnvironment() && dynamicBaseUrl) {
+  if (isTauriEnvironment()) {
     const originalFetch = window.fetch.bind(window);
     (window as unknown as { fetch: typeof window.fetch }).fetch = (
       input: RequestInfo | URL,
       init?: RequestInit
     ): Promise<Response> => {
+      const activeBase = getApiBaseUrl();
       let targetInput = input;
       if (typeof input === 'string') {
-        if (input.startsWith('/api')) {
-          targetInput = `${dynamicBaseUrl}${input}`;
+        if (input.startsWith('/api') && activeBase) {
+          targetInput = `${activeBase}${input}`;
         }
       } else if (input instanceof URL) {
-        if (input.pathname.startsWith('/api')) {
-          targetInput = new URL(`${dynamicBaseUrl}${input.pathname}${input.search}`);
+        if (input.pathname.startsWith('/api') && activeBase) {
+          targetInput = new URL(`${activeBase}${input.pathname}${input.search}`);
         }
       }
       return originalFetch(targetInput, init);

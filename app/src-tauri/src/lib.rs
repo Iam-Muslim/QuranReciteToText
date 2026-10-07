@@ -38,7 +38,10 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                let _ = engine_manager::start_engine(handle).await;
+                if let Err(err) = engine_manager::start_engine(handle.clone()).await {
+                    eprintln!("[QuranReciteToText] Engine initialization error: {}", err);
+                    engine_manager::set_status_error(&handle, &err);
+                }
             });
             Ok(())
         })

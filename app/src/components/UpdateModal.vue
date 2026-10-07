@@ -101,6 +101,15 @@
         </button>
 
         <button 
+          v-if="errorMessage && dialogMode === 'app_init' && !isDone" 
+          class="btn btn-primary" 
+          @click="retryAppInit"
+        >
+          <RefreshCw :size="14" />
+          <span>Retry Setup</span>
+        </button>
+
+        <button 
           v-if="isDone" 
           class="btn btn-primary btn-done" 
           @click="close"
@@ -137,7 +146,8 @@ import {
   AlertTriangle, 
   CheckCircle2, 
   Cpu, 
-  Layers 
+  Layers,
+  RefreshCw 
 } from 'lucide-vue-next';
 
 export type DialogMode = 'app_init' | 'aligner_init' | 'app_update';
@@ -239,17 +249,23 @@ async function startUpdate() {
  * App Init: Listens to install-status emitted from Tauri Rust during first-run setup.
  */
 async function startAppInitListening() {
-  setupStatusMessage.value = 'Preparing portable Python 3.11 environment...';
-  setupProgress.value = 10;
+  setupStatusMessage.value = 'Preparing portable Python environment...';
+  setupProgress.value = 5;
 
   try {
     const isTauri = typeof window !== 'undefined' && (('__TAURI__' in (window as any)) || ('__TAURI_INTERNALS__' in (window as any)));
     if (isTauri) {
       const { listen } = await import('@tauri-apps/api/event');
-      unlistenFn = await listen<{ message: string; progress?: number; ready?: boolean }>('install-status', (event) => {
+      unlistenFn = await listen<{ message: string; progress?: number; ready?: boolean; error?: string }>('install-status', (event) => {
+        if (event.payload.error) {
+          errorMessage.value = event.payload.error;
+          setupStatusMessage.value = 'Setup encountered an error. Please check internet connection.';
+          return;
+        }
         setupStatusMessage.value = event.payload.message || 'Installing...';
         if (typeof event.payload.progress === 'number') {
-          setupProgress.value = event.payload.progress;
+          // Strictly monotonic: progress only increases, never goes backward
+          setupProgress.value = Math.max(setupProgress.value, event.payload.progress);
         }
         if (event.payload.ready || event.payload.progress === 100) {
           isDone.value = true;
@@ -271,6 +287,18 @@ async function startAppInitListening() {
     }
   } catch (err: any) {
     errorMessage.value = err.message || 'Setup listener failed';
+  }
+}
+
+async function retryAppInit() {
+  errorMessage.value = '';
+  setupStatusMessage.value = 'Retrying engine setup...';
+  setupProgress.value = 5;
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('ensure_engine');
+  } catch (err: any) {
+    errorMessage.value = err?.message || String(err);
   }
 }
 

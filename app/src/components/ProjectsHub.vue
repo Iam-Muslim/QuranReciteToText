@@ -451,6 +451,11 @@ onMounted(() => {
 
   // 2. Background revalidation
   fetchProjects();
+
+  // 3. Auto-revalidate when engine supervisor signals ready
+  window.addEventListener('engine-ready', () => {
+    fetchProjects();
+  });
 });
 
 watch(() => projectStore.currentTab.value, (newTab) => {

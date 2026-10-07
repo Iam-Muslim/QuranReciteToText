@@ -175,16 +175,14 @@
             class="timeline-ayah-block"
             :class="{
               'ayah-selected': projectStore.activeAyahNumber.value === seg.ayahNumber,
-              'ayah-active': isSegmentPlaying(seg),
-              'ayah-has-issues': seg.hasIssues,
-              'ayah-coverage-gap': seg.hasCoverageGap
+              'ayah-active': isSegmentPlaying(seg)
             }"
             :style="{
               left: `${seg.start * zoomLevel}px`,
               width: `${Math.max(30, (seg.end - seg.start) * zoomLevel)}px`
             }"
             @click="handleSegmentClick(seg)"
-            :title="`${seg.label}: [${seg.start.toFixed(2)}s - ${seg.end.toFixed(2)}s] ${seg.gapWarning ? ' - ' + seg.gapWarning : ''}`"
+            :title="`${seg.label}: [${seg.start.toFixed(2)}s - ${seg.end.toFixed(2)}s]`"
           >
             <!-- Left Segment Boundary Handle (Stretches Start into Silence) -->
             <div
@@ -198,9 +196,6 @@
 
             <div class="segment-badges-row">
               <span class="ayah-label-badge">{{ seg.label }}</span>
-              <span v-if="seg.hasCoverageGap" class="coverage-gap-badge" :title="seg.gapWarning">
-                ⚠️ فجوة تلاوة
-              </span>
             </div>
             <span v-if="seg.connectedUthmaniText" class="ayah-snippet-text">{{ seg.connectedUthmaniText }}</span>
 
@@ -255,8 +250,6 @@
               :class="{
                 'word-karaoke-active': isTimelineWordActive(w),
                 'word-selected': isTimelineWordSelected(w),
-                'word-warning': w.score < 0.85 && w.score >= 0.80,
-                'word-critical': w.score < 0.80,
                 'word-edited': w.is_edited
               }"
               :style="{
@@ -265,7 +258,7 @@
               }"
               @click="handleWordClick(w)"
               @contextmenu.prevent="handleContextMenu($event, w)"
-              :title="`Word: ${w.word} | Score: ${(w.score * 100).toFixed(0)}% | [${w.start.toFixed(2)}s - ${w.end.toFixed(2)}s]`"
+              :title="`Word: ${w.word} | [${w.start.toFixed(2)}s - ${w.end.toFixed(2)}s]`"
             >
               <!-- Left Outer Boundary Handle (First word of segment or facing silence) -->
               <div
@@ -280,11 +273,6 @@
               </div>
 
               <span class="word-uthmani-text">{{ formatTimelineWord(w.word) }}</span>
-              <div v-if="w.score < 0.85" class="word-meta-row">
-                <span class="word-score-pill" :class="w.score < 0.80 ? 'critical' : 'warning'">
-                  {{ (w.score * 100).toFixed(0) }}%
-                </span>
-              </div>
 
               <!-- Right Outer Boundary Handle (Last word of segment or facing silence) -->
               <div
@@ -1119,8 +1107,10 @@ watch(() => projectStore.currentTime.value, (newT) => {
 // Auto-scroll timeline when a word is selected externally (e.g. from Auditor drawer or Tab key)
 watch(() => projectStore.activeWordLocation.value, (loc) => {
   if (!loc || !wavesurfer) return;
-  const word = projectStore.findWordByLocation(loc);
+  const word = projectStore.findWordByLocation(loc, projectStore.currentTime.value);
   if (!word) return;
+
+  selectedWordStartTime.value = word.start;
 
   const wordPx = word.start * zoomLevel.value;
   const currentScroll = wavesurfer.getScroll();
@@ -1365,6 +1355,20 @@ function handleKeydown(e: KeyboardEvent) {
     projectStore.jumpToNextIssue();
   }
 
+  // 'V' toggles verification of the issue for currently selected word (Auditor fast-review workflow)
+  if ((e.key === 'v' || e.key === 'V') && !e.ctrlKey && !e.metaKey && !e.altKey && projectStore.activeWordLocation.value) {
+    const loc = projectStore.activeWordLocation.value;
+    const curTime = wavesurfer ? wavesurfer.getCurrentTime() : currentTime.value;
+    let issue = projectStore.issues.value.find(i => i.location === loc && Math.abs(i.timestamp - curTime) < 1.0);
+    if (!issue) {
+      issue = projectStore.issues.value.find(i => i.location === loc);
+    }
+    if (issue) {
+      e.preventDefault();
+      projectStore.toggleIssueVerified(issue.id);
+    }
+  }
+
   if (e.ctrlKey && e.key.toLowerCase() === 'z') {
     e.preventDefault();
     if (e.shiftKey) {
@@ -1545,27 +1549,6 @@ function handleKeydown(e: KeyboardEvent) {
   background: rgba(167, 139, 250, 0.18);
 }
 
-.timeline-ayah-block.ayah-has-issues {
-  border-right: 3px solid #f59e0b;
-}
-
-.timeline-ayah-block.ayah-coverage-gap {
-  background: rgba(239, 68, 68, 0.12) !important;
-  border-color: rgba(239, 68, 68, 0.5) !important;
-  border-right: 3px solid #ef4444 !important;
-}
-
-.coverage-gap-badge {
-  font-size: 9px;
-  font-weight: 700;
-  padding: 1px 5px;
-  border-radius: 3px;
-  background: rgba(239, 68, 68, 0.25);
-  border: 1px solid rgba(239, 68, 68, 0.6);
-  color: #fca5a5;
-  white-space: nowrap;
-}
-
 .empty-audio-dropzone {
   display: flex;
   flex-direction: column;
@@ -1679,23 +1662,6 @@ function handleKeydown(e: KeyboardEvent) {
   color: var(--text-muted);
 }
 
-.word-score-pill {
-  font-size: 8px;
-  font-family: var(--font-mono);
-  padding: 1px 3px;
-  border-radius: 2px;
-  font-weight: 600;
-}
-.word-score-pill.warning {
-  background: rgba(245, 158, 11, 0.25);
-  color: #f59e0b;
-}
-.word-score-pill.critical {
-  background: rgba(239, 68, 68, 0.25);
-  color: #ef4444;
-}
-
-/* Sacred Radiant Karaoke Illumination (Harmonized with Phoneme Inspector: Emerald Green) */
 .word-karaoke-active {
   background: rgba(16, 185, 129, 0.22) !important;
   border-color: #10b981 !important;
@@ -1711,15 +1677,6 @@ function handleKeydown(e: KeyboardEvent) {
   border-color: #10b981 !important;
   background: rgba(16, 185, 129, 0.18) !important;
   box-shadow: none !important;
-}
-
-.word-warning {
-  border-color: rgba(245, 158, 11, 0.4);
-}
-
-.word-critical {
-  border-color: rgba(239, 68, 68, 0.5);
-  background: rgba(239, 68, 68, 0.12);
 }
 
 .word-edited {

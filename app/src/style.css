@@ -205,10 +205,3 @@ body {
   box-shadow: none !important;
   font-weight: normal !important;
 }
-
-.quran-word-item.has-warning {
-  border-bottom: 2px dashed var(--amber-primary);
-}
-.quran-word-item.has-critical {
-  border-bottom: 2px solid var(--ruby-primary);
-}

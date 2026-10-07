@@ -15,6 +15,7 @@ export interface AlignedWord {
   score: number;
   is_edited?: boolean;
   is_phantom?: boolean;
+  is_verified?: boolean;
   phonemes?: PhonemeItem[];
 }
 
@@ -119,7 +120,19 @@ export interface ProjectSummary {
 }
 
 export type IssueSeverity = 'critical' | 'warning' | 'info';
-export type IssueType = 'low_confidence' | 'large_gap' | 'overlap' | 'coverage_gap';
+export type IssueType = 
+  | 'low_confidence'
+  | 'sequence_inversion'
+  | 'interleaved_twin'
+  | 'coverage_gap'
+  | 'duration_collapse'
+  | 'abnormally_short'
+  | 'truncated_phonemes'
+  | 'vad_boundary_cut'
+  | 'absorbed_silence'
+  | 'large_gap'
+  | 'tajweed_bridge'
+  | 'repetition_pass';
 
 export interface ConfidenceIssue {
   id: string;
@@ -133,6 +146,10 @@ export interface ConfidenceIssue {
   message: string;
   severity: IssueSeverity;
   resolved: boolean;
+  coverage?: number;
+  duration?: number;
+  expected_duration?: number;
+  ref?: string;
 }
 
 export interface HistoryAction {

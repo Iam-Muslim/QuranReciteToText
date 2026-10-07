@@ -28,6 +28,7 @@ struct EngineGlobalState {
     child: Mutex<Option<Child>>,
     port: Mutex<u16>,
     ready: AtomicBool,
+    progress: Mutex<u8>,
     python_exe: Mutex<String>,
     status_message: Mutex<String>,
 }
@@ -37,6 +38,7 @@ lazy_static! {
         child: Mutex::new(None),
         port: Mutex::new(8000),
         ready: AtomicBool::new(false),
+        progress: Mutex::new(0),
         python_exe: Mutex::new(String::new()),
         status_message: Mutex::new("Engine uninitialized".to_string()),
     };
@@ -56,29 +58,62 @@ pub fn set_status_progress(app: Option<&AppHandle>, msg: &str, progress: u8, rea
         *m = msg.to_string();
     }
     STATE.ready.store(ready, Ordering::Relaxed);
+    
+    // Monotonic guarantee: progress only moves forward and never jumps backward to 0 or 10
+    let mut eff_p = progress;
+    if let Ok(mut p) = STATE.progress.lock() {
+        if ready {
+            *p = 100;
+            eff_p = 100;
+        } else if progress > *p {
+            *p = progress;
+            eff_p = progress;
+        } else {
+            eff_p = *p;
+        }
+    }
+
     if let Some(handle) = app {
+        let port = *STATE.port.lock().unwrap();
         let _ = handle.emit(
             "engine-status",
             serde_json::json!({
                 "ready": ready,
-                "port": *STATE.port.lock().unwrap(),
+                "port": port,
                 "message": msg,
-                "progress": progress
+                "progress": eff_p
             }),
         );
         let _ = handle.emit(
             "install-status",
             serde_json::json!({
                 "message": msg,
-                "progress": progress,
+                "progress": eff_p,
                 "ready": ready
             }),
         );
     }
 }
 
+pub fn set_status_error(app: &AppHandle, err_msg: &str) {
+    if let Ok(mut m) = STATE.status_message.lock() {
+        *m = err_msg.to_string();
+    }
+    STATE.ready.store(false, Ordering::Relaxed);
+    let _ = app.emit(
+        "install-status",
+        serde_json::json!({
+            "message": format!("Setup error: {}", err_msg),
+            "progress": 0,
+            "ready": false,
+            "error": err_msg
+        }),
+    );
+}
+
+#[allow(dead_code)]
 pub fn set_status(app: Option<&AppHandle>, msg: &str, ready: bool) {
-    let p = if ready { 100 } else { 10 };
+    let p = if ready { 100 } else { *STATE.progress.lock().unwrap() };
     set_status_progress(app, msg, p, ready);
 }
 
@@ -109,29 +144,21 @@ fn python_version_meets_min(major: u8, minor: u8) -> bool {
 /// Probes for a compatible system Python in PATH.
 pub fn resolve_system_python() -> Option<PathBuf> {
     let candidates = if cfg!(target_os = "windows") {
-        vec!["python3.14", "python3.13", "python3.12", "python3.11", "python3.10", "python", "python3"]
+        vec!["python3.11", "python3.12", "python3.10", "python3.13", "python3.14", "python", "python3"]
     } else if cfg!(target_os = "macos") {
         vec![
-            "/opt/homebrew/bin/python3.14",
-            "/opt/homebrew/bin/python3.13",
-            "/opt/homebrew/bin/python3.12",
             "/opt/homebrew/bin/python3.11",
+            "/opt/homebrew/bin/python3.12",
             "/opt/homebrew/bin/python3.10",
-            "/usr/local/bin/python3.14",
-            "/usr/local/bin/python3.13",
-            "/usr/local/bin/python3.12",
             "/usr/local/bin/python3.11",
-            "/usr/local/bin/python3.10",
-            "python3.14",
-            "python3.13",
-            "python3.12",
+            "/usr/local/bin/python3.12",
             "python3.11",
-            "python3.10",
+            "python3.12",
             "python3",
             "python",
         ]
     } else {
-        vec!["python3.14", "python3.13", "python3.12", "python3.11", "python3.10", "python3", "python"]
+        vec!["python3.11", "python3.12", "python3.10", "python3", "python"]
     };
 
     for candidate in candidates {
@@ -161,8 +188,50 @@ pub fn get_portable_python_root(app_handle: &AppHandle) -> Result<PathBuf, Strin
     Ok(app_data.join("python_runtime"))
 }
 
+/// Recursively scans directory to find the python executable binary.
+pub fn find_python_binary_in_dir(dir: &Path) -> Option<PathBuf> {
+    if !dir.exists() {
+        return None;
+    }
+    let exe_name = if cfg!(target_os = "windows") { "python.exe" } else { "python3" };
+
+    // Check direct known paths first
+    let candidates = [
+        dir.join("python").join("install").join(exe_name),
+        dir.join("python").join("install").join("bin").join(exe_name),
+        dir.join("python").join("bin").join(exe_name),
+        dir.join("python").join(exe_name),
+        dir.join("install").join(exe_name),
+        dir.join("install").join("bin").join(exe_name),
+        dir.join("bin").join(exe_name),
+        dir.join(exe_name),
+    ];
+
+    for c in candidates {
+        if c.is_file() {
+            return Some(c);
+        }
+    }
+
+    // Walk subdirectories (depth 3)
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                if let Some(found) = find_python_binary_in_dir(&p) {
+                    return Some(found);
+                }
+            }
+        }
+    }
+    None
+}
+
 pub fn get_portable_python_exe(app_handle: &AppHandle) -> Result<PathBuf, String> {
     let root = get_portable_python_root(app_handle)?;
+    if let Some(exe) = find_python_binary_in_dir(&root) {
+        return Ok(exe);
+    }
     if cfg!(target_os = "windows") {
         Ok(root.join("python").join("python.exe"))
     } else {
@@ -173,25 +242,25 @@ pub fn get_portable_python_exe(app_handle: &AppHandle) -> Result<PathBuf, String
 pub fn get_portable_python_download_info() -> Result<(&'static str, &'static str), String> {
     if cfg!(target_os = "windows") {
         Ok((
-            "https://www.python.org/ftp/python/3.14.0/python-3.14.0-embed-amd64.zip",
-            "python-3.14.0-embed-amd64.zip",
+            "https://github.com/astral-sh/python-build-standalone/releases/download/20261003/cpython-3.11.17%2B20261003-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
+            "cpython-3.11-windows-x64.tar.gz",
         ))
     } else if cfg!(target_os = "macos") {
         if cfg!(target_arch = "aarch64") {
             Ok((
-                "https://github.com/astral-sh/python-build-standalone/releases/download/20261001/cpython-3.14.0%2B20261001-aarch64-apple-darwin-install_only_stripped.tar.gz",
-                "cpython-3.14-macos-arm64.tar.gz",
+                "https://github.com/astral-sh/python-build-standalone/releases/download/20261003/cpython-3.11.17%2B20261003-aarch64-apple-darwin-install_only_stripped.tar.gz",
+                "cpython-3.11-macos-arm64.tar.gz",
             ))
         } else {
             Ok((
-                "https://github.com/astral-sh/python-build-standalone/releases/download/20261001/cpython-3.14.0%2B20261001-x86_64-apple-darwin-install_only_stripped.tar.gz",
-                "cpython-3.14-macos-x64.tar.gz",
+                "https://github.com/astral-sh/python-build-standalone/releases/download/20261003/cpython-3.11.17%2B20261003-x86_64-apple-darwin-install_only_stripped.tar.gz",
+                "cpython-3.11-macos-x64.tar.gz",
             ))
         }
     } else if cfg!(target_os = "linux") {
         Ok((
-            "https://github.com/astral-sh/python-build-standalone/releases/download/20261001/cpython-3.14.0%2B20261001-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
-            "cpython-3.14-linux-x64.tar.gz",
+            "https://github.com/astral-sh/python-build-standalone/releases/download/20261003/cpython-3.11.17%2B20261003-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+            "cpython-3.11-linux-x64.tar.gz",
         ))
     } else {
         Err("Unsupported operating system for portable Python.".to_string())
@@ -260,22 +329,16 @@ async fn download_file_with_progress(
     Ok(())
 }
 
-async fn download_file(url: &str, destination: &Path) -> Result<(), String> {
-    download_file_with_progress(None, url, destination, "Downloading", 0, 100).await
-}
-
-/// Ensures a valid portable Python 3.14 is present on fresh devices.
+/// Ensures a valid portable Python 3.11 standalone runtime is present.
 pub async fn ensure_portable_python(app_handle: &AppHandle) -> Result<PathBuf, String> {
-    let portable_exe = get_portable_python_exe(app_handle)?;
-    if portable_exe.exists() {
-        if read_python_version(&portable_exe).is_some() {
-            return Ok(portable_exe);
+    let root = get_portable_python_root(app_handle)?;
+    if let Some(exe) = find_python_binary_in_dir(&root) {
+        if read_python_version(&exe).is_some() {
+            return Ok(exe);
         }
-        let root = get_portable_python_root(app_handle)?;
-        let _ = fs::remove_dir_all(root.join("python"));
+        let _ = fs::remove_dir_all(&root);
     }
 
-    let root = get_portable_python_root(app_handle)?;
     fs::create_dir_all(&root).map_err(|e| e.to_string())?;
 
     let (url, filename) = get_portable_python_download_info()?;
@@ -285,15 +348,13 @@ pub async fn ensure_portable_python(app_handle: &AppHandle) -> Result<PathBuf, S
         Some(app_handle),
         url,
         &archive_path,
-        "Downloading Python 3.14 runtime",
+        "Downloading Python 3.11 standalone runtime",
         5,
-        20,
+        22,
     )
     .await?;
 
-    set_status_progress(Some(app_handle), "Extracting Python 3.14 runtime...", 28, false);
-    let python_dir = root.join("python");
-    fs::create_dir_all(&python_dir).map_err(|e| e.to_string())?;
+    set_status_progress(Some(app_handle), "Extracting Python 3.11 standalone runtime...", 28, false);
 
     let tar_bin = if cfg!(target_os = "windows") {
         let sys_tar = Path::new("C:\\Windows\\System32\\tar.exe");
@@ -307,21 +368,12 @@ pub async fn ensure_portable_python(app_handle: &AppHandle) -> Result<PathBuf, S
     };
 
     let mut cmd = Command::new(&tar_bin);
-    if cfg!(target_os = "windows") {
-        cmd.args([
-            "-xf",
-            archive_path.to_str().unwrap(),
-            "-C",
-            python_dir.to_str().unwrap(),
-        ]);
-    } else {
-        cmd.args([
-            "-xzf",
-            archive_path.to_str().unwrap(),
-            "-C",
-            root.to_str().unwrap(),
-        ]);
-    }
+    cmd.args([
+        "-xzf",
+        archive_path.to_str().unwrap(),
+        "-C",
+        root.to_str().unwrap(),
+    ]);
     configure_command_no_window(&mut cmd);
     let output = cmd.output().map_err(|e| format!("Failed to extract Python: {}", e))?;
     let _ = fs::remove_file(&archive_path);
@@ -333,58 +385,16 @@ pub async fn ensure_portable_python(app_handle: &AppHandle) -> Result<PathBuf, S
         ));
     }
 
-    if cfg!(target_os = "windows") {
-        // Dynamically find and configure python3*._pth to import site and Lib/site-packages
-        if let Ok(entries) = fs::read_dir(&python_dir) {
-            for entry in entries.flatten() {
-                let name = entry.file_name().to_string_lossy().to_string();
-                if name.starts_with("python3") && name.ends_with("._pth") {
-                    let pth_file = entry.path();
-                    if let Ok(content) = fs::read_to_string(&pth_file) {
-                        let mut lines: Vec<String> = content
-                            .lines()
-                            .map(|l| {
-                                let t = l.trim();
-                                if t == "#import site" || t == "# import site" {
-                                    "import site".to_string()
-                                } else {
-                                    l.to_string()
-                                }
-                            })
-                            .collect();
-                        if !lines.iter().any(|l| l.trim() == "import site") {
-                            lines.push("import site".to_string());
-                        }
-                        if !lines.iter().any(|l| l.trim() == "Lib/site-packages" || l.trim() == "Lib\\site-packages") {
-                            lines.push("Lib/site-packages".to_string());
-                        }
-                        let _ = fs::write(&pth_file, lines.join("\n"));
-                    }
-                }
-            }
-        }
-        let _ = fs::create_dir_all(python_dir.join("Lib").join("site-packages"));
+    set_status_progress(Some(app_handle), "Verifying Python runtime...", 33, false);
 
-        // Bootstrap pip
-        set_status(Some(app_handle), "Bootstrapping pip package manager...", false);
-        let get_pip_path = python_dir.join("get-pip.py");
-        download_file("https://bootstrap.pypa.io/get-pip.py", &get_pip_path).await?;
+    let portable_exe = find_python_binary_in_dir(&root).ok_or_else(|| {
+        format!("Could not locate python binary inside extracted runtime at {}", root.display())
+    })?;
 
-        let mut pip_boot = Command::new(&portable_exe);
-        pip_boot.args([
-            get_pip_path.to_str().unwrap(),
-            "--no-warn-script-location",
-            "--quiet",
-        ]);
-        configure_command_no_window(&mut pip_boot);
-        let _ = pip_boot.output();
-        let _ = fs::remove_file(&get_pip_path);
-    }
-
-    if !portable_exe.exists() || read_python_version(&portable_exe).is_none() {
+    if read_python_version(&portable_exe).is_none() {
         return Err(format!(
             "Portable Python installed but binary invalid at {}",
-            portable_exe.to_string_lossy()
+            portable_exe.display()
         ));
     }
 
@@ -406,7 +416,7 @@ pub async fn resolve_or_provision_python(app_handle: &AppHandle) -> Result<PathB
     ensure_portable_python(app_handle).await
 }
 
-/// Checks and installs required Python packages if missing.
+/// Checks and installs required Python packages with smooth, per-package progress.
 pub fn ensure_dependencies(app_handle: &AppHandle, python_exe: &Path) -> Result<(), String> {
     let check_script = r#"
 import sys
@@ -422,35 +432,61 @@ sys.exit(0)
     configure_command_no_window(&mut check_cmd);
     if let Ok(out) = check_cmd.output() {
         if out.status.success() {
+            set_status_progress(Some(app_handle), "Python dependencies verified", 85, false);
             return Ok(());
         }
     }
 
-    set_status(Some(app_handle), "Installing essential Python dependencies...", false);
     let packages = [
-        "fastapi",
-        "uvicorn",
-        "python-multipart",
-        "pydantic",
-        "requests",
-        "numpy",
-        "onnxruntime",
-        "numba",
-        "miniaudio",
-        "scipy",
+        ("fastapi", "FastAPI Server"),
+        ("uvicorn", "Uvicorn Engine"),
+        ("python-multipart", "Multipart Parser"),
+        ("pydantic", "Data Validation"),
+        ("requests", "HTTP Requests"),
+        ("numpy", "NumPy Matrix Math"),
+        ("onnxruntime", "ONNX Neural Runtime"),
+        ("numba", "Numba JIT Engine"),
+        ("miniaudio", "Audio Decoder"),
+        ("scipy", "SciPy Signal Processing"),
     ];
 
-    let mut pip_cmd = Command::new(python_exe);
-    pip_cmd.args(["-m", "pip", "install", "--no-warn-script-location", "--disable-pip-version-check"]);
-    pip_cmd.args(packages);
-    configure_command_no_window(&mut pip_cmd);
-    let pip_out = pip_cmd.output().map_err(|e| format!("Pip install failed: {}", e))?;
-    if !pip_out.status.success() {
-        return Err(format!(
-            "Failed to install Python dependencies: {}",
-            String::from_utf8_lossy(&pip_out.stderr)
-        ));
+    let total = packages.len();
+    for (idx, (pkg, label)) in packages.iter().enumerate() {
+        // Test if package is already available
+        let test_name = pkg.replace('-', "_");
+        let mut test_cmd = Command::new(python_exe);
+        test_cmd.args(["-c", &format!("import sys; import {}; sys.exit(0)", test_name)]);
+        configure_command_no_window(&mut test_cmd);
+        if let Ok(t_out) = test_cmd.output() {
+            if t_out.status.success() {
+                continue;
+            }
+        }
+
+        let p_start = 35 + ((idx as f32 / total as f32) * 50.0).round() as u8;
+        set_status_progress(
+            Some(app_handle),
+            &format!("Installing dependency ({}/{}): {}...", idx + 1, total, label),
+            p_start,
+            false,
+        );
+
+        let mut pip_cmd = Command::new(python_exe);
+        pip_cmd.args([
+            "-m", "pip", "install",
+            "--no-warn-script-location",
+            "--disable-pip-version-check",
+            pkg,
+        ]);
+        configure_command_no_window(&mut pip_cmd);
+        let pip_out = pip_cmd.output().map_err(|e| format!("Pip command failed for {}: {}", pkg, e))?;
+        if !pip_out.status.success() {
+            let stderr = String::from_utf8_lossy(&pip_out.stderr);
+            return Err(format!("Failed to install {}: {}", pkg, stderr.trim()));
+        }
     }
+
+    set_status_progress(Some(app_handle), "All dependencies installed successfully", 85, false);
     Ok(())
 }
 
@@ -466,7 +502,6 @@ pub fn resolve_project_root(app_handle: &AppHandle) -> Result<PathBuf, String> {
     // 2. Try development path relative to executable
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
-            // Check workspace root: target/release/../../
             let candidate1 = exe_dir.join("..").join("..");
             if candidate1.join("app").join("engine").join("server.py").exists() {
                 return Ok(candidate1);
@@ -474,7 +509,6 @@ pub fn resolve_project_root(app_handle: &AppHandle) -> Result<PathBuf, String> {
             if candidate1.join("engine").join("server.py").exists() {
                 return Ok(candidate1);
             }
-            // Check app/src-tauri/../../
             let candidate2 = exe_dir.join("..").join("..").join("..");
             if candidate2.join("app").join("engine").join("server.py").exists() {
                 return Ok(candidate2);
@@ -511,7 +545,10 @@ async fn is_engine_alive(port: u16) -> bool {
     }
 }
 
-/// Finds a guaranteed free TCP port assigned by the OS kernel (zero port collisions).
+pub fn is_port_available(port: u16) -> bool {
+    std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
+}
+
 pub fn find_free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0")
         .and_then(|listener| listener.local_addr())
@@ -527,15 +564,19 @@ pub fn get_engine_port() -> u16 {
 pub async fn start_engine(app_handle: AppHandle) -> Result<(), String> {
     let mut port = *STATE.port.lock().unwrap();
     if is_engine_alive(port).await {
-        set_status(Some(&app_handle), "Python Alignment Engine Connected", true);
+        set_status_progress(Some(&app_handle), "Python Alignment Engine Connected", 100, true);
         return Ok(());
     }
 
-    // Choose an available port from the OS
-    port = find_free_port();
+    // Prefer standard port 8000 if free; otherwise find an ephemeral free port
+    if is_port_available(8000) {
+        port = 8000;
+    } else {
+        port = find_free_port();
+    }
     *STATE.port.lock().unwrap() = port;
 
-    set_status(Some(&app_handle), "Initializing Python environment...", false);
+    set_status_progress(Some(&app_handle), "Initializing Python environment...", 5, false);
     let python_exe = resolve_or_provision_python(&app_handle).await?;
     *STATE.python_exe.lock().unwrap() = python_exe.to_string_lossy().to_string();
 
@@ -548,7 +589,7 @@ pub async fn start_engine(app_handle: AppHandle) -> Result<(), String> {
         project_root.join("app").join("engine").join("server.py")
     };
 
-    set_status(Some(&app_handle), "Starting Alignment Server...", false);
+    set_status_progress(Some(&app_handle), "Starting Alignment Server...", 88, false);
     let mut cmd = Command::new(&python_exe);
     cmd.arg(server_script);
     cmd.current_dir(&project_root);
@@ -571,12 +612,14 @@ pub async fn start_engine(app_handle: AppHandle) -> Result<(), String> {
     *STATE.child.lock().unwrap() = Some(child);
 
     // Wait for health endpoint on the chosen dynamic port
-    for _ in 0..60 {
+    for step in 0..60 {
         tokio::time::sleep(Duration::from_millis(250)).await;
         if is_engine_alive(port).await {
-            set_status(Some(&app_handle), "Python Alignment Engine Ready", true);
+            set_status_progress(Some(&app_handle), "Python Alignment Engine Ready", 100, true);
             return Ok(());
         }
+        let p_wait = 90 + ((step as f32 / 60.0) * 8.0).round() as u8;
+        set_status_progress(Some(&app_handle), "Waiting for Alignment Engine...", p_wait, false);
     }
 
     Err(format!(

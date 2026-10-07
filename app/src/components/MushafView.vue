@@ -225,8 +225,6 @@ function getWordClasses(word: AlignedWord) {
   
   return {
     'active-karaoke': isHighlighted,
-    'has-warning': word.score >= 0.80 && word.score < 0.90,
-    'has-critical': word.score < 0.80,
   };
 }
 
