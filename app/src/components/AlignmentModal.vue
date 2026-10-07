@@ -181,11 +181,6 @@
           </div>
 
           <div class="minimal-steps">
-            <span v-if="isSettingUpEnvironment" class="step-setup-badge">
-              <DownloadCloud :size="11" class="animate-pulse" />
-              <span>0. Setup Models</span>
-              <span class="step-arrow">→</span>
-            </span>
             <span :class="getStepClass('vad')">1. VAD</span>
             <span class="step-arrow">→</span>
             <span :class="getStepClass('transcribing')">2. ASR</span>
@@ -193,15 +188,6 @@
             <span :class="getStepClass('aligning')">3. Aligning</span>
             <span class="step-arrow">→</span>
             <span :class="getStepClass('matching')">4. Matching</span>
-          </div>
-
-          <!-- Initial Setup / Model Download Alert Banner -->
-          <div v-if="isSettingUpEnvironment" class="model-setup-banner">
-            <Loader2 :size="15" class="animate-spin text-accent" />
-            <div class="model-setup-text">
-              <span class="setup-title">Initial Setup: Preparing AI Speech Models & Dependencies</span>
-              <span class="setup-desc">{{ statusMessage }}</span>
-            </div>
           </div>
 
           <div class="progress-bar-wrap">
@@ -426,7 +412,6 @@ const dirScanError = ref('');
 const scannedFiles = ref<ScannedAudioFile[]>([]);
 
 // Real-Time Progress State
-const isSettingUpEnvironment = ref(false);
 const currentStage = ref<'idle' | 'vad' | 'transcribing' | 'aligning' | 'matching' | 'completed'>('idle');
 const progressPercent = ref(0);
 const speedX = ref(0);
@@ -444,7 +429,6 @@ const currentProcessingFileName = computed(() => {
 });
 
 const currentStageLabel = computed(() => {
-  if (isSettingUpEnvironment.value) return 'Preparing Models & Setup';
   switch (currentStage.value) {
     case 'vad': return 'Voice Detection';
     case 'transcribing': return `ASR Transcription ${speedX.value > 0 ? '(' + speedX.value.toFixed(1) + 'x)' : ''}`;
@@ -458,25 +442,6 @@ const currentStageLabel = computed(() => {
 const scannedTotalBytes = computed(() => {
   return scannedFiles.value.reduce((acc, f) => acc + (f.size || 0), 0);
 });
-
-const emit = defineEmits<{
-  (e: 'open-aligner-setup'): void;
-}>();
-
-async function checkAlignerReady(): Promise<boolean> {
-  try {
-    const res = await fetch('/api/engine/aligner/status');
-    if (res.ok) {
-      const data = await res.json();
-      if (!data.ready) {
-        emit('open-aligner-setup');
-        return false;
-      }
-      return true;
-    }
-  } catch {}
-  return true;
-}
 
 function open() {
   visible.value = true;
@@ -727,9 +692,6 @@ async function scanDirectory() {
 async function startFilesAlignmentQueue() {
   if (filesQueue.value.length === 0) return;
 
-  const isReady = await checkAlignerReady();
-  if (!isReady) return;
-
   isRunning.value = true;
   isComplete.value = false;
   isAborted.value = false;
@@ -812,9 +774,6 @@ async function startFilesAlignmentQueue() {
 
 async function startDirAlignment() {
   if (!dirPath.value.trim() && scannedFiles.value.length === 0) return;
-
-  const isReady = await checkAlignerReady();
-  if (!isReady) return;
 
   // Handle files that are in browser memory (File objects)
   const browserFiles = scannedFiles.value.filter(f => f.file instanceof File);
@@ -964,36 +923,9 @@ function handleSSEEvent(event: any, fallbackAudioPath?: string, fallbackAudioUrl
     addLog(event.message, 'info');
   } else if (event.type === 'stdout') {
     addLog(event.text, 'info');
-    const textLower = (event.text || '').toLowerCase();
-    if (
-      textLower.includes('download') || 
-      textLower.includes('install') || 
-      textLower.includes('model') || 
-      textLower.includes('onnx') ||
-      textLower.includes('zipformer') ||
-      textLower.includes('pip') || 
-      textLower.includes('dll') ||
-      textLower.includes('extract') ||
-      textLower.includes('fetching') ||
-      textLower.includes('preparing')
-    ) {
-      isSettingUpEnvironment.value = true;
-      statusMessage.value = event.text;
-    }
   } else if (event.type === 'stderr') {
     addLog(event.text, 'warn');
-    const textLower = (event.text || '').toLowerCase();
-    if (
-      textLower.includes('download') || 
-      textLower.includes('model') || 
-      textLower.includes('fetching') ||
-      textLower.includes('install')
-    ) {
-      isSettingUpEnvironment.value = true;
-      statusMessage.value = event.text;
-    }
   } else if (event.type === 'progress') {
-    isSettingUpEnvironment.value = false;
     const p = event.data;
     if (p.stage === 'vad') {
       currentStage.value = 'vad';

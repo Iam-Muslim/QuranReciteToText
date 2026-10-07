@@ -393,6 +393,7 @@ async def upload_batch_folder(request: Request, files: list[UploadFile] = File(.
 
 @router.post("/align/stop")
 @router.get("/align/stop")
+@router.post("/align/cancel")
 async def stop_alignment_pipeline():
     """Immediately stops and terminates active alignment pipeline subprocess tree, dropping CPU to 0%."""
     killed = kill_pipeline_process()
@@ -459,12 +460,7 @@ async def align_audio_sse(
     )
 
 
-@router.post("/align/stop")
-@router.post("/align/cancel")
-async def stop_alignment_pipeline():
-    """Terminates active alignment process tree immediately, stopping all CPU consumption."""
-    stopped = kill_pipeline_process()
-    return {"success": True, "stopped": stopped}
+
 
 
 @router.get("/load_latest")
@@ -583,120 +579,5 @@ async def get_quran_verse_word(
     return JSONResponse(status_code=200, content=res)
 
 
-# ==============================================================================
-# 6. Aligner Dependency & Model Readiness Management
-# ==============================================================================
 
-@router.get("/aligner/status")
-async def get_aligner_status():
-    """Checks whether the offline aligner dependencies and ONNX models are installed and ready."""
-    import importlib.util
-    from engine.config import DATA_DIR
-
-    required_packages = ["numpy", "onnxruntime", "numba", "miniaudio", "scipy"]
-    missing_packages = []
-    for pkg in required_packages:
-        if importlib.util.find_spec(pkg) is None:
-            missing_packages.append(pkg)
-
-    onnx_dir = DATA_DIR / "onnx"
-    zipformer_path = onnx_dir / "zipformer_p_arabic_v3.int8.onnx"
-    vad_path = onnx_dir / "silero_vad_half.onnx"
-
-    missing_models = []
-    if not zipformer_path.is_file() or zipformer_path.stat().st_size < 1_000_000:
-        missing_models.append("zipformer_p_arabic_v3.int8.onnx")
-    if not vad_path.is_file() or vad_path.stat().st_size < 500_000:
-        missing_models.append("silero_vad_half.onnx")
-
-    ready = len(missing_packages) == 0 and len(missing_models) == 0
-    return {
-        "ready": ready,
-        "packages_ready": len(missing_packages) == 0,
-        "models_ready": len(missing_models) == 0,
-        "missing_packages": missing_packages,
-        "missing_models": missing_models,
-    }
-
-
-@router.get("/aligner/setup")
-async def setup_aligner_stream():
-    """Streams SSE events as the aligner downloads missing packages and ONNX models."""
-    async def event_generator():
-        import urllib.request
-        import importlib.util
-        from engine.config import DATA_DIR, CREATE_NO_WINDOW
-
-        required_packages = ["numpy", "onnxruntime", "numba", "miniaudio", "scipy"]
-        missing = [pkg for pkg in required_packages if importlib.util.find_spec(pkg) is None]
-
-        # 1. Install missing core aligner packages
-        if missing:
-            missing_str = ", ".join(missing)
-            yield f"data: {json.dumps({'step': 'packages', 'progress': 10, 'message': f'Installing aligner libraries ({missing_str})...'})}\n\n"
-            pip_cmd = [sys.executable, "-m", "pip", "install", "--no-warn-script-location", "--disable-pip-version-check"] + missing
-            kwargs = {
-                "stdout": asyncio.subprocess.PIPE,
-                "stderr": asyncio.subprocess.PIPE,
-            }
-            if sys.platform == "win32":
-                kwargs["creationflags"] = CREATE_NO_WINDOW
-            proc = await asyncio.create_subprocess_exec(*pip_cmd, **kwargs)
-            await proc.communicate()
-            yield f"data: {json.dumps({'step': 'packages', 'progress': 40, 'message': 'Aligner libraries installed successfully.'})}\n\n"
-        else:
-            yield f"data: {json.dumps({'step': 'packages', 'progress': 40, 'message': 'Aligner libraries verified.'})}\n\n"
-
-        # 2. Ensure Silero VAD ONNX model
-        onnx_dir = DATA_DIR / "onnx"
-        onnx_dir.mkdir(parents=True, exist_ok=True)
-        vad_path = onnx_dir / "silero_vad_half.onnx"
-        if not vad_path.is_file() or vad_path.stat().st_size < 500_000:
-            yield f"data: {json.dumps({'step': 'models', 'progress': 50, 'message': 'Downloading Silero VAD speech detector (~1.3 MB)...'})}\n\n"
-            vad_url = "https://raw.githubusercontent.com/snakers4/silero-vad/1e261b036686cd0017d500ee96acd1c4ba572a9d/src/silero_vad/data/silero_vad_half.onnx"
-            try:
-                loop = asyncio.get_event_loop()
-                await loop.run_in_executor(None, urllib.request.urlretrieve, vad_url, str(vad_path))
-            except Exception as e:
-                print(f"[!] Warning downloading VAD: {e}")
-
-        # 3. Ensure Zipformer Arabic Acoustic ONNX model (~72 MB) with streaming SSE chunks
-        zipformer_path = onnx_dir / "zipformer_p_arabic_v3.int8.onnx"
-        if not zipformer_path.is_file() or zipformer_path.stat().st_size < 10_000_000:
-            yield f"data: {json.dumps({'step': 'models', 'progress': 60, 'message': 'Connecting to download Zipformer Arabic acoustic model (~72 MB)...'})}\n\n"
-            model_url = "https://github.com/Iam-Muslim/Natlu/releases/download/models-latest/zipformer_p_arabic_v3.int8.onnx"
-            temp_path = zipformer_path.with_suffix(".onnx.download")
-
-            try:
-                req = urllib.request.Request(model_url, headers={"User-Agent": "Mozilla/5.0"})
-                with urllib.request.urlopen(req, timeout=45) as response, open(temp_path, "wb") as out_file:
-                    total_size = int(response.headers.get("content-length", 72_705_392))
-                    downloaded = 0
-                    last_pct = 60
-                    while True:
-                        chunk = response.read(65536)
-                        if not chunk:
-                            break
-                        out_file.write(chunk)
-                        downloaded += len(chunk)
-                        pct = int(60 + (downloaded / max(1, total_size)) * 38)
-                        if pct > last_pct:
-                            last_pct = pct
-                            mb_down = round(downloaded / (1024 * 1024), 1)
-                            mb_tot = round(total_size / (1024 * 1024), 1)
-                            yield f"data: {json.dumps({'step': 'models', 'progress': pct, 'message': f'Downloading Zipformer model ({mb_down}/{mb_tot} MB)...'})}\n\n"
-
-                if temp_path.exists() and temp_path.stat().st_size > 10_000_000:
-                    if zipformer_path.exists():
-                        zipformer_path.unlink()
-                    temp_path.rename(zipformer_path)
-            except Exception as e:
-                if temp_path.exists():
-                    temp_path.unlink()
-                yield f"data: {json.dumps({'step': 'error', 'progress': 0, 'message': f'Model download failed: {str(e)}'})}\n\n"
-                return
-
-        yield f"data: {json.dumps({'step': 'done', 'progress': 100, 'message': 'Quran Recite Aligner is ready!'})}\n\n"
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
 

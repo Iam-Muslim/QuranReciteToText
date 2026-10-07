@@ -35,10 +35,7 @@
     />
     <EditWordModal ref="editWordModalRef" />
     <ExportModal ref="exportModalRef" />
-    <AlignmentModal 
-      ref="alignmentModalRef" 
-      @open-aligner-setup="updateModalRef?.open('aligner_init')" 
-    />
+    <AlignmentModal ref="alignmentModalRef" />
     <UpdateModal ref="updateModalRef" />
   </div>
 </template>

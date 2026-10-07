@@ -6,7 +6,6 @@
         <div class="header-titles">
           <div class="title-with-icon">
             <Sparkles v-if="dialogMode === 'app_update'" :size="18" class="text-accent" />
-            <Cpu v-else-if="dialogMode === 'aligner_init'" :size="18" class="text-accent" />
             <Layers v-else :size="18" class="text-accent" />
             <h3 class="modal-title">{{ modalTitle }}</h3>
           </div>
@@ -136,7 +135,6 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue';
 import { versionService } from '../services/VersionService';
-import { getApiBaseUrl } from '../services/api';
 import { 
   X, 
   Sparkles, 
@@ -145,12 +143,11 @@ import {
   Loader2, 
   AlertTriangle, 
   CheckCircle2, 
-  Cpu, 
   Layers,
   RefreshCw 
 } from 'lucide-vue-next';
 
-export type DialogMode = 'app_init' | 'aligner_init' | 'app_update';
+export type DialogMode = 'app_init' | 'app_update';
 
 const visible = ref(false);
 const dialogMode = ref<DialogMode>('app_update');
@@ -171,13 +168,11 @@ const isBusy = computed(() => {
 
 const modalTitle = computed(() => {
   if (dialogMode.value === 'app_init') return 'Initializing Quran Recite Studio';
-  if (dialogMode.value === 'aligner_init') return 'Preparing Quran Recite Aligner';
   return 'New Update Available';
 });
 
 const modalSubtitle = computed(() => {
-  if (dialogMode.value === 'app_init') return 'Preparing portable Python runtime & workspace components';
-  if (dialogMode.value === 'aligner_init') return 'Downloading AI acoustic speech models & aligner libraries';
+  if (dialogMode.value === 'app_init') return 'Preparing portable Python runtime, dependencies & speech models';
   return 'A newer version of Quran Recite2Text is ready to install';
 });
 
@@ -228,8 +223,6 @@ function open(mode: DialogMode = 'app_update') {
 
   if (mode === 'app_init') {
     startAppInitListening();
-  } else if (mode === 'aligner_init') {
-    startAlignerSetup();
   }
 }
 
@@ -299,65 +292,6 @@ async function retryAppInit() {
     await invoke('ensure_engine');
   } catch (err: any) {
     errorMessage.value = err?.message || String(err);
-  }
-}
-
-/**
- * Aligner Init: Connects to backend /api/engine/aligner/setup to download models and packages.
- */
-async function startAlignerSetup() {
-  abortController = new AbortController();
-  setupProgress.value = 5;
-  setupStatusMessage.value = 'Connecting to Aligner engine...';
-
-  try {
-    const base = getApiBaseUrl();
-    const res = await fetch(`${base}/api/engine/aligner/setup`, {
-      signal: abortController.signal,
-    });
-
-    if (!res.ok || !res.body) {
-      throw new Error('Failed to initiate aligner setup');
-    }
-
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n\n');
-      buffer = lines.pop() || '';
-
-      for (const block of lines) {
-        const line = block.trim();
-        if (line.startsWith('data:')) {
-          try {
-            const data = JSON.parse(line.slice(5).trim());
-            if (typeof data.progress === 'number') {
-              setupProgress.value = data.progress;
-            }
-            if (data.message) {
-              setupStatusMessage.value = data.message;
-            }
-            if (data.step === 'done' || data.progress === 100) {
-              isDone.value = true;
-              setupProgress.value = 100;
-              setupStatusMessage.value = 'Quran Recite Aligner is ready!';
-            }
-          } catch {}
-        }
-      }
-    }
-  } catch (err: any) {
-    if (err.name !== 'AbortError') {
-      errorMessage.value = err.message || 'Aligner setup failed';
-    }
-  } finally {
-    abortController = null;
   }
 }
 
