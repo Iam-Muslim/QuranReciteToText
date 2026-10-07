@@ -653,26 +653,48 @@ async def setup_aligner_stream():
         vad_path = onnx_dir / "silero_vad_half.onnx"
         if not vad_path.is_file() or vad_path.stat().st_size < 500_000:
             yield f"data: {json.dumps({'step': 'models', 'progress': 50, 'message': 'Downloading Silero VAD speech detector (~1.3 MB)...'})}\n\n"
-            vad_url = "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx"
+            vad_url = "https://raw.githubusercontent.com/snakers4/silero-vad/1e261b036686cd0017d500ee96acd1c4ba572a9d/src/silero_vad/data/silero_vad_half.onnx"
             try:
                 loop = asyncio.get_event_loop()
                 await loop.run_in_executor(None, urllib.request.urlretrieve, vad_url, str(vad_path))
             except Exception as e:
                 print(f"[!] Warning downloading VAD: {e}")
 
-        # 3. Ensure Zipformer Arabic Acoustic ONNX model (~72 MB)
+        # 3. Ensure Zipformer Arabic Acoustic ONNX model (~72 MB) with streaming SSE chunks
         zipformer_path = onnx_dir / "zipformer_p_arabic_v3.int8.onnx"
-        if not zipformer_path.is_file() or zipformer_path.stat().st_size < 1_000_000:
-            yield f"data: {json.dumps({'step': 'models', 'progress': 60, 'message': 'Downloading Zipformer Arabic acoustic model (~72 MB)...'})}\n\n"
+        if not zipformer_path.is_file() or zipformer_path.stat().st_size < 10_000_000:
+            yield f"data: {json.dumps({'step': 'models', 'progress': 60, 'message': 'Connecting to download Zipformer Arabic acoustic model (~72 MB)...'})}\n\n"
             model_url = "https://github.com/Iam-Muslim/Natlu/releases/download/models-latest/zipformer_p_arabic_v3.int8.onnx"
             temp_path = zipformer_path.with_suffix(".onnx.download")
 
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, urllib.request.urlretrieve, model_url, str(temp_path))
-            if temp_path.exists():
-                if zipformer_path.exists():
-                    zipformer_path.unlink()
-                temp_path.rename(zipformer_path)
+            try:
+                req = urllib.request.Request(model_url, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=45) as response, open(temp_path, "wb") as out_file:
+                    total_size = int(response.headers.get("content-length", 72_705_392))
+                    downloaded = 0
+                    last_pct = 60
+                    while True:
+                        chunk = response.read(65536)
+                        if not chunk:
+                            break
+                        out_file.write(chunk)
+                        downloaded += len(chunk)
+                        pct = int(60 + (downloaded / max(1, total_size)) * 38)
+                        if pct > last_pct:
+                            last_pct = pct
+                            mb_down = round(downloaded / (1024 * 1024), 1)
+                            mb_tot = round(total_size / (1024 * 1024), 1)
+                            yield f"data: {json.dumps({'step': 'models', 'progress': pct, 'message': f'Downloading Zipformer model ({mb_down}/{mb_tot} MB)...'})}\n\n"
+
+                if temp_path.exists() and temp_path.stat().st_size > 10_000_000:
+                    if zipformer_path.exists():
+                        zipformer_path.unlink()
+                    temp_path.rename(zipformer_path)
+            except Exception as e:
+                if temp_path.exists():
+                    temp_path.unlink()
+                yield f"data: {json.dumps({'step': 'error', 'progress': 0, 'message': f'Model download failed: {str(e)}'})}\n\n"
+                return
 
         yield f"data: {json.dumps({'step': 'done', 'progress': 100, 'message': 'Quran Recite Aligner is ready!'})}\n\n"
 

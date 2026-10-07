@@ -58,9 +58,13 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './app/src-tauri -> target'
+
       - name: Configure build environment
         run: |
-          echo "CARGO_BUILD_JOBS=2" >> $GITHUB_ENV
           echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> $GITHUB_ENV
         shell: bash
 
@@ -74,7 +78,7 @@ jobs:
           New-Item -ItemType Directory -Path $binDir -Force | Out-Null
 
           $ffmpegArchive = "ffmpeg.7z"
-          curl.exe -L -o $ffmpegArchive "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full.7z"
+          curl.exe -L -o $ffmpegArchive "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.7z"
 
           $extractDir = "ffmpeg-extracted"
           if (Test-Path $extractDir) { Remove-Item -Recurse -Force $extractDir }

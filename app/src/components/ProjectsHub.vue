@@ -449,11 +449,12 @@ onMounted(() => {
     viewMode.value = savedView;
   }
 
-  // 2. Background revalidation
-  fetchProjects();
-
-  // 3. Auto-revalidate when engine supervisor signals ready
+  // 2. Auto-fetch only when engine supervisor signals ready (or if already ready)
+  if ((window as any).__ENGINE_READY__) {
+    fetchProjects();
+  }
   window.addEventListener('engine-ready', () => {
+    (window as any).__ENGINE_READY__ = true;
     fetchProjects();
   });
 });
