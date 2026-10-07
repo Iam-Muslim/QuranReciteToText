@@ -37,7 +37,7 @@
   },
   "bundle": {
     "active": true,
-    "createUpdaterArtifacts": false,
+    "createUpdaterArtifacts": true,
     "targets": [
       "deb",
       "appimage",
@@ -47,8 +47,13 @@
     ],
     "resources": {
       "binaries/**/*": "binaries/",
-      "../../src/**/*": "src/",
-      "../../data/**/*": "data/",
+      "../../src/aligner/**/*": "src/aligner/",
+      "../../src/matching/**/*": "src/matching/",
+      "../../src/*": "src/",
+      "../../data/bin/**/*": "data/bin/",
+      "../../data/mfa/**/*": "data/mfa/",
+      "../../data/onnx/**/*": "data/onnx/",
+      "../../data/*": "data/",
       "../engine/**/*": "engine/",
       "../../run.py": "run.py",
       "../../requirements.txt": "requirements.txt",
@@ -77,6 +82,16 @@
           "libgtk-3-0",
           "libwebkit2gtk-4.1-0"
         ]
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/Iam-Muslim/QuranReciteToText/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
       }
     }
   }

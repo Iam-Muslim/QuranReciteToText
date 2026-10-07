@@ -161,9 +161,15 @@ async def stream_alignment_pipeline(
     existing_ppath = os.environ.get("PYTHONPATH", "")
     pythonpath = f"{norm_root}{os.pathsep}{src_dir}{os.pathsep}{existing_ppath}" if existing_ppath else f"{norm_root}{os.pathsep}{src_dir}"
 
+    # Add data/bin to PATH so bundled MSVC runtime DLLs are directly discoverable by Windows loader
+    data_bin_dir = PROJECT_ROOT / "data" / "bin"
+    cur_path = os.environ.get("PATH", "")
+    new_path = f"{normalize_cli_path(data_bin_dir)}{os.pathsep}{cur_path}" if data_bin_dir.is_dir() else cur_path
+
     # Async process execution with CREATE_NO_WINDOW and top-speed concurrency environment
     env_vars = {
         **os.environ,
+        "PATH": new_path,
         "PYTHONUNBUFFERED": "1",
         "PYTHONIOENCODING": "utf-8",
         "PIP_DISABLE_PIP_VERSION_CHECK": "1",

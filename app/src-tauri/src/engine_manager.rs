@@ -582,7 +582,6 @@ sys.exit(0)
     configure_command_no_window(&mut check_cmd);
     if let Ok(out) = check_cmd.output() {
         if out.status.success() {
-            set_status_progress(Some(app_handle), "Python dependencies verified", 85, false);
             return Ok(());
         }
     }
@@ -741,6 +740,28 @@ pub async fn ensure_engine_models(app_handle: &AppHandle) -> Result<(), String> 
     Ok(())
 }
 
+/// Returns true if Python venv, core packages, and ONNX models are already downloaded & present.
+pub fn is_environment_fully_installed(app_handle: &AppHandle) -> bool {
+    let project_root = match resolve_project_root(app_handle) {
+        Ok(r) => r,
+        Err(_) => return false,
+    };
+    let onnx_dir = project_root.join("data").join("onnx");
+    let vad_path = onnx_dir.join("silero_vad_half.onnx");
+    let zipformer_path = onnx_dir.join("zipformer_p_arabic_v3.int8.onnx");
+
+    let vad_ok = fs::metadata(&vad_path).map(|m| m.len() > 500_000).unwrap_or(false);
+    let zipformer_ok = fs::metadata(&zipformer_path).map(|m| m.len() > 10_000_000).unwrap_or(false);
+
+    let venv_dir = match get_engine_venv_path(app_handle) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    let venv_python = get_venv_python_exe(&venv_dir);
+
+    vad_ok && zipformer_ok && venv_python.exists()
+}
+
 /// Starts the FastAPI background engine and waits for readiness.
 pub async fn start_engine(app_handle: AppHandle) -> Result<(), String> {
     let mut port = *STATE.port.lock().unwrap();
@@ -757,7 +778,12 @@ pub async fn start_engine(app_handle: AppHandle) -> Result<(), String> {
     }
     *STATE.port.lock().unwrap() = port;
 
-    set_status_progress(Some(&app_handle), "Resolving Python environment...", 5, false);
+    let already_installed = is_environment_fully_installed(&app_handle);
+
+    // Only emit setup progress to UI if files are actually missing (first run)
+    if !already_installed {
+        set_status_progress(Some(&app_handle), "Resolving Python environment...", 5, false);
+    }
 
     // 1. Resolve base Python: check system python first, then auto-provision portable python
     let base_python = match resolve_system_python() {
@@ -775,18 +801,33 @@ pub async fn start_engine(app_handle: AppHandle) -> Result<(), String> {
     // 3. Stream pip install into the venv with live UI progress
     ensure_dependencies(&app_handle, &venv_python_exe)?;
 
+    let project_root = resolve_project_root(&app_handle)?;
+
+    // Preload and deploy bundled MSVC DLLs into onnxruntime/capi immediately (exact QuranCaption pattern)
+    if cfg!(target_os = "windows") {
+        let run_script = project_root.join("run.py");
+        if run_script.exists() {
+            let mut init_cmd = Command::new(&venv_python_exe);
+            init_cmd.arg(&run_script).arg("--help");
+            init_cmd.current_dir(&project_root);
+            configure_command_no_window(&mut init_cmd);
+            let _ = init_cmd.output();
+        }
+    }
+
     // 4. Ensure AI Models are downloaded with streaming progress
     ensure_engine_models(&app_handle).await?;
 
     // 5. Resolve server script
-    let project_root = resolve_project_root(&app_handle)?;
     let server_script = if project_root.join("engine").join("server.py").exists() {
         project_root.join("engine").join("server.py")
     } else {
         project_root.join("app").join("engine").join("server.py")
     };
 
-    set_status_progress(Some(&app_handle), "Starting Alignment Server...", 96, false);
+    if !already_installed {
+        set_status_progress(Some(&app_handle), "Starting Alignment Server...", 96, false);
+    }
     let mut cmd = Command::new(&venv_python_exe);
     cmd.arg(server_script);
     cmd.current_dir(&project_root);
@@ -794,14 +835,23 @@ pub async fn start_engine(app_handle: AppHandle) -> Result<(), String> {
     cmd.env("PYTHONUNBUFFERED", "1");
     cmd.env("QURAN_PROJECT_ROOT", project_root.to_string_lossy().to_string());
 
-    // Add bundled binaries to PATH so ffmpeg and ffprobe are always available
+    // Add bundled binaries and data/bin to PATH so ffmpeg, ffprobe, and MSVC runtime DLLs are always available
+    let path_var = std::env::var("PATH").unwrap_or_default();
+    let sep = if cfg!(target_os = "windows") { ";" } else { ":" };
+    let mut extra_paths = Vec::new();
+
     if let Ok(res_dir) = app_handle.path().resource_dir() {
         let bin_dir = res_dir.join("binaries");
         if bin_dir.exists() {
-            let path_var = std::env::var("PATH").unwrap_or_default();
-            let sep = if cfg!(target_os = "windows") { ";" } else { ":" };
-            cmd.env("PATH", format!("{}{}{}", bin_dir.to_string_lossy(), sep, path_var));
+            extra_paths.push(bin_dir.to_string_lossy().to_string());
         }
+    }
+    let data_bin_dir = project_root.join("data").join("bin");
+    if data_bin_dir.exists() {
+        extra_paths.push(data_bin_dir.to_string_lossy().to_string());
+    }
+    if !extra_paths.is_empty() {
+        cmd.env("PATH", format!("{}{}{}", extra_paths.join(sep), sep, path_var));
     }
 
     configure_command_no_window(&mut cmd);

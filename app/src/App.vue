@@ -69,10 +69,12 @@ onMounted(async () => {
   if (isTauri) {
     try {
       const { invoke } = await import('@tauri-apps/api/core');
-      const status = await invoke<{ ready: boolean }>('get_engine_status');
-      if (!status || !status.ready) {
+      const isInstalled = await invoke<boolean>('is_engine_installed');
+      if (!isInstalled) {
+        // Only open the setup dialog if it is a fresh machine missing Python or models!
         updateModalRef.value?.open('app_init');
       } else {
+        // Everything is already installed! DO NOT pop up any dialog. Run update check silently.
         versionService.init();
       }
     } catch {

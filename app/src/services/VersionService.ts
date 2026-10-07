@@ -131,33 +131,40 @@ class VersionService {
       console.debug('Tauri native updater check skipped:', err);
     }
 
-    // 2. Direct GitHub Releases API check (works everywhere)
+    // 2. Direct GitHub Releases API check (exact QuranCaption approach)
     try {
-      const res = await fetch(`https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest`, {
+      const res = await fetch(`https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases?per_page=50`, {
         headers: { Accept: 'application/vnd.github.v3+json' },
       });
 
       if (res.ok) {
-        const release = await res.json();
-        const tag = (release.tag_name || '').trim();
-        const isNewer = this.compareSemver(tag, this.currentVersion.value) > 0;
+        const releasesPayload: any = await res.json();
+        if (Array.isArray(releasesPayload) && releasesPayload.length > 0) {
+          const releases = releasesPayload.filter((r: any) => !r.prerelease && !r.draft);
+          const newer = releases.filter((r: any) => {
+            const tag = r.tag_name || '';
+            return this.compareSemver(tag, this.currentVersion.value) === 1;
+          }).sort((a: any, b: any) => this.compareSemver(b.tag_name || '0.0.0', a.tag_name || '0.0.0'));
 
-        if (isNewer) {
-          this.hasUpdate.value = true;
-          this.latestVersion.value = tag.replace(/^v/i, '');
-          this.changelog.value = release.body || 'New improvements and bug fixes.';
-          this.downloadUrl.value = release.html_url || `https://github.com/${REPO_OWNER}/${REPO_NAME}/releases`;
-          this.releaseDate.value = release.published_at || '';
-          this.updateState.value = 'available';
+          if (newer.length > 0) {
+            const latestRelease = newer[0];
+            const tag = (latestRelease.tag_name || '').trim();
+            this.hasUpdate.value = true;
+            this.latestVersion.value = tag.replace(/^v/i, '');
+            this.changelog.value = latestRelease.body || 'New improvements and bug fixes.';
+            this.downloadUrl.value = latestRelease.html_url || `https://github.com/${REPO_OWNER}/${REPO_NAME}/releases`;
+            this.releaseDate.value = latestRelease.published_at || '';
+            this.updateState.value = 'available';
 
-          return {
-            hasUpdate: true,
-            latestVersion: this.latestVersion.value,
-            currentVersion: this.currentVersion.value,
-            changelog: this.changelog.value,
-            downloadUrl: this.downloadUrl.value,
-            releaseDate: this.releaseDate.value,
-          };
+            return {
+              hasUpdate: true,
+              latestVersion: this.latestVersion.value,
+              currentVersion: this.currentVersion.value,
+              changelog: this.changelog.value,
+              downloadUrl: this.downloadUrl.value,
+              releaseDate: this.releaseDate.value,
+            };
+          }
         }
       }
     } catch (err: any) {

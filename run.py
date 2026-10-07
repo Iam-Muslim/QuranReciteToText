@@ -19,8 +19,77 @@ _app_path = Path(__file__).parent.resolve()
 if str(_app_path) not in sys.path:
     sys.path.insert(0, str(_app_path))
 
-# Bootstrap Windows MSVC runtime, pip dependencies, and console streams
-import data.bin.bootstrap
+# Bootstrap environment: Windows console, SSL certs, MSVC runtime DLLs (Exact QuranCaption pattern)
+def _bootstrap_environment() -> None:
+    if sys.platform == "win32":
+        for stream in (sys.stdout, sys.stderr):
+            if stream is not None:
+                reconfig = getattr(stream, "reconfigure", None)
+                if callable(reconfig):
+                    try:
+                        reconfig(encoding="utf-8")
+                    except Exception:
+                        pass
+
+    try:
+        import ssl
+        if hasattr(ssl, "_create_unverified_context"):
+            ssl._create_default_https_context = ssl._create_unverified_context
+    except Exception:
+        pass
+
+    bin_dirs = [
+        _app_path / "data" / "bin",
+        _app_path / "bin",
+        _app_path.parent / "data" / "bin",
+    ]
+    for bin_dir in bin_dirs:
+        if sys.platform == "win32" and bin_dir.is_dir():
+            if hasattr(os, "add_dll_directory"):
+                try:
+                    os.add_dll_directory(str(bin_dir))
+                except Exception:
+                    pass
+            try:
+                import ctypes
+                dll_names = (
+                    "vcruntime140.dll",
+                    "vcruntime140_1.dll",
+                    "msvcp140.dll",
+                    "msvcp140_1.dll",
+                    "msvcp140_2.dll",
+                    "msvcp140_codecvt_ids.dll",
+                    "vcomp140.dll",
+                )
+                for name in dll_names:
+                    dll_file = bin_dir / name
+                    if dll_file.is_file():
+                        ctypes.CDLL(str(dll_file))
+
+                import importlib.util
+                import shutil
+                ort_spec = importlib.util.find_spec("onnxruntime")
+                if ort_spec and ort_spec.submodule_search_locations:
+                    capi_dir = Path(list(ort_spec.submodule_search_locations)[0]) / "capi"
+                    if capi_dir.is_dir():
+                        for name in dll_names:
+                            src = bin_dir / name
+                            dst = capi_dir / name
+                            if src.is_file() and not dst.is_file():
+                                try:
+                                    shutil.copy2(str(src), str(dst))
+                                except Exception:
+                                    pass
+            except Exception:
+                pass
+            break
+
+    try:
+        import data.bin.bootstrap
+    except Exception:
+        pass
+
+_bootstrap_environment()
 
 
 def get_hardware_topology() -> tuple[int, int]:

@@ -1,5 +1,5 @@
 <template>
-  <header class="top-navbar glass-panel">
+  <header class="top-navbar glass-panel" data-tauri-drag-region>
     <!-- Brand & Tab Switcher (Left) -->
     <div class="brand-section">
       <div class="brand-header" @click="projectStore.currentTab.value = 'projects'">
@@ -161,6 +161,7 @@
 import { ref, computed } from 'vue';
 import { projectStore } from '../services/projectStore';
 import { versionService } from '../services/VersionService';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { 
   Undo2, 
   Redo2, 
@@ -218,56 +219,40 @@ const isMaximized = ref(false);
 
 async function minimizeWindow() {
   try {
-    if ((window as any).__TAURI_INTERNALS__) {
-      const { getCurrentWindow } = await import('@tauri-apps/api/window');
-      await getCurrentWindow().minimize();
-      return;
-    }
+    const win = getCurrentWindow();
+    await win.minimize();
   } catch (e) {
-    console.debug('Tauri not active', e);
+    console.debug('Window minimize error', e);
   }
 }
 
 async function toggleMaximizeWindow() {
   try {
-    if ((window as any).__TAURI_INTERNALS__) {
-      const { getCurrentWindow } = await import('@tauri-apps/api/window');
-      const win = getCurrentWindow();
-      const maximized = await win.isMaximized();
-      if (maximized) {
-        await win.unmaximize();
-        isMaximized.value = false;
-      } else {
-        await win.maximize();
-        isMaximized.value = true;
-      }
-      return;
+    const win = getCurrentWindow();
+    if (await win.isMaximized()) {
+      await win.unmaximize();
+      isMaximized.value = false;
+    } else {
+      await win.maximize();
+      isMaximized.value = true;
     }
   } catch (e) {
-    console.debug('Tauri not active', e);
-  }
-  // Browser fallback: toggle fullscreen
-  if (!document.fullscreenElement) {
-    await document.documentElement.requestFullscreen().catch(() => {});
-    isMaximized.value = true;
-  } else {
-    await document.exitFullscreen().catch(() => {});
-    isMaximized.value = false;
+    console.debug('Window maximize error', e);
   }
 }
 
 async function closeWindow() {
   try {
-    if ((window as any).__TAURI_INTERNALS__) {
-      const { getCurrentWindow } = await import('@tauri-apps/api/window');
-      await getCurrentWindow().close();
-      return;
+    const win = getCurrentWindow();
+    if (await win.isDecorated()) {
+      await win.setDecorations(false);
     }
+    await win.close();
   } catch (e) {
-    console.debug('Tauri not active', e);
-  }
-  if (confirm('Are you sure you want to close Quran Recite2Text?')) {
-    window.close();
+    console.debug('Window close error', e);
+    if (confirm('Are you sure you want to close Quran Recite2Text?')) {
+      window.close();
+    }
   }
 }
 </script>

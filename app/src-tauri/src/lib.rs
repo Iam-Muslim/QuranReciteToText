@@ -29,12 +29,18 @@ async fn ensure_engine(app_handle: AppHandle) -> Result<engine_manager::EngineSt
     Ok(engine_manager::get_engine_status())
 }
 
+#[tauri::command]
+fn is_engine_installed(app_handle: AppHandle) -> bool {
+    engine_manager::is_environment_fully_installed(&app_handle)
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -50,7 +56,8 @@ pub fn run() {
             get_engine_status,
             get_engine_port,
             get_engine_url,
-            ensure_engine
+            ensure_engine,
+            is_engine_installed
         ])
         .build(tauri::generate_context!())
         .expect("error while building Quran Recite2Text application")
