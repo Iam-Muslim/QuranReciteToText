@@ -32,6 +32,7 @@ try:
         USER_DATA_DIR,
         OUTPUT_DIR,
         CREATE_NO_WINDOW,
+        normalize_cli_path,
     )
     from app.engine.media import resolve_media_path
 except ImportError:
@@ -43,6 +44,7 @@ except ImportError:
             USER_DATA_DIR,
             OUTPUT_DIR,
             CREATE_NO_WINDOW,
+            normalize_cli_path,
         )
         from .media import resolve_media_path
     except (ImportError, ValueError):
@@ -53,6 +55,7 @@ except ImportError:
             USER_DATA_DIR,
             OUTPUT_DIR,
             CREATE_NO_WINDOW,
+            normalize_cli_path,
         )
         from engine.media import resolve_media_path
 
@@ -105,6 +108,16 @@ async def stream_alignment_pipeline(
     display_target = ""
     target_path_str = ""
 
+    # Ensure run.py path is normalized without Windows \\?\ extended prefix
+    run_py_target = normalize_cli_path(RUN_PY)
+    if not Path(run_py_target).is_file():
+        alt_run = PROJECT_ROOT / "run.py"
+        if alt_run.is_file():
+            run_py_target = normalize_cli_path(alt_run)
+        else:
+            yield f"data: {json.dumps({'type': 'stderr', 'text': f'Cannot locate run.py at {run_py_target} (PROJECT_ROOT={PROJECT_ROOT})'})}\n\n"
+            return
+
     if dir_path_str:
         cleaned = dir_path_str.strip().strip('"').strip("'")
         dir_p = Path(cleaned)
@@ -118,7 +131,7 @@ async def stream_alignment_pipeline(
         if not dir_p.is_dir():
             yield f"data: {json.dumps({'type': 'stderr', 'text': f'Directory does not exist: {dir_path_str}. Please select a valid folder.'})}\n\n"
             return
-        cmd = [python_exe, str(RUN_PY), "--dir", str(dir_p), "--progress"]
+        cmd = [python_exe, run_py_target, "--dir", normalize_cli_path(dir_p), "--progress"]
         display_target = f"Directory: {dir_p.name}"
         is_batch_dir = True
         target_path_str = str(dir_p)
@@ -130,7 +143,7 @@ async def stream_alignment_pipeline(
         if not audio_path or not audio_path.is_file():
             yield f"data: {json.dumps({'type': 'stderr', 'text': f'Audio file not found: {audio_path_str}'})}\n\n"
             return
-        cmd = [python_exe, str(RUN_PY), "--audio", str(audio_path), "--progress"]
+        cmd = [python_exe, run_py_target, "--audio", normalize_cli_path(audio_path), "--progress"]
         display_target = f"{audio_path.name}"
         target_path_str = str(audio_path)
 
@@ -143,6 +156,11 @@ async def stream_alignment_pipeline(
 
     yield f"data: {json.dumps({'type': 'start', 'audio': display_target, 'command': ' '.join(cmd)})}\n\n"
 
+    norm_root = normalize_cli_path(PROJECT_ROOT)
+    src_dir = normalize_cli_path(PROJECT_ROOT / "src")
+    existing_ppath = os.environ.get("PYTHONPATH", "")
+    pythonpath = f"{norm_root}{os.pathsep}{src_dir}{os.pathsep}{existing_ppath}" if existing_ppath else f"{norm_root}{os.pathsep}{src_dir}"
+
     # Async process execution with CREATE_NO_WINDOW and top-speed concurrency environment
     env_vars = {
         **os.environ,
@@ -152,10 +170,12 @@ async def stream_alignment_pipeline(
         "PYLAUNCH_NO_UPDATE_CHECK": "1",
         "OMP_WAIT_POLICY": "PASSIVE",
         "KMP_BLOCKTIME": "0",
+        "PYTHONPATH": pythonpath,
+        "QURAN_PROJECT_ROOT": norm_root,
     }
 
     kwargs: Dict[str, Any] = {
-        "cwd": str(PROJECT_ROOT),
+        "cwd": norm_root,
         "stdout": asyncio.subprocess.PIPE,
         "stderr": asyncio.subprocess.PIPE,
         "env": env_vars,

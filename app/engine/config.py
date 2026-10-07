@@ -16,11 +16,64 @@ import json
 from pathlib import Path
 from typing import Any
 
+def normalize_cli_path(p: Path | str) -> str:
+    """Strips Windows extended prefix \\\\?\\ which causes Python CLI/argparse open errors."""
+    s = str(p)
+    if s.startswith("\\\\?\\"):
+        s = s[4:]
+    return s
+
+
+def resolve_project_root() -> Path:
+    """
+    Finds the root directory containing run.py, data/, and src/.
+    Works seamlessly in both local development and production bundled desktop app.
+    """
+    # 1. Explicit environment variable passed by Rust engine manager
+    env_root = os.environ.get("QURAN_PROJECT_ROOT") or os.environ.get("PROJECT_ROOT")
+    if env_root:
+        p = Path(normalize_cli_path(env_root)).resolve()
+        if (p / "run.py").is_file() or (p / "src").is_dir():
+            return p
+
+    engine_dir = Path(__file__).parent.resolve()
+
+    # 2. Production bundled Tauri mode: <resource_dir>/engine -> <resource_dir>
+    # In bundled mode, run.py and src/ are placed directly in the resource root (engine_dir.parent)
+    cand_prod = engine_dir.parent.resolve()
+    if (cand_prod / "run.py").is_file():
+        return cand_prod
+
+    # 3. Development workspace mode: <repo_root>/app/engine -> <repo_root>
+    cand_dev = engine_dir.parent.parent.resolve()
+    if (cand_dev / "run.py").is_file():
+        return cand_dev
+
+    # 4. Check CWD (process working directory, which Rust sets to project_root)
+    cwd = Path.cwd().resolve()
+    if (cwd / "run.py").is_file():
+        return cwd
+
+    # 5. Check upwards from engine_dir
+    curr = engine_dir
+    for _ in range(5):
+        if (curr / "run.py").is_file():
+            return curr
+        curr = curr.parent
+
+    return cand_prod if (cand_prod / "src").is_dir() else cand_dev
+
+
 # Base Engine Paths
-APP_DIR = Path(__file__).parent.parent.resolve()
-PROJECT_ROOT = APP_DIR.parent.resolve()
+PROJECT_ROOT = resolve_project_root()
+APP_DIR = (PROJECT_ROOT / "app") if (PROJECT_ROOT / "app").is_dir() else PROJECT_ROOT
 RUN_PY = PROJECT_ROOT / "run.py"
 DATA_DIR = PROJECT_ROOT / "data"
+
+# Ensure PROJECT_ROOT and its src folder are on sys.path for direct module imports
+for extra_p in (str(PROJECT_ROOT), str(PROJECT_ROOT / "src")):
+    if extra_p not in sys.path:
+        sys.path.insert(0, extra_p)
 
 CREATE_NO_WINDOW: int = 0x08000000 if sys.platform == "win32" else 0
 

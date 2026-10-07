@@ -623,7 +623,7 @@ sys.exit(0)
 pub fn resolve_project_root(app_handle: &AppHandle) -> Result<PathBuf, String> {
     // 1. Try bundled resources
     if let Ok(res_dir) = app_handle.path().resource_dir() {
-        if res_dir.join("engine").join("server.py").exists() {
+        if res_dir.join("engine").join("server.py").exists() || res_dir.join("run.py").exists() {
             return Ok(res_dir);
         }
     }
@@ -792,6 +792,7 @@ pub async fn start_engine(app_handle: AppHandle) -> Result<(), String> {
     cmd.current_dir(&project_root);
     cmd.env("PORT", port.to_string());
     cmd.env("PYTHONUNBUFFERED", "1");
+    cmd.env("QURAN_PROJECT_ROOT", project_root.to_string_lossy().to_string());
 
     // Add bundled binaries to PATH so ffmpeg and ffprobe are always available
     if let Ok(res_dir) = app_handle.path().resource_dir() {
