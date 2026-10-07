@@ -44,6 +44,61 @@ for p in (str(PROJECT_ROOT), str(PROJECT_ROOT / "src")):
     if p not in sys.path:
         sys.path.insert(0, p)
 
+# Preload Windows MSVC runtime DLLs in desktop app engine (exact QuranCaption pattern)
+def _bootstrap_desktop_engine() -> None:
+    if sys.platform != "win32":
+        return
+    bin_dirs = [
+        PROJECT_ROOT / "data" / "bin",
+        _CURRENT_DIR.parent / "src-tauri" / "binaries",
+        PROJECT_ROOT / "binaries",
+    ]
+    for b_dir in bin_dirs:
+        if b_dir.is_dir():
+            if hasattr(os, "add_dll_directory"):
+                try:
+                    os.add_dll_directory(str(b_dir))
+                except Exception:
+                    pass
+            dll_names = (
+                "vcruntime140.dll",
+                "vcruntime140_1.dll",
+                "msvcp140.dll",
+                "msvcp140_1.dll",
+                "msvcp140_2.dll",
+                "msvcp140_codecvt_ids.dll",
+                "vcomp140.dll",
+            )
+            for name in dll_names:
+                dll_file = b_dir / name
+                if dll_file.is_file():
+                    try:
+                        import ctypes
+                        ctypes.CDLL(str(dll_file))
+                    except Exception:
+                        pass
+
+            # Copy DLLs into onnxruntime/capi if present so onnxruntime always finds them (exact QuranCaption pattern)
+            try:
+                import importlib.util
+                import shutil
+                ort_spec = importlib.util.find_spec("onnxruntime")
+                if ort_spec and ort_spec.submodule_search_locations:
+                    capi_dir = Path(list(ort_spec.submodule_search_locations)[0]) / "capi"
+                    if capi_dir.is_dir():
+                        for name in dll_names:
+                            src = b_dir / name
+                            dst = capi_dir / name
+                            if src.is_file() and not dst.is_file():
+                                try:
+                                    shutil.copy2(str(src), str(dst))
+                                except Exception:
+                                    pass
+            except Exception:
+                pass
+
+_bootstrap_desktop_engine()
+
 
 def is_port_in_use(port: int, host: str = "127.0.0.1") -> bool:
     """Checks whether a TCP port is currently occupied."""
