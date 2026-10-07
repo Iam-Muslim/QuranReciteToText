@@ -126,6 +126,7 @@ def main():
     parser.add_argument("--threads", type=int, default=None, help="ONNX execution threads (default: auto/2)")
     parser.add_argument("--workers", type=int, default=None, help="Parallel segment workers (default: 1, or auto in --fast mode)")
     parser.add_argument("--progress", action="store_true", default=False, help="Emit JSON progress lines for frontend apps")
+    parser.add_argument("--qiraat", type=str, default="hafs", help="Canonical recitation tradition (e.g. hafs, warsh, qaloon, duri, susi, bazzi, qunbul; default: hafs)")
     parser.add_argument("--mfa", action="store_true", default=False, help="Run secondary 10ms phone-level alignment using Montreal Forced Aligner (MFA)")
     args = parser.parse_args()
     if args.mfa:
@@ -209,6 +210,7 @@ def main():
             live_profile=not args.progress,
             json_progress=args.progress,
             enable_mfa=args.mfa,
+            qiraat=args.qiraat,
         )
         if batch_result.get("total_files", 0) == 0:
             sys.exit(1)
@@ -232,6 +234,8 @@ def main():
         print("=" * 55)
         print(f"Audio Duration      : {audio_duration:.2f}s", flush=True)
         print(f"Startup & Preload   : {startup_time:.2f}s", flush=True)
+        if args.qiraat and args.qiraat.strip().lower() != "hafs":
+            print(f"qiraat : {args.qiraat}", flush=True)
 
     result = pipeline.process_pcm(
         audio_pcm=audio_pcm,
@@ -240,6 +244,7 @@ def main():
         live_profile=not args.progress,
         json_progress=args.progress,
         enable_mfa=args.mfa,
+        qiraat=args.qiraat,
     )
 
     total_time = time.time() - start_time

@@ -50,6 +50,8 @@ from src.matching import (
     QuranWordMatcher,
     MatcherConfig,
     warmup_matching,
+    qiraatAyahMapper,
+    QuranCountingSystem,
 )
 
 
@@ -98,6 +100,7 @@ class AudioPipeline:
         target_surah: Optional[int] = None,
         start_ayah: Optional[int] = None,
         enable_mfa: bool = False,
+        qiraat: str = "hafs",
     ) -> PipelineResult:
         load_start = time.time()
         if on_progress_event:
@@ -117,6 +120,7 @@ class AudioPipeline:
             target_surah=target_surah,
             start_ayah=start_ayah,
             enable_mfa=enable_mfa,
+            qiraat=qiraat,
         )
 
     def process_directory(
@@ -127,6 +131,7 @@ class AudioPipeline:
         json_progress: bool = False,
         on_progress_event: Optional[Callable[[PipelineProgressEvent], None]] = None,
         enable_mfa: bool = False,
+        qiraat: str = "hafs",
     ) -> Dict[str, Any]:
         """Transcribes all audio files in a directory recursively, preserving folder hierarchy.
 
@@ -205,6 +210,7 @@ class AudioPipeline:
                     json_progress=json_progress,
                     on_progress_event=on_progress_event,
                     enable_mfa=enable_mfa,
+                    qiraat=qiraat,
                 )
                 out_dict = result.to_output_dict()
 
@@ -329,6 +335,7 @@ class AudioPipeline:
         target_surah: Optional[int] = None,
         start_ayah: Optional[int] = None,
         enable_mfa: bool = False,
+        qiraat: str = "hafs",
     ) -> PipelineResult:
         overall_start = time.time()
         audio_duration = len(audio_pcm) / SAMPLE_RATE
@@ -504,6 +511,12 @@ class AudioPipeline:
                     message="Building subtitle timeline...",
                 )
             )
+
+        # Phase 4.1: Optional Canonical qiraat Ayah Translation (Zero-overhead bypass for Hafs)
+        if qiraat and qiraat.strip().lower() != "hafs":
+            mapper = qiraatAyahMapper.load(qiraat)
+            segments = mapper.remap_segments(segments)
+
         for seg in segments:
             if not seg.sub_segments:
                 seg.sub_segments = None
@@ -664,6 +677,8 @@ __all__ = [
     "CtcViterbiAligner",
     "QuranWordMatcher",
     "MatcherConfig",
+    "qiraatAyahMapper",
+    "QuranCountingSystem",
     "PhonemeToken",
     "PauseInterval",
     "QuranWord",

@@ -90,7 +90,11 @@ python run.py --dir ./my_recitations --fast
 python run.py --audio recitation.mp3 --fast --progress
 python run.py --dir ./my_recitations --fast --progress
 
-# 5. Interactive prompt (drag & drop file or folder)
+# 5. Canonical qiraat translation (Warsh, Qalun, Al-Duri, etc.)
+python run.py --audio recitation_warsh.mp3 --qiraat warsh
+python run.py --dir ./warsh_recitations --qiraat warsh --fast
+
+# 6. Interactive prompt (drag & drop file or folder)
 python run.py
 ```
 
@@ -101,6 +105,7 @@ python run.py
 | `--audio <path>` | Path to a single input recitation file (`.mp3`, `.wav`, `.webm`, etc.). Mutually exclusive with `--dir`. |
 | `--dir <folder>` | Path to a directory for recursive batch processing. Preserves subfolders, outputs `<stem>.json` for each file, and creates `all_surahs.json`. |
 | `--fast` | Auto-configures parallel workers for maximum CPU throughput. |
+| `--qiraat <name>` | Canonical recitation tradition (`hafs` (default), `warsh`, `qaloon`, `duri`, `susi`, `bazzi`, `qunbul`, etc.). Translates verse numbers, verse splits, and merges to the reciter's Mushaf with 0-overhead bypass for Hafs. |
 | `--progress` | Streams single-line JSON events to stdout for frontends/UIs/APIs. |
 
 <details>
@@ -167,7 +172,7 @@ python run.py --dir ./quran_audio --fast
 *Result*: Produces `001.json` ... `114.json` plus a single unified `all_surahs.json` containing the entire aligned Quran.
 
 #### Scenario 2: Multi-Reciter / Subfolder Organization
-Organize audio by reciter or riwayah:
+Organize audio by reciter or qiraat:
 ```text
 audio/
 ├── mishary/
@@ -348,3 +353,9 @@ Before viewing, using, distributing, or modifying any part of this repository, y
    These terms are immutable and strictly pass on to any fork, derivative work, or redistributed component.
 
 ---------
+
+**Allah subhanu guided me in this work and it is only his guidance and work from Allah subhanu , Thanks to Allah only <3 , I'm his servant**
+
+Models : https://quranlab.ai
+
+Qiraat Mapping : https://github.com/Iam-Muslim/ReciteQuran/pull/5

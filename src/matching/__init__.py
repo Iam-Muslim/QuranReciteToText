@@ -38,6 +38,11 @@ from src.matching.matcher import (
     QuranMatcher,
     QuranWordMatcher,
 )
+from src.matching.qiraat_mapper import (
+    QuranCountingSystem,
+    qiraatAyahMapper,
+    normalize_qiraat_name,
+)
 
 __all__ = [
     "RefWord",
@@ -68,4 +73,7 @@ __all__ = [
     "MatcherConfig",
     "QuranMatcher",
     "QuranWordMatcher",
+    "QuranCountingSystem",
+    "qiraatAyahMapper",
+    "normalize_qiraat_name",
 ]
