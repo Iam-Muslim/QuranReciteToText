@@ -440,23 +440,35 @@ class CtcViterbiAligner:
                 curr_ph = target_phonemes[k].phoneme
                 is_prev_madd = any(m in prev_ph for m in _TAJWEED_SONORANTS)
                 is_curr_madd = any(m in curr_ph for m in _TAJWEED_SONORANTS)
+                prev_pk = int(peak_frames[k - 1])
 
                 if is_curr_madd and not is_prev_madd:
                     boundary = min(raw_starts[k], max(raw_ends[k - 1] + 1, int(round(token_starts[k - 1] + min_dur_f))))
                 elif is_prev_madd and not is_curr_madd:
                     boundary = max(raw_ends[k - 1] + 1, raw_starts[k] - 1)
+                    # Cap: Madd must not steal past the next token's Viterbi start
+                    boundary = min(boundary, raw_starts[k])
                 else:
                     # Consonant to consonant: find exact acoustic posterior crossover
                     boundary = -1
-                    if gap_end >= gap_start and lp is not None:
-                        t_prev = int(token_ids[k - 1])
-                        t_curr = int(token_ids[k])
-                        for f in range(gap_start, min(len(lp), raw_starts[k] + 1)):
+                    t_prev = int(token_ids[k - 1])
+                    t_curr = int(token_ids[k])
+                    # Expanded scan: covers overlapping Viterbi regions where gap_start > gap_end
+                    scan_lo = max(0, min(gap_start, prev_pk + 1))
+                    scan_hi = min(len(lp), max(raw_starts[k] + 1, curr_pk + 1))
+                    if lp is not None and scan_hi > scan_lo:
+                        for f in range(scan_lo, scan_hi):
                             if lp[f, t_curr] >= lp[f, t_prev]:
                                 boundary = f
                                 break
                     if boundary == -1:
                         boundary = int(round((gap_start + raw_starts[k]) / 2.0)) if gap_end >= gap_start else raw_starts[k]
+
+                # Peak-frame safety: each token must contain its own peak frame.
+                # Prevents "first letter of next word absorbed by previous word".
+                if curr_pk > prev_pk + 1:
+                    boundary = max(boundary, prev_pk + 1)
+                    boundary = min(boundary, curr_pk)
 
                 b_float = float(boundary)
                 token_ends[k - 1] = max(token_starts[k - 1] + min_dur_f, b_float)
@@ -464,6 +476,19 @@ class CtcViterbiAligner:
 
         # Final token offset
         token_ends[n - 1] = max(token_starts[n - 1] + min_dur_f, float(min(total_frames, raw_ends[n - 1] + 1)))
+
+        # Energy-aware extension: extend last token past Viterbi end if acoustic energy
+        # persists. Fixes "last letter absorbed by silence" when CTC blanks fire early.
+        last_viterbi_end = int(raw_ends[n - 1] + 1)
+        ext_limit = min(len(rms_db), last_viterbi_end + 6)  # scan up to 240ms past Viterbi end
+        ext_end = last_viterbi_end
+        for f in range(last_viterbi_end, ext_limit):
+            if rms_db[f] > silence_energy_threshold:
+                ext_end = f + 1
+            else:
+                break
+        if ext_end > last_viterbi_end:
+            token_ends[n - 1] = max(token_ends[n - 1], float(min(total_frames, ext_end)))
 
         # 8. Convert frames to seconds with lookahead compensation
         lookahead = float(getattr(config, "LOOKAHEAD_OFFSET_FRAMES", LOOKAHEAD_OFFSET_FRAMES))
@@ -495,7 +520,14 @@ class CtcViterbiAligner:
                 k_end = min(n, bisect.bisect_right(s_secs, p_e + 1.0) + 2)
                 for k in range(k_start, k_end):
                     if p_s < e_secs[k] <= p_e:
-                        e_secs[k] = max(s_secs[k] + min_dur_s, p_s)
+                        # Softer clamping: allow up to 1 frame (40ms) past pause start
+                        # if speech energy is still present, preventing hard truncation
+                        clamp_f = int(round((p_s / cls.frame_step) + lookahead))
+                        if 0 <= clamp_f < len(rms_db) and rms_db[clamp_f] > silence_energy_threshold:
+                            soft_end = min(e_secs[k], p_s + cls.frame_step)
+                            e_secs[k] = max(s_secs[k] + min_dur_s, soft_end)
+                        else:
+                            e_secs[k] = max(s_secs[k] + min_dur_s, p_s)
                     if p_s <= s_secs[k] < p_e:
                         s_secs[k] = p_e
                         if e_secs[k] <= s_secs[k]:
