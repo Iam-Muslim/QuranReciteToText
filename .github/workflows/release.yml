@@ -28,14 +28,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            args: '--target aarch64-apple-darwin --bundles app,dmg'
-            assetNamePattern: 'QuranRecite2Text.MacOS.ARM[ext]'
-          - os: macos-15-intel
-            target: x86_64-apple-darwin
-            args: '--target x86_64-apple-darwin --bundles app,dmg'
-            assetNamePattern: 'QuranRecite2Text.MacOS.Intel[ext]'
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             args: '--bundles nsis'
@@ -72,20 +64,6 @@ jobs:
           echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> $GITHUB_ENV
         shell: bash
 
-      # ─── macOS binary setup ───
-      - name: Install ffmpeg and copy binaries (macOS)
-        if: startsWith(matrix.os, 'macos')
-        run: |
-          brew update
-          if brew list --versions openssl@1.1 >/dev/null 2>&1; then
-            brew unlink openssl@1.1
-          fi
-          brew install ffmpeg
-          mkdir -p app/src-tauri/binaries
-          cp "$(brew --prefix ffmpeg)/bin/ffprobe" app/src-tauri/binaries/ffprobe
-          cp "$(brew --prefix ffmpeg)/bin/ffmpeg" app/src-tauri/binaries/ffmpeg
-          chmod +x app/src-tauri/binaries/ffprobe
-          chmod +x app/src-tauri/binaries/ffmpeg
 
       # ─── Windows binary setup ───
       - name: Download and extract ffmpeg and ffprobe (Windows)
