@@ -236,14 +236,13 @@
               >
                 <Folder :size="13" />
               </button>
-              <a 
-                :href="`/api/engine/projects/load?file=${encodeURIComponent(p.file_name)}`" 
-                :download="p.file_name" 
+              <button 
                 class="btn-card-tool" 
+                @click="exportProject(p)" 
                 title="Download .qproj"
               >
                 <Download :size="13" />
-              </a>
+              </button>
               <button 
                 class="btn-card-tool btn-danger" 
                 @click="deleteProject(p)" 
@@ -398,6 +397,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed, watch } from 'vue';
 import { projectStore } from '../services/projectStore';
+import { listProjects, loadProject, revealInExplorer } from '../services/api';
 import type { ProjectSummary } from '../types/aligner';
 import { 
   FolderKanban,
@@ -516,29 +516,23 @@ const filteredProjects = computed(() => {
   });
 });
 
-// Network Fetching (Sub-millisecond backend cache response with auto-retry)
+// Fetch projects via Tauri IPC (no HTTP server)
 async function fetchProjects(retries?: number | Event) {
   const retryCount = typeof retries === 'number' ? retries : 3;
   isFetching.value = true;
   try {
-    const res = await fetch('/api/engine/projects');
-    if (res.ok) {
-      const data = await res.json();
-      const list = data.projects || [];
-      projectsList.value = list;
-      try {
-        localStorage.setItem(CACHE_KEY, JSON.stringify(list));
-      } catch {}
-    } else if (res.status === 503 && retryCount > 0) {
-      await new Promise(r => setTimeout(r, 600));
-      return fetchProjects(retryCount - 1);
-    }
+    const data = await listProjects();
+    const list = data.projects || [];
+    projectsList.value = list;
+    try {
+      localStorage.setItem(CACHE_KEY, JSON.stringify(list));
+    } catch {}
   } catch (err) {
     if (retryCount > 0) {
       await new Promise(r => setTimeout(r, 600));
       return fetchProjects(retryCount - 1);
     }
-    console.warn('Could not fetch projects from backend:', err);
+    console.warn('Could not fetch projects:', err);
   } finally {
     isFetching.value = false;
   }
@@ -623,13 +617,27 @@ async function duplicateProject(p: ProjectSummary) {
   }
 }
 
+async function exportProject(p: ProjectSummary) {
+  try {
+    const data = await loadProject(p.file_name);
+    if (!data) return;
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = p.file_name.endsWith('.qproj') ? p.file_name : `${p.file_name}.qproj`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    console.error('Failed to export project:', err);
+  }
+}
+
 async function revealProjectInExplorer(p: ProjectSummary) {
   try {
-    await fetch('/api/engine/system/reveal', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: p.file_name }),
-    });
+    await revealInExplorer(p.file_name || p.project_name);
   } catch (err) {
     console.error('Failed to reveal file:', err);
   }
@@ -637,11 +645,7 @@ async function revealProjectInExplorer(p: ProjectSummary) {
 
 async function revealProjectsDirectory() {
   try {
-    await fetch('/api/engine/system/reveal', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: 'projects' }),
-    });
+    await revealInExplorer('projects');
   } catch (err) {
     console.error('Failed to reveal projects folder:', err);
   }

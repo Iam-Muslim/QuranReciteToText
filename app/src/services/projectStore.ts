@@ -26,7 +26,15 @@ const EMPTY_PROJECT: AlignerProject = {
   surahs: [],
 };
 
-import { getApiBaseUrl, getAudioStreamUrl } from './api';
+import { 
+  getApiBaseUrl, 
+  getAudioStreamUrl, 
+  saveProject, 
+  createProject, 
+  loadProject, 
+  deleteProject, 
+  duplicateProject 
+} from './api';
 import { auditSurah } from './auditorEngine';
 export { getApiBaseUrl, getAudioStreamUrl };
 
@@ -157,24 +165,12 @@ class ProjectStore {
     this.saveStatus.value = 'saving';
 
     try {
-      const res = await fetch('/api/engine/projects/save', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(this.project),
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        if (data.file_name) {
-          this.project.file_name = data.file_name;
-        }
-        this.isDirty.value = false;
-        this.lastSavedAt.value = new Date();
-        this.saveStatus.value = 'saved';
-        return true;
-      } else {
-        this.saveStatus.value = 'error';
-      }
+      const fileName = this.project.file_name || `${this.project.project_name}.qproj`;
+      await saveProject(fileName, this.project);
+      this.isDirty.value = false;
+      this.lastSavedAt.value = new Date();
+      this.saveStatus.value = 'saved';
+      return true;
     } catch (err) {
       console.error('Auto-save failed:', err);
       this.saveStatus.value = 'error';
@@ -471,10 +467,7 @@ class ProjectStore {
   public selectSurah(surahNum: number) {
     this.activeSurahNumber.value = surahNum;
     const s = this.project.surahs.find(item => item.surah_number === surahNum);
-    if (s && s.ayahs.length > 0) {
-      this.activeAyahNumber.value = s.ayahs[0].ayah;
-      this.currentTime.value = s.ayahs[0].start;
-      
+    if (s) {
       const effectiveAudioUrl = s.audio_url || (s.audio_file ? getAudioStreamUrl(s.audio_file) : null);
       if (effectiveAudioUrl) {
         s.audio_url = effectiveAudioUrl;
@@ -482,6 +475,17 @@ class ProjectStore {
       }
       if (s.audio_file) {
         this.activeAudioFilePath.value = s.audio_file;
+      }
+
+      if (s.ayahs && s.ayahs.length > 0) {
+        this.activeAyahNumber.value = s.ayahs[0].ayah;
+        this.currentTime.value = s.ayahs[0].start;
+      } else if (s.intro && s.intro.words && s.intro.words.length > 0) {
+        this.activeAyahNumber.value = 0;
+        this.currentTime.value = s.intro.words[0].start;
+      } else {
+        this.activeAyahNumber.value = null;
+        this.currentTime.value = 0;
       }
     } else {
       this.activeAyahNumber.value = null;
@@ -1198,7 +1202,8 @@ class ProjectStore {
     let firstAddedSurahNum: number | null = null;
 
     for (const sData of surahList) {
-      const sNum = typeof sData.surah === 'number' ? sData.surah : parseInt(sData.surah, 10);
+      const rawNum = sData.surah ?? sData.surah_number;
+      const sNum = typeof rawNum === 'number' ? rawNum : parseInt(rawNum, 10);
       if (isNaN(sNum) || sNum <= 0) continue;
 
       const meta = QURAN_SURAHS.find(m => m.surah_number === sNum);
@@ -1210,12 +1215,14 @@ class ProjectStore {
         totalDur = Math.ceil(lastAyah.end) + 1.0;
       }
 
+      const effectiveUrl = audioUrl || (audioPath ? getAudioStreamUrl(audioPath) : undefined);
+
       const newSurahObj: SurahItem = {
         surah_number: sNum,
         surah_name_arabic: meta ? meta.surah_name_arabic : `سورة ${sNum}`,
         surah_name_english: meta ? meta.surah_name_english : `Surah ${sNum}`,
         audio_file: audioPath,
-        audio_url: audioUrl || (audioPath ? `${getApiBaseUrl()}/api/engine/audio?path=${encodeURIComponent(audioPath)}` : undefined),
+        audio_url: effectiveUrl,
         audio_duration_seconds: totalDur,
         status: 'needs_review',
         intro: sData.intro,
@@ -1237,12 +1244,16 @@ class ProjectStore {
     if (firstAddedSurahNum !== null) {
       this.selectSurah(firstAddedSurahNum);
       const firstSurah = this.project.surahs.find(s => s.surah_number === firstAddedSurahNum);
-      if (firstSurah?.audio_url) {
-        this.activeAudioUrl.value = firstSurah.audio_url;
+      if (firstSurah) {
+        const effectiveUrl = firstSurah.audio_url || (firstSurah.audio_file ? getAudioStreamUrl(firstSurah.audio_file) : null);
+        if (effectiveUrl) {
+          this.activeAudioUrl.value = effectiveUrl;
+        }
+        if (firstSurah.audio_file) {
+          this.activeAudioFilePath.value = firstSurah.audio_file;
+        }
       }
-      if (firstSurah?.audio_file) {
-        this.activeAudioFilePath.value = firstSurah.audio_file;
-      }
+      this.currentTab.value = 'studio';
     }
 
     this.isDirty.value = true;
@@ -1266,25 +1277,29 @@ class ProjectStore {
     }
   }
 
-  // Create New Project via API and open it
+  // Create New Project via Tauri IPC and open it
   public async createNewProject(name: string, reciter?: string, riwayah?: string, retries = 2): Promise<boolean> {
     try {
-      const res = await fetch('/api/engine/projects/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, reciter, riwayah }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.project) {
-          if (data.file_name) data.project.file_name = data.file_name;
-          this.loadProject(data.project);
-          this.currentTab.value = 'studio';
-          return true;
-        }
-      } else if (res.status === 503 && retries > 0) {
-        await new Promise(r => setTimeout(r, 600));
-        return this.createNewProject(name, reciter, riwayah, retries - 1);
+      const projectData: Partial<AlignerProject> = {
+        project_name: name,
+        reciter: reciter || '',
+        app_version: '2.0.0',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        settings: {
+          snapping_tolerance_ms: 25,
+          confidence_warning_threshold: 0.85,
+          auto_save_interval_s: 30,
+          riwayah: riwayah || 'Hafs',
+        },
+        surahs: [],
+      };
+      const result = await createProject(name, projectData);
+      if (result?.file) {
+        projectData.file_name = result.file;
+        this.loadProject(projectData as AlignerProject);
+        this.currentTab.value = 'studio';
+        return true;
       }
     } catch (err) {
       if (retries > 0) {
@@ -1299,9 +1314,8 @@ class ProjectStore {
   // Open Project by file name (.qproj)
   public async openProjectByFileName(fileName: string): Promise<boolean> {
     try {
-      const res = await fetch(`/api/engine/projects/load?file=${encodeURIComponent(fileName)}`);
-      if (res.ok) {
-        const data = await res.json();
+      const data = await loadProject(fileName);
+      if (data) {
         data.file_name = fileName;
         this.loadProject(data);
         this.currentTab.value = 'studio';
@@ -1316,12 +1330,8 @@ class ProjectStore {
   // Delete project file on disk
   public async deleteProjectFile(fileName: string): Promise<boolean> {
     try {
-      const res = await fetch('/api/engine/projects/delete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ file_name: fileName }),
-      });
-      return res.ok;
+      await deleteProject(fileName);
+      return true;
     } catch (err) {
       console.error('Failed to delete project file:', err);
       return false;
@@ -1331,12 +1341,8 @@ class ProjectStore {
   // Duplicate project file cleanly (QuranCaption ProjectService.duplicate)
   public async duplicateProjectFile(fileName: string): Promise<boolean> {
     try {
-      const res = await fetch('/api/engine/projects/duplicate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ file_name: fileName }),
-      });
-      return res.ok;
+      await duplicateProject(fileName);
+      return true;
     } catch (err) {
       console.error('Failed to duplicate project file:', err);
       return false;

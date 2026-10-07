@@ -251,39 +251,12 @@ async function fetchQuranWord() {
     console.warn('Local Quran lookup failed, falling back to engine:', err);
   }
 
-  // 3. Graceful fallback to backend Engine API if local client fetch had an unexpected error
-  try {
-    const res = await fetch(`/api/engine/quran/word?location=${encodeURIComponent(loc)}`);
-    if (res.ok) {
-      const data = await res.json();
-      if (data.success) {
-        previewWord.value = data.word;
-        ayahTextSnippet.value = data.ayah_text || '';
-        totalWords.value = data.total_words || 0;
-        isValid.value = true;
-        errorMessage.value = '';
-      } else {
-        isValid.value = false;
-        errorMessage.value = data.error || 'Invalid Quranic Location';
-        if (!existingWord) {
-          previewWord.value = '';
-          ayahTextSnippet.value = '';
-        }
-      }
-    } else {
-      if (!existingWord) {
-        isValid.value = false;
-        errorMessage.value = 'Invalid Quranic Location';
-      }
-    }
-  } catch (err: any) {
-    if (!existingWord) {
-      isValid.value = false;
-      errorMessage.value = err.message || 'Lookup failed';
-    }
-  } finally {
-    isLoading.value = false;
+  // No HTTP fallback needed — local Quran data is complete
+  if (!isValid.value && !existingWord) {
+    isValid.value = false;
+    errorMessage.value = errorMessage.value || 'Invalid Quranic Location';
   }
+  isLoading.value = false;
 }
 
 function save() {

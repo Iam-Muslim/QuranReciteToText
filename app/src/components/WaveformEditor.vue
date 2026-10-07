@@ -8,7 +8,7 @@
           class="btn-icon play-btn" 
           @click="togglePlay" 
           :title="isPlaying ? 'Pause (Space)' : 'Play (Space)'"
-          :disabled="!hasAudioLoaded"
+          :disabled="!hasAudioLoaded && timelineSegments.length === 0"
         >
           <Pause v-if="isPlaying" :size="16" />
           <Play v-else :size="16" />
@@ -18,7 +18,7 @@
           class="btn-icon" 
           @click="projectStore.jumpToPrevAyah()" 
           title="Previous Ayah ([)"
-          :disabled="!hasAudioLoaded"
+          :disabled="!hasAudioLoaded && timelineSegments.length === 0"
         >
           <ChevronLeft :size="15" />
         </button>
@@ -27,7 +27,7 @@
           class="btn-icon" 
           @click="skipBackward(2)" 
           title="Rewind 2s"
-          :disabled="!hasAudioLoaded"
+          :disabled="!hasAudioLoaded && timelineSegments.length === 0"
         >
           <RotateCcw :size="13" />
         </button>
@@ -36,7 +36,7 @@
           class="btn-icon" 
           @click="skipForward(2)" 
           title="Forward 2s"
-          :disabled="!hasAudioLoaded"
+          :disabled="!hasAudioLoaded && timelineSegments.length === 0"
         >
           <RotateCw :size="13" />
         </button>
@@ -45,7 +45,7 @@
           class="btn-icon" 
           @click="projectStore.jumpToNextAyah()" 
           title="Next Ayah (])"
-          :disabled="!hasAudioLoaded"
+          :disabled="!hasAudioLoaded && timelineSegments.length === 0"
         >
           <ChevronRight :size="15" />
         </button>
@@ -121,7 +121,7 @@
     </div>
 
     <!-- Overview Minimap Track -->
-    <div class="minimap-container" v-show="hasAudioLoaded">
+    <div class="minimap-container" v-show="hasAudioLoaded || timelineSegments.length > 0">
       <div id="waveform-minimap" ref="minimapMount"></div>
     </div>
 
@@ -142,7 +142,7 @@
       </div>
 
       <!-- No Audio Empty State -->
-      <div v-if="!hasAudioLoaded" class="empty-audio-dropzone" @click="triggerFileInput">
+      <div v-if="!hasAudioLoaded && timelineSegments.length === 0" class="empty-audio-dropzone" @click="triggerFileInput">
         <Loader2 v-if="isUploadingAudio" :size="28" class="drop-icon animate-spin" />
         <FileAudio v-else :size="26" class="drop-icon" />
         <span class="empty-title">
@@ -152,16 +152,16 @@
       </div>
 
       <!-- Timeline Ruler -->
-      <div id="timeline-ruler" ref="timelineContainer" v-show="hasAudioLoaded"></div>
+      <div id="timeline-ruler" ref="timelineContainer" v-show="hasAudioLoaded || timelineSegments.length > 0"></div>
       
       <!-- WaveSurfer Waveform Mount (Peaks Layer Only, Zero Memory Allocation) -->
-      <div id="waveform-mount" ref="waveformMount" v-show="hasAudioLoaded"></div>
+      <div id="waveform-mount" ref="waveformMount" v-show="hasAudioLoaded || timelineSegments.length > 0"></div>
 
       <!-- Track 1: Segments Lane (QuranCaption Multi-Segment Architecture) -->
       <div 
         class="track-viewport ayah-track-viewport" 
         ref="ayahTrackViewport"
-        v-show="hasAudioLoaded"
+        v-show="hasAudioLoaded || timelineSegments.length > 0"
         @scroll.passive="onTrackViewportScroll"
       >
         <div 
@@ -230,7 +230,7 @@
       <div 
         class="track-viewport word-track-viewport" 
         ref="wordTrackViewport"
-        v-show="hasAudioLoaded"
+        v-show="hasAudioLoaded || timelineSegments.length > 0"
         @scroll.passive="onTrackViewportScroll"
       >
         <div 
@@ -328,7 +328,7 @@
       <div 
         class="timeline-scrollbar-track" 
         ref="scrollbarTrack"
-        v-show="hasAudioLoaded && totalTimelineWidth > viewportClientWidth"
+        v-show="(hasAudioLoaded || timelineSegments.length > 0) && totalTimelineWidth > viewportClientWidth"
         @mousedown="handleScrollbarTrackClick"
       >
         <div 
@@ -350,6 +350,7 @@ import WaveSurfer from 'wavesurfer.js';
 import TimelinePlugin from 'wavesurfer.js/dist/plugins/timeline.esm.js';
 import MinimapPlugin from 'wavesurfer.js/dist/plugins/minimap.esm.js';
 import { projectStore } from '../services/projectStore';
+import { isTauriEnvironment, getAudioStreamUrl } from '../services/api';
 import type { AlignedWord, TimelineSegmentItem } from '../types/aligner';
 import { 
   Play, 
@@ -362,7 +363,7 @@ import {
   ZoomOut, 
   UploadCloud, 
   Repeat, 
-  FileAudio,
+  FileAudio, 
   Loader2 
 } from 'lucide-vue-next';
 
@@ -406,7 +407,14 @@ const selectedWord = computed<AlignedWord | undefined>(() => {
 
 // Total timeline canvas width in pixels
 const totalTimelineWidth = computed(() => {
-  return Math.max(800, Math.ceil(duration.value * zoomLevel.value));
+  let dur = duration.value;
+  if (!dur || dur <= 0) {
+    const segments = timelineSegments.value;
+    if (segments.length > 0) {
+      dur = segments[segments.length - 1].end + 1.0;
+    }
+  }
+  return Math.max(800, Math.ceil(dur * zoomLevel.value));
 });
 
 // Timeline Segments (matching QuranCaption segment/repetition multi-track architecture)
@@ -508,6 +516,16 @@ onMounted(() => {
       loadAudioUrl(newUrl, projectStore.activeAudioFilePath.value);
     }
   });
+
+  watch(() => projectStore.activeSurahNumber.value, () => {
+    const s = projectStore.activeSurah.value;
+    if (s) {
+      const url = s.audio_url || (s.audio_file ? getAudioStreamUrl(s.audio_file) : null);
+      if (url) {
+        loadAudioUrl(url, s.audio_file);
+      }
+    }
+  });
 });
 
 onUnmounted(() => {
@@ -588,6 +606,19 @@ function initWaveSurfer() {
     updateViewportDimensions();
     syncTrackScroll();
     updatePlayheadDirect(currentTime.value);
+  });
+
+  wavesurfer.on('decode', (dur: number) => {
+    if (dur > 0) {
+      duration.value = dur;
+      hasAudioLoaded.value = true;
+      updateViewportDimensions();
+      syncTrackScroll();
+    }
+  });
+
+  wavesurfer.on('error', (err) => {
+    console.warn('WaveSurfer audio load error:', err);
   });
 
   // 1:1 Scroll Synchronization between WaveSurfer, Ayah lane, and Word lane
@@ -725,60 +756,66 @@ const peaksCache = new Map<string, { peaks: number[]; duration: number; url?: st
 
 // Precomputed Peak Loading (Fast, 0MB WebAudio Memory Allocation - QuranCaption Model)
 async function loadAudioUrl(url: string, filePath?: string | null) {
-  if (!wavesurfer || currentlyLoadedAudioUrl === url) return;
-  currentlyLoadedAudioUrl = url;
-  hasAudioLoaded.value = false;
+  if (!wavesurfer) return;
 
   const effectivePath = filePath || projectStore.activeAudioFilePath.value || url;
   
+  // Resolve streamUrl using environment-aware bridge
+  let streamUrl = url;
+  if (isTauriEnvironment()) {
+    streamUrl = getAudioStreamUrl(effectivePath || url);
+  } else {
+    // In Browser: ALWAYS use HTTP stream URL or Blob URL! NEVER asset://!
+    if (url && (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('/api') || url.startsWith('blob:'))) {
+      streamUrl = url;
+    } else if (effectivePath) {
+      streamUrl = getAudioStreamUrl(effectivePath);
+    }
+  }
+
+  if (currentlyLoadedAudioUrl === streamUrl && hasAudioLoaded.value) return;
+  currentlyLoadedAudioUrl = streamUrl;
+
   // 1. Instant Cache hit (0ms latency)
   if (peaksCache.has(effectivePath)) {
     const cached = peaksCache.get(effectivePath)!;
-    wavesurfer.load(cached.url || url, [cached.peaks], cached.duration);
-    return;
+    try {
+      wavesurfer.load(cached.url || streamUrl, [cached.peaks], cached.duration);
+      return;
+    } catch {}
   }
 
   let peaksData: number[] | null = null;
   let dur: number | null = null;
-  let streamUrl = url;
 
-  try {
-    const targetQuery = effectivePath 
-      ? `path=${encodeURIComponent(effectivePath)}` 
-      : `path=${encodeURIComponent(url)}`;
-
-    // 2. First attempt to load metadata & peaks from /api/engine/audio/load
-    const res = await fetch(`/api/engine/audio/load?${targetQuery}`);
-    if (res.ok) {
-      const d = await res.json();
-      if (d.success && d.peaks && d.peaks.length > 0) {
-        peaksData = d.peaks;
-        dur = d.duration;
-        if (d.url) streamUrl = d.url;
-        peaksCache.set(effectivePath, { peaks: d.peaks, duration: d.duration, url: d.url });
-      }
-    } else {
-      // 3. Fallback to /api/engine/audio/peaks
-      const pRes = await fetch(`/api/engine/audio/peaks?${targetQuery}`);
-      if (pRes.ok) {
-        const pd = await pRes.json();
-        if (pd.peaks && pd.peaks.length > 0) {
-          peaksData = pd.peaks;
-          dur = pd.duration;
-          peaksCache.set(effectivePath, { peaks: pd.peaks, duration: pd.duration });
+  // 2. In browser mode, attempt fast precomputed peaks fetch from /api/engine/audio/load (QuranCaption FFmpeg peaks)
+  if (!isTauriEnvironment() && effectivePath) {
+    try {
+      const targetQuery = `path=${encodeURIComponent(effectivePath.replace(/\\/g, '/'))}`;
+      const res = await fetch(`/api/engine/audio/load?${targetQuery}`);
+      if (res.ok) {
+        const d = await res.json();
+        if (d.success && d.peaks && d.peaks.length > 0) {
+          peaksData = d.peaks;
+          dur = d.duration;
+          if (d.url) streamUrl = d.url;
+          peaksCache.set(effectivePath, { peaks: d.peaks, duration: d.duration, url: d.url });
         }
       }
+    } catch (err) {
+      console.warn('Precomputed peaks not available, falling back to standard decode:', err);
     }
-  } catch (err) {
-    console.warn('Precomputed peaks not available, falling back to standard decode:', err);
   }
 
-  if (peaksData && dur) {
-    wavesurfer.load(streamUrl, [peaksData], dur);
-  } else {
-    // Resilient fallback: render via browser WebAudio decoder without blocking alert modal
-    console.warn('Precomputed waveform peaks unavailable, rendering via WebAudio decode:', streamUrl);
-    wavesurfer.load(streamUrl);
+  // 3. Load into WaveSurfer
+  try {
+    if (peaksData && dur) {
+      wavesurfer.load(streamUrl, [peaksData], dur);
+    } else {
+      wavesurfer.load(streamUrl);
+    }
+  } catch (loadErr) {
+    console.error('Failed to load streamUrl into WaveSurfer:', loadErr);
   }
 }
 
@@ -1091,12 +1128,6 @@ function cycleLoopMode() {
   projectStore.loopMode.value = modes[(curIdx + 1) % modes.length];
 }
 
-watch(() => projectStore.activeAudioUrl.value, (newUrl) => {
-  if (newUrl) {
-    loadAudioUrl(newUrl, projectStore.activeAudioFilePath.value);
-  }
-});
-
 watch(() => projectStore.currentTime.value, (newT) => {
   if (isInternalTimeUpdate) return;
   if (wavesurfer && Math.abs(wavesurfer.getCurrentTime() - newT) > 0.15) {
@@ -1207,44 +1238,49 @@ async function loadLocalFile(file: File) {
   isUploadingAudio.value = true;
   hasAudioLoaded.value = false;
 
-  // Immediate local client-side Blob URL (QuranCaption resilient audio loading)
-  const localBlobUrl = URL.createObjectURL(file);
-
   try {
-    const formData = new FormData();
-    formData.append('file', file);
-
-    const res = await fetch('/api/engine/audio/upload', {
-      method: 'POST',
-      body: formData,
-    });
-
-    if (res.ok) {
-      const data = await res.json();
-      if (data.success) {
-        projectStore.setLoadedAudio(data.filePath, data.url, data.duration);
-        currentlyLoadedAudioUrl = data.url;
-
-        if (wavesurfer) {
-          if (data.peaks && data.peaks.length > 0) {
-            wavesurfer.load(data.url, [data.peaks], data.duration);
-          } else {
-            wavesurfer.load(data.url);
-          }
-        }
-        return;
+    // Tauri gives us the native path on the File object
+    const nativePath: string = (file as any).path || '';
+    if (nativePath && isTauriEnvironment()) {
+      const assetUrl = getAudioStreamUrl(nativePath);
+      projectStore.setLoadedAudio(nativePath, assetUrl);
+      currentlyLoadedAudioUrl = assetUrl;
+      if (wavesurfer) {
+        wavesurfer.load(assetUrl);
       }
-    }
+    } else {
+      // Browser: local blob URL for instant playback + background upload to engine
+      const localBlobUrl = URL.createObjectURL(file);
+      projectStore.setLoadedAudio(file.name, localBlobUrl);
+      currentlyLoadedAudioUrl = localBlobUrl;
+      if (wavesurfer) {
+        wavesurfer.load(localBlobUrl);
+      }
 
-    // Backend returned non-200 or unexpected structure: fallback seamlessly
-    console.warn('Backend peak extraction endpoint returned non-OK. Loading local audio directly.');
-    projectStore.setLoadedAudio(file.name, localBlobUrl);
-    currentlyLoadedAudioUrl = localBlobUrl;
-    if (wavesurfer) {
-      wavesurfer.load(localBlobUrl);
+      // Persist to backend in background
+      try {
+        const formData = new FormData();
+        formData.append('file', file);
+        fetch('/api/engine/audio/upload?extract_peaks=false', {
+          method: 'POST',
+          body: formData,
+        }).then(async (res) => {
+          if (res.ok) {
+            const data = await res.json();
+            const serverPath = data.filePath || data.path;
+            const serverUrl = data.url || (serverPath ? getAudioStreamUrl(serverPath) : '');
+            if (serverPath && projectStore.activeSurah.value) {
+              projectStore.activeSurah.value.audio_file = serverPath;
+              projectStore.activeSurah.value.audio_url = serverUrl;
+              projectStore.activeAudioFilePath.value = serverPath;
+            }
+          }
+        }).catch(() => {});
+      } catch {}
     }
   } catch (err: any) {
-    console.warn('Backend audio upload unavailable, falling back to instant client decode:', err);
+    console.warn('Audio load error, using blob fallback:', err);
+    const localBlobUrl = URL.createObjectURL(file);
     projectStore.setLoadedAudio(file.name, localBlobUrl);
     currentlyLoadedAudioUrl = localBlobUrl;
     if (wavesurfer) {

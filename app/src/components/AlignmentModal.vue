@@ -343,8 +343,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, nextTick } from 'vue';
+import { ref, computed, nextTick, onUnmounted } from 'vue';
 import { projectStore } from '../services/projectStore';
+import { runAlign, stopAlign, scanAudioDir, getAudioStreamUrl, isTauriEnvironment } from '../services/api';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { 
   Activity, 
@@ -399,7 +400,11 @@ const isRunning = ref(false);
 const isComplete = ref(false);
 const isAborted = ref(false);
 const errorMessage = ref('');
-let currentAbortController: AbortController | null = null;
+let alignEventUnlisten: (() => void) | null = null;
+
+onUnmounted(() => {
+  if (alignEventUnlisten) { alignEventUnlisten(); alignEventUnlisten = null; }
+});
 
 // Files Queue State
 const filesQueue = ref<QueueItem[]>([]);
@@ -458,6 +463,9 @@ function open() {
 
 function close() {
   if (!isRunning.value) {
+    if (isComplete.value) {
+      projectStore.currentTab.value = 'studio';
+    }
     visible.value = false;
     isMinimized.value = false;
     filesQueue.value = [];
@@ -485,14 +493,9 @@ function handleContinueToStudio() {
 
 function stopBatch() {
   isAborted.value = true;
-  if (currentAbortController) {
-    try {
-      currentAbortController.abort();
-    } catch {}
-    currentAbortController = null;
-  }
-  // Terminate backend subprocess tree immediately on OS level (cuts CPU to 0%)
-  fetch('/api/engine/align/stop', { method: 'POST' }).catch(() => {});
+  stopAlign().catch(() => {});
+  if (alignEventUnlisten) { alignEventUnlisten(); alignEventUnlisten = null; }
+  if (activeEventSource) { activeEventSource.close(); activeEventSource = null; }
 
   // Mark current and pending items as cancelled
   for (let i = currentQueueIndex.value; i < filesQueue.value.length; i++) {
@@ -507,7 +510,36 @@ function stopBatch() {
   addLog('Batch alignment stopped by user.', 'warn');
 }
 
-function triggerFilePick() {
+async function triggerFilePick() {
+  if (isTauriEnvironment()) {
+    try {
+      const selected = await openDialog({
+        directory: false,
+        multiple: true,
+        title: 'Select Recitation Audio Files',
+        filters: [
+          { name: 'Audio Files', extensions: ['mp3', 'wav', 'm4a', 'ogg', 'flac', 'aac', 'opus'] }
+        ]
+      });
+      if (selected) {
+        const paths = Array.isArray(selected) ? selected : [selected];
+        for (const p of paths) {
+          const name = p.split(/[\\/]/).pop() || p;
+          filesQueue.value.push({
+            id: `${name}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+            file: { name, path: p } as any,
+            uploadedPath: p,
+            uploadedUrl: getAudioStreamUrl(p),
+            status: 'pending',
+          });
+        }
+        return;
+      }
+      if (selected !== undefined) return; // User cancelled dialog
+    } catch (err) {
+      console.warn('Tauri openDialog error, falling back to input:', err);
+    }
+  }
   fileInput.value?.click();
 }
 
@@ -656,31 +688,21 @@ async function scanDirectory() {
   scannedFiles.value = [];
 
   try {
-    const res = await fetch('/api/engine/scan_dir', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ dir_path: dirPath.value.trim() }),
-    });
-
-    if (res.ok) {
-      const data = await res.json();
-      const files = data.audio_files || data.files || [];
-      scannedFiles.value = files.map((f: any) => ({
-        name: f.name || f.rel_path,
-        rel_path: f.rel_path || f.name,
-        full_path: f.path || f.full_path || '',
-        size: f.size || f.size_bytes || 0,
-        ext: f.ext || '',
-      }));
-      if (scannedFiles.value.length === 0) {
-        dirScanError.value = 'No audio files found in directory.';
-      }
-    } else {
-      const err = await res.json().catch(() => ({ detail: 'Failed to scan directory' }));
-      dirScanError.value = err.detail || 'Failed to scan directory';
+    // Direct Tauri command — no HTTP server needed
+    const data = await scanAudioDir(dirPath.value.trim());
+    const files = data.audio_files || data.files || [];
+    scannedFiles.value = files.map((f: any) => ({
+      name: f.name || f.rel_path,
+      rel_path: f.rel_path || f.name,
+      full_path: f.path || f.full_path || '',
+      size: f.size || f.size_bytes || 0,
+      ext: f.ext || '',
+    }));
+    if (scannedFiles.value.length === 0) {
+      dirScanError.value = 'No audio files found in directory.';
     }
   } catch (err: any) {
-    dirScanError.value = err.message || 'Directory scan failed';
+    dirScanError.value = err.message || err || 'Directory scan failed';
   } finally {
     isScanningDir.value = false;
   }
@@ -706,12 +728,23 @@ async function startFilesAlignmentQueue() {
     const item = filesQueue.value[i];
 
     try {
-      // 1. Upload instantly without blocking on waveform peak extraction (extract_peaks=false)
       let audioPath = item.uploadedPath;
       let audioUrl = item.uploadedUrl;
 
-      if (!audioPath) {
-        if (isAborted.value) break;
+      // 1. In Tauri: if item.file has native .path, use it directly!
+      const nativePath: string = (item.file as any)?.path || '';
+      if (nativePath && (nativePath.includes(':') || nativePath.startsWith('/'))) {
+        audioPath = nativePath;
+        audioUrl = getAudioStreamUrl(nativePath);
+      }
+
+      // 2. If not already a full path on disk, upload to save it to disk
+      const isAbsolutePath = audioPath && (audioPath.includes(':') || audioPath.startsWith('/'));
+      if (!isAbsolutePath) {
+        if (!item.file || !(item.file instanceof File)) {
+          throw new Error('No valid file to upload');
+        }
+
         item.status = 'uploading';
         statusMessage.value = `Uploading ${item.file.name}...`;
         progressPercent.value = 5;
@@ -719,49 +752,46 @@ async function startFilesAlignmentQueue() {
         const formData = new FormData();
         formData.append('file', item.file);
 
-        currentAbortController = new AbortController();
-        const uploadUrl = '/api/engine/audio/upload?extract_peaks=false';
-
-        const upRes = await fetch(uploadUrl, {
+        const upRes = await fetch('/api/engine/audio/upload?extract_peaks=false', {
           method: 'POST',
           body: formData,
-          signal: currentAbortController.signal,
         });
 
         if (!upRes.ok) {
-          throw new Error(`Upload failed for ${item.file.name}`);
+          throw new Error(`Upload failed: ${upRes.statusText}`);
         }
 
         const upData = await upRes.json();
         audioPath = upData.filePath || upData.path;
-        audioUrl = upData.url;
+        audioUrl = upData.url || (audioPath ? getAudioStreamUrl(audioPath) : '');
         item.uploadedPath = audioPath;
         item.uploadedUrl = audioUrl;
       }
 
+      if (!audioPath) {
+        throw new Error('No valid audio file path');
+      }
+
       if (isAborted.value) break;
 
-      // 2. Start Real AI Alignment (starts instantly without 15s delay)
       item.status = 'aligning';
-      statusMessage.value = `Aligning ${item.file.name}...`;
-      addLog(`Processing [${i + 1}/${filesQueue.value.length}] ${item.file.name}`, 'info');
+      statusMessage.value = `Aligning ${item.file?.name || audioPath}...`;
+      addLog(`Processing [${i + 1}/${filesQueue.value.length}] ${item.file?.name || audioPath}`, 'info');
 
-      currentAbortController = new AbortController();
-      await runAlignmentSSE(audioPath!, audioUrl!, currentAbortController.signal);
+      // Direct Tauri IPC in desktop, SSE streaming in browser
+      await executeAlignment(audioPath, audioUrl);
       item.status = 'completed';
 
     } catch (err: any) {
-      if (isAborted.value || err.name === 'AbortError') {
+      if (isAborted.value) {
         item.status = 'error';
         item.errorMessage = 'Aborted';
         addLog(`Stopped ${item.file.name}`, 'warn');
         break;
       }
       item.status = 'error';
-      item.errorMessage = err.message;
-      addLog(`Error processing ${item.file.name}: ${err.message}`, 'error');
-    } finally {
-      currentAbortController = null;
+      item.errorMessage = err.message || String(err);
+      addLog(`Error processing ${item.file.name}: ${item.errorMessage}`, 'error');
     }
   }
 
@@ -775,49 +805,11 @@ async function startFilesAlignmentQueue() {
 async function startDirAlignment() {
   if (!dirPath.value.trim() && scannedFiles.value.length === 0) return;
 
-  // Handle files that are in browser memory (File objects)
-  const browserFiles = scannedFiles.value.filter(f => f.file instanceof File);
-  if (browserFiles.length > 0) {
-    isRunning.value = true;
-    isComplete.value = false;
-    isAborted.value = false;
-    errorMessage.value = '';
-    consoleLogs.value = [];
-    statusMessage.value = `Preparing ${browserFiles.length} recitation(s) for batch alignment...`;
-
-    try {
-      const formData = new FormData();
-      for (const bf of browserFiles) {
-        formData.append('files', bf.file!);
-      }
-      currentAbortController = new AbortController();
-      const upRes = await fetch('/api/engine/batch/upload_folder', {
-        method: 'POST',
-        body: formData,
-        signal: currentAbortController.signal,
-      });
-
-      if (upRes.ok) {
-        const upData = await upRes.json();
-        if (upData.success && upData.directory) {
-          dirPath.value = upData.directory;
-        }
-      } else {
-        // Fallback to queue sequential processing
-        filesQueue.value = browserFiles.map(bf => ({
-          id: `${bf.name}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-          file: bf.file!,
-          status: 'pending',
-        }));
-        activeMode.value = 'files';
-        await startFilesAlignmentQueue();
-        return;
-      }
-    } catch (upErr: any) {
-      if (upErr.name === 'AbortError') {
-        isRunning.value = false;
-        return;
-      }
+  const targetDir = dirPath.value.trim();
+  if (!targetDir) {
+    // Browser file objects picked — fall back to queue mode
+    const browserFiles = scannedFiles.value.filter(f => f.file instanceof File);
+    if (browserFiles.length > 0) {
       filesQueue.value = browserFiles.map(bf => ({
         id: `${bf.name}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
         file: bf.file!,
@@ -825,11 +817,9 @@ async function startDirAlignment() {
       }));
       activeMode.value = 'files';
       await startFilesAlignmentQueue();
-      return;
     }
+    return;
   }
-
-  if (!dirPath.value.trim()) return;
 
   isRunning.value = true;
   isComplete.value = false;
@@ -838,87 +828,128 @@ async function startDirAlignment() {
   consoleLogs.value = [];
   statusMessage.value = 'Starting batch directory transcription pipeline...';
 
-  currentAbortController = new AbortController();
-
   try {
-    const res = await fetch('/api/engine/align', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        dir_path: dirPath.value.trim(),
-        fast: fastMode.value,
-      }),
-      signal: currentAbortController.signal,
-    });
-
-    if (!res.ok) {
-      throw new Error('Failed to start batch directory alignment');
-    }
-
-    await readSSEStream(res);
+    // Dual-mode alignment execution
+    await executeAlignment(undefined, undefined, targetDir);
     if (!isAborted.value) {
       isComplete.value = true;
     }
   } catch (err: any) {
-    if (isAborted.value || err.name === 'AbortError') {
-      addLog('Batch directory alignment stopped by user.', 'warn');
-    } else {
-      errorMessage.value = err.message;
-      addLog(`Batch error: ${err.message}`, 'error');
+    if (!isAborted.value) {
+      errorMessage.value = err.message || String(err);
+      addLog(`Batch error: ${errorMessage.value}`, 'error');
     }
   } finally {
     isRunning.value = false;
-    currentAbortController = null;
   }
 }
 
-async function runAlignmentSSE(audioPath: string, audioUrl: string, signal?: AbortSignal): Promise<void> {
-  const response = await fetch('/api/engine/align', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      audio_path: audioPath,
-      fast: fastMode.value,
-    }),
-    signal,
-  });
+let activeEventSource: EventSource | null = null;
 
-  if (!response.ok) {
-    const errorJson = await response.json().catch(() => ({ error: response.statusText }));
-    throw new Error(errorJson.error || `Error ${response.status}`);
-  }
-
-  await readSSEStream(response, audioPath, audioUrl);
-}
-
-async function readSSEStream(response: Response, targetAudioPath?: string, targetAudioUrl?: string): Promise<void> {
-  const reader = response.body?.getReader();
-  if (!reader) throw new Error('Stream unavailable');
-
-  const decoder = new TextDecoder();
-  let streamBuffer = '';
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    streamBuffer += decoder.decode(value, { stream: true });
-    const events = streamBuffer.split('\n\n');
-    streamBuffer = events.pop() || '';
-
-    for (const rawEvent of events) {
-      const clean = rawEvent.replace(/^data:\s*/, '').trim();
-      if (!clean) continue;
-
-      try {
-        const eventObj = JSON.parse(clean);
-        handleSSEEvent(eventObj, targetAudioPath, targetAudioUrl);
-      } catch {}
+function runAlignmentBrowser(
+  audioPath?: string,
+  audioUrl?: string,
+  dirPathArg?: string,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (activeEventSource) {
+      activeEventSource.close();
+      activeEventSource = null;
     }
+    let url = `/api/engine/align?fast=${fastMode.value}`;
+    if (audioPath) url += `&audio_path=${encodeURIComponent(audioPath)}`;
+    if (dirPathArg) url += `&dir_path=${encodeURIComponent(dirPathArg)}`;
+
+    const es = new EventSource(url);
+    activeEventSource = es;
+    let hasCompleted = false;
+
+    es.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        handleAlignEvent(data, audioPath, audioUrl);
+        if (data.type === 'complete') {
+          hasCompleted = true;
+          es.close();
+          activeEventSource = null;
+          resolve();
+        } else if (data.type === 'error') {
+          es.close();
+          activeEventSource = null;
+          reject(new Error(data.message || 'Alignment error'));
+        }
+      } catch {
+        addLog(e.data, 'info');
+      }
+    };
+
+    es.onerror = () => {
+      es.close();
+      activeEventSource = null;
+      if (hasCompleted || isComplete.value) {
+        resolve();
+      } else {
+        reject(new Error(errorMessage.value || 'Alignment stream ended'));
+      }
+    };
+  });
+}
+
+function executeAlignment(
+  audioPath?: string,
+  audioUrl?: string,
+  dirPathArg?: string,
+): Promise<void> {
+  if (isTauriEnvironment()) {
+    return runAlignmentTauri(audioPath, audioUrl, dirPathArg);
+  } else {
+    return runAlignmentBrowser(audioPath, audioUrl, dirPathArg);
   }
 }
 
-function handleSSEEvent(event: any, fallbackAudioPath?: string, fallbackAudioUrl?: string) {
+/**
+ * Core alignment function using Tauri IPC (QuranCaption pattern).
+ * run.py is spawned directly by Rust. Progress arrives as 'align-event' Tauri events.
+ */
+function runAlignmentTauri(
+  audioPath?: string,
+  audioUrl?: string,
+  dirPathArg?: string,
+): Promise<void> {
+  return new Promise(async (resolve, reject) => {
+    if (alignEventUnlisten) { alignEventUnlisten(); alignEventUnlisten = null; }
+
+    const { listen } = await import('@tauri-apps/api/event');
+
+    alignEventUnlisten = await listen<any>('align-event', (event) => {
+      handleAlignEvent(event.payload, audioPath, audioUrl);
+      if (event.payload.type === 'complete') {
+        cleanup();
+        resolve();
+      } else if (event.payload.type === 'error') {
+        cleanup();
+        reject(new Error(event.payload.message || 'Alignment error'));
+      }
+    });
+
+    function cleanup() {
+      if (alignEventUnlisten) { alignEventUnlisten(); alignEventUnlisten = null; }
+    }
+
+    try {
+      await runAlign({
+        audio_path: audioPath,
+        dir_path: dirPathArg,
+        fast: fastMode.value,
+      });
+    } catch (err) {
+      cleanup();
+      reject(err);
+    }
+  });
+}
+
+function handleAlignEvent(event: any, fallbackAudioPath?: string, fallbackAudioUrl?: string) {
   if (event.type === 'start') {
     addLog(event.message, 'info');
   } else if (event.type === 'stdout') {
@@ -964,6 +995,7 @@ function handleSSEEvent(event: any, fallbackAudioPath?: string, fallbackAudioUrl
       const effPath = event.audio_path || fallbackAudioPath;
       const effUrl = event.audio_url || fallbackAudioUrl;
       projectStore.loadAlignedSurah(event.result, effPath, effUrl);
+      projectStore.currentTab.value = 'studio';
     }
   } else if (event.type === 'error') {
     errorMessage.value = event.message;
