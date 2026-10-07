@@ -356,6 +356,16 @@ Before viewing, using, distributing, or modifying any part of this repository, y
 
 **Allah subhanu guided me in this work and it is only his guidance and work from Allah subhanu , Thanks to Allah only <3 , I'm his servant**
 
-Models : https://quranlab.ai
+[QuranLab models](https://quranlab.ai)
 
-Qiraat Mapping : https://github.com/Iam-Muslim/ReciteQuran/pull/5
+[Qiraat Mapping](https://github.com/Iam-Muslim/ReciteQuran/pull/5)
+
+----------------
+
+**Elhamdule Allah  ,That victory from Allah subhanu alone**
+
+Projects using :
+
+[**QuranCaption**](https://github.com/zonetecde/QuranCaption)
+
+[**Qalun-Timing**](https://github.com/Jawad18750/qalun-timing)
