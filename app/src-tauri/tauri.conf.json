@@ -37,7 +37,7 @@
   },
   "bundle": {
     "active": true,
-    "createUpdaterArtifacts": true,
+    "createUpdaterArtifacts": false,
     "targets": [
       "deb",
       "appimage",
@@ -82,16 +82,6 @@
           "libgtk-3-0",
           "libwebkit2gtk-4.1-0"
         ]
-      }
-    }
-  },
-  "plugins": {
-    "updater": {
-      "endpoints": [
-        "https://github.com/Iam-Muslim/QuranReciteToText/releases/latest/download/latest.json"
-      ],
-      "windows": {
-        "installMode": "passive"
       }
     }
   }

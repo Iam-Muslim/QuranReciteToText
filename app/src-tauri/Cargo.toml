@@ -23,6 +23,5 @@ fix-path-env = { git = "https://github.com/tauri-apps/fix-path-env-rs" }
 tokio = { version = "1", features = ["process", "io-util", "rt-multi-thread", "fs", "net", "time"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 lazy_static = "1.4"
-tauri-plugin-updater = "2"
 
 

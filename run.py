@@ -38,51 +38,51 @@ def _bootstrap_environment() -> None:
     except Exception:
         pass
 
-    bin_dirs = [
-        _app_path / "data" / "bin",
-        _app_path / "bin",
-        _app_path.parent / "data" / "bin",
-    ]
-    for bin_dir in bin_dirs:
-        if sys.platform == "win32" and bin_dir.is_dir():
-            if hasattr(os, "add_dll_directory"):
-                try:
-                    os.add_dll_directory(str(bin_dir))
-                except Exception:
-                    pass
-            try:
-                import ctypes
-                dll_names = (
-                    "vcruntime140.dll",
-                    "vcruntime140_1.dll",
-                    "msvcp140.dll",
-                    "msvcp140_1.dll",
-                    "msvcp140_2.dll",
-                    "msvcp140_codecvt_ids.dll",
-                    "vcomp140.dll",
-                )
-                for name in dll_names:
-                    dll_file = bin_dir / name
-                    if dll_file.is_file():
-                        ctypes.CDLL(str(dll_file))
+    bin_dir = _app_path / "data" / "bin"
+    if not bin_dir.is_dir():
+        for cand in [_app_path / "bin", _app_path.parent / "data" / "bin"]:
+            if cand.is_dir():
+                bin_dir = cand
+                break
 
-                import importlib.util
-                import shutil
-                ort_spec = importlib.util.find_spec("onnxruntime")
-                if ort_spec and ort_spec.submodule_search_locations:
-                    capi_dir = Path(list(ort_spec.submodule_search_locations)[0]) / "capi"
-                    if capi_dir.is_dir():
-                        for name in dll_names:
-                            src = bin_dir / name
-                            dst = capi_dir / name
-                            if src.is_file() and not dst.is_file():
-                                try:
-                                    shutil.copy2(str(src), str(dst))
-                                except Exception:
-                                    pass
+    if sys.platform == "win32" and bin_dir.is_dir():
+        if hasattr(os, "add_dll_directory"):
+            try:
+                os.add_dll_directory(str(bin_dir))
             except Exception:
                 pass
-            break
+        try:
+            import ctypes
+            dll_names = (
+                "vcruntime140.dll",
+                "vcruntime140_1.dll",
+                "msvcp140.dll",
+                "msvcp140_1.dll",
+                "msvcp140_2.dll",
+                "msvcp140_codecvt_ids.dll",
+                "vcomp140.dll",
+            )
+            for name in dll_names:
+                dll_file = bin_dir / name
+                if dll_file.is_file():
+                    ctypes.CDLL(str(dll_file))
+
+            import importlib.util
+            import shutil
+            ort_spec = importlib.util.find_spec("onnxruntime")
+            if ort_spec and ort_spec.submodule_search_locations:
+                capi_dir = Path(list(ort_spec.submodule_search_locations)[0]) / "capi"
+                if capi_dir.is_dir():
+                    for name in dll_names:
+                        src = bin_dir / name
+                        dst = capi_dir / name
+                        if src.is_file() and not dst.is_file():
+                            try:
+                                shutil.copy2(str(src), str(dst))
+                            except Exception:
+                                pass
+        except Exception:
+            pass
 
     try:
         import data.bin.bootstrap
