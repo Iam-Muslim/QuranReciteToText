@@ -438,17 +438,17 @@ def _align_and_package_ayahs(
 
                     # 1. Primary check using raw CTC ASR time before forced alignment:
                     if (w_prev_raw_e - 0.08) <= cut <= (w_curr_raw_s + 0.08) and (mid_prev < cut < mid_curr):
-                        return (p.start_sec, p.end_sec)
+                        return (cut, p.end_sec)
 
                     # 2. Interval overlap check in raw ASR time:
                     if (p.start_sec >= w_prev_raw_e - 0.12) and (p.end_sec <= w_curr_raw_s + 0.12):
                         if mid_prev < cut < mid_curr:
-                            return (p.start_sec, p.end_sec)
+                            return (cut, p.end_sec)
 
                     # 3. Geometric fallback: cut point sits safely between the word boundaries
                     if cut > (w_prev_s + 0.04) and cut < (w_curr_e - 0.04) and (mid_prev < cut < mid_curr):
                         if (p.start_sec - 0.15) <= w_prev_e and (p.end_sec + 0.15) >= w_curr_s:
-                            return (p.start_sec, p.end_sec)
+                            return (cut, p.end_sec)
             elif pauses:
                 idx = bisect.bisect_right(pause_pts, w_curr_e + 0.50)
                 for i in range(idx - 1, -1, -1):
@@ -456,9 +456,9 @@ def _align_and_package_ayahs(
                     if pt < w_prev_s - 1.0:
                         break
                     if (w_prev_raw_e - 0.08) <= pt <= (w_curr_raw_s + 0.08) and (mid_prev < pt < mid_curr):
-                        return (pt - 0.10, pt + 0.10)
+                        return (pt, pt + 0.10)
                     if mid_prev < pt < mid_curr and pt > (w_prev_s + 0.04) and pt < (w_curr_e - 0.04):
-                        return (pt - 0.10, pt + 0.10)
+                        return (pt, pt + 0.10)
 
             return None
 
@@ -469,10 +469,10 @@ def _align_and_package_ayahs(
                     prev_w = current_chunk[-1]
                     p_bounds = _find_pause_cut(prev_w, w)
                     if p_bounds is not None:
-                        p_start, p_end = p_bounds
-                        # Enforce clean separation without merging to a single cut point
-                        if prev_w.end and prev_w.end > p_start:
-                            prev_w.end = round(p_start, 2)
+                        cut_pt, p_end = p_bounds
+                        # Enforce clean separation without premature truncation
+                        if prev_w.end and prev_w.end > cut_pt:
+                            prev_w.end = round(cut_pt, 2)
                             if prev_w.phonemes and prev_w.phonemes[-1]["end"] > prev_w.end:
                                 prev_w.phonemes[-1]["end"] = prev_w.end
 

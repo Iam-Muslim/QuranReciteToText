@@ -732,9 +732,10 @@ def align_ayah_boundaries(
         if inter_pause is not None:
             p_s = round(inter_pause.start_sec, 2)
             p_e = round(inter_pause.end_sec, 2)
+            cut_pt = round(inter_pause.optimal_cut_point, 2)
 
-            if w_last.end and w_last.end > p_s:
-                w_last.end = p_s
+            if w_last.end and w_last.end > cut_pt:
+                w_last.end = cut_pt
                 if w_last.phonemes and w_last.phonemes[-1]["end"] > w_last.end:
                     w_last.phonemes[-1]["end"] = w_last.end
 

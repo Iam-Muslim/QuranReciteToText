@@ -518,16 +518,25 @@ class CtcViterbiAligner:
                     continue
                 k_start = max(0, bisect.bisect_left(s_secs, p_s - 4.0) - 2)
                 k_end = min(n, bisect.bisect_right(s_secs, p_e + 1.0) + 2)
+                p_cut = getattr(p, "optimal_cut_point", (p_s + p_e) / 2.0)
+
+                # Locate the phoneme immediately preceding this pause
+                pre_k = None
                 for k in range(k_start, k_end):
-                    if p_s < e_secs[k] <= p_e:
-                        # Softer clamping: allow up to 1 frame (40ms) past pause start
-                        # if speech energy is still present, preventing hard truncation
-                        clamp_f = int(round((p_s / cls.frame_step) + lookahead))
-                        if 0 <= clamp_f < len(rms_db) and rms_db[clamp_f] > silence_energy_threshold:
-                            soft_end = min(e_secs[k], p_s + cls.frame_step)
-                            e_secs[k] = max(s_secs[k] + min_dur_s, soft_end)
-                        else:
-                            e_secs[k] = max(s_secs[k] + min_dur_s, p_s)
+                    if s_secs[k] < p_s and (k == n - 1 or s_secs[k + 1] >= p_s):
+                        pre_k = k
+                        break
+
+                if pre_k is not None:
+                    # Extend final phoneme (e.g. Ghunnah of Noon/Meem or Madd tail) through active speech up to pause onset
+                    if e_secs[pre_k] < p_s:
+                        e_secs[pre_k] = p_s
+                    else:
+                        e_secs[pre_k] = max(s_secs[pre_k] + min_dur_s, min(e_secs[pre_k], p_cut))
+
+                for k in range(k_start, k_end):
+                    if k != pre_k and p_s < e_secs[k] <= p_e:
+                        e_secs[k] = max(s_secs[k] + min_dur_s, min(e_secs[k], p_cut))
                     if p_s <= s_secs[k] < p_e:
                         s_secs[k] = p_e
                         if e_secs[k] <= s_secs[k]:
