@@ -50,7 +50,7 @@ from src.matching import (
     QuranWordMatcher,
     MatcherConfig,
     warmup_matching,
-    qiraatAyahMapper,
+    QiraatAyahMapper,
     QuranCountingSystem,
 )
 
@@ -514,7 +514,7 @@ class AudioPipeline:
 
         # Phase 4.1: Optional Canonical qiraat Ayah Translation (Zero-overhead bypass for Hafs)
         if qiraat and qiraat.strip().lower() != "hafs":
-            mapper = qiraatAyahMapper.load(qiraat)
+            mapper = QiraatAyahMapper.load(qiraat)
             segments = mapper.remap_segments(segments)
 
         for seg in segments:
@@ -677,7 +677,7 @@ __all__ = [
     "CtcViterbiAligner",
     "QuranWordMatcher",
     "MatcherConfig",
-    "qiraatAyahMapper",
+    "QiraatAyahMapper",
     "QuranCountingSystem",
     "PhonemeToken",
     "PauseInterval",

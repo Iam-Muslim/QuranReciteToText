@@ -1,4 +1,4 @@
-"""qiraatAyahMapper: Canonical Cross-qiraat Verse Translation & Alignment Engine.
+"""QiraatAyahMapper: Canonical Cross-qiraat Verse Translation & Alignment Engine.
 
 Translates Hafs (Kufi: 6,236 Ayahs) recitation coordinates into any of the 6 canonical
 verse-counting traditions (مدارس عد الآي) and 20 Rawis, supporting verse renumbering,
@@ -153,10 +153,10 @@ def normalize_qiraat_name(name: str) -> str:
     return "hafs"
 
 
-class qiraatAyahMapper:
+class QiraatAyahMapper:
     """Translates Hafs (Kufi) verse coordinates to any canonical counting tradition and Rawi."""
 
-    _cache: Dict[str, qiraatAyahMapper] = {}
+    _cache: Dict[str, QiraatAyahMapper] = {}
 
     def __init__(
         self,
@@ -166,6 +166,7 @@ class qiraatAyahMapper:
     ):
         self.qiraat = qiraat
         self.system = system
+        self.counting_system = system
         self.is_identity = (system == QuranCountingSystem.KUFI)
         self._data = mapping_data
 
@@ -202,7 +203,7 @@ class qiraatAyahMapper:
                     self.hafs_to_source[s][h].append(src_a)
 
     @classmethod
-    def load(cls, qiraat: str = "hafs", mappings_dir: Optional[Path | str] = None) -> qiraatAyahMapper:
+    def load(cls, qiraat: str = "hafs", mappings_dir: Optional[Path | str] = None) -> QiraatAyahMapper:
         """Loads and caches the mapper instance for the requested qiraat."""
         norm_key = normalize_qiraat_name(qiraat)
         if norm_key in cls._cache:
