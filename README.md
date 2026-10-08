@@ -105,7 +105,7 @@ python run.py
 | `--audio <path>` | Path to a single input recitation file (`.mp3`, `.wav`, `.webm`, etc.). Mutually exclusive with `--dir`. |
 | `--dir <folder>` | Path to a directory for recursive batch processing. Preserves subfolders, outputs `<stem>.json` for each file, and creates `all_surahs.json`. |
 | `--fast` | Auto-configures parallel workers for maximum CPU throughput. |
-| `--qiraat <name>` | Canonical recitation tradition (`hafs` (default), `warsh`, `qaloon`, `duri`, `susi`, `bazzi`, `qunbul`, etc.). Translates verse numbers, verse splits, and merges to the reciter's Mushaf with 0-overhead bypass for Hafs. |
+| `--qiraat <name>` | Canonical recitation tradition (`hafs` (default), `warsh`, `qaloon`, `duri`, `susi`, `bazzi`, `qunbul`, `shubah`, `hisham`, `ibn_wardan`). Translates verse numbers, verse splits, and merges to the reciter's Mushaf with 0-overhead bypass for Hafs. |
 | `--progress` | Streams single-line JSON events to stdout for frontends/UIs/APIs. |
 
 <details>

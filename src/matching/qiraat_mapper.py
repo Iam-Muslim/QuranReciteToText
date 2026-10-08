@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 # Base path for mapping tables
 _CURRENT_DIR = Path(__file__).resolve().parent
 DEFAULT_MAPPINGS_DIR = _CURRENT_DIR.parent.parent / "data" / "mappings"
+DEFAULT_SURAH_INFO_PATH = _CURRENT_DIR.parent.parent / "data" / "surah_info.json"
 
 
 class QuranCountingSystem:
@@ -176,11 +177,25 @@ class QiraatAyahMapper:
         self.source_to_hafs: Dict[int, Dict[int, List[int]]] = defaultdict(dict)
         self.hafs_to_source: Dict[int, Dict[int, List[int]]] = defaultdict(lambda: defaultdict(list))
         self.status_map: Dict[int, Dict[int, str]] = defaultdict(dict)
+        self.hafs_word_counts: Dict[Tuple[int, int], int] = {}
+        self.hafs_to_target_offset: Dict[Tuple[int, int], int] = {}
+        self.hafs_to_target_ayah: Dict[Tuple[int, int], int] = {}
 
         if self._data and not self.is_identity:
             self._init_data()
 
     def _init_data(self) -> None:
+        if DEFAULT_SURAH_INFO_PATH.exists():
+            try:
+                with open(DEFAULT_SURAH_INFO_PATH, "r", encoding="utf-8") as fp:
+                    s_info = json.load(fp)
+                for s_str, s_obj in s_info.items():
+                    s_num = int(s_str)
+                    for v_obj in s_obj.get("verses", []):
+                        self.hafs_word_counts[(s_num, v_obj.get("verse", 0))] = v_obj.get("num_words", 0)
+            except Exception as e:
+                logger.warning(f"Could not load surah_info.json for word offsets: {e}")
+
         surahs = self._data.get("surahs", {})
         for s_str, s_data in surahs.items():
             s = int(s_str)
@@ -199,8 +214,13 @@ class QiraatAyahMapper:
                     h_list = [int(a_data["hafs_ayah"])]
 
                 self.source_to_hafs[s][src_a] = h_list
-                for h in h_list:
+                for idx, h in enumerate(h_list):
                     self.hafs_to_source[s][h].append(src_a)
+                    if (s, h) not in self.hafs_to_target_ayah:
+                        self.hafs_to_target_ayah[(s, h)] = src_a
+                        # Offset inside target ayah equals sum of words in preceding Hafs ayahs
+                        offset = sum(self.hafs_word_counts.get((s, prev_h), 0) for prev_h in h_list[:idx])
+                        self.hafs_to_target_offset[(s, h)] = offset
 
     @classmethod
     def load(cls, qiraat: str = "hafs", mappings_dir: Optional[Path | str] = None) -> QiraatAyahMapper:
@@ -268,10 +288,10 @@ class QiraatAyahMapper:
 
         For Hafs: Immediately returns the original segments with 0 overhead and 0 modification.
         For other Riwayat:
-          1. Remaps Ayah numbers according to the verified counting table.
+          1. Remaps Ayah numbers according to verified counting table and calculates accurate word offsets.
           2. Handles verse splits (e.g. Al-Fatiha 6 & 7 in Madani / Basri).
           3. Merges contiguous segments that belong to the same merged target Ayah (e.g. Al-Baqarah 1 in Warsh).
-          4. Updates word locations (surah:ayah:word) and segment references.
+          4. Updates word locations (surah:ayah:word) with cumulative word offsets so indices never collide.
         """
         if self.is_identity or not segments:
             return segments
@@ -289,14 +309,14 @@ class QiraatAyahMapper:
                 remapped.extend(new_segs)
                 continue
 
-            # Standard lookup
-            src_ayahs = self.get_source_ayahs(surah, hafs_ay)
-            if not src_ayahs:
-                remapped.append(seg)
-                continue
+            # Standard lookup with cumulative word offset calculation
+            target_ay = self.hafs_to_target_ayah.get((surah, hafs_ay))
+            offset = self.hafs_to_target_offset.get((surah, hafs_ay), 0)
+            if target_ay is None:
+                src_ayahs = self.get_source_ayahs(surah, hafs_ay)
+                target_ay = src_ayahs[0] if src_ayahs else hafs_ay
 
-            target_ay = src_ayahs[0]
-            self._update_segment_ayah(seg, surah, target_ay)
+            self._update_segment_ayah(seg, surah, target_ay, word_offset=offset)
             remapped.append(seg)
 
         # Merge adjacent segments that mapped to the same target Ayah (e.g. Al-Baqarah 1 in Warsh)
@@ -308,44 +328,85 @@ class QiraatAyahMapper:
 
         return merged_segs
 
-    def _update_segment_ayah(self, seg: QuranSegment, surah: int, target_ay: int) -> None:
-        """Updates segment ayah and cascades location updates to all words."""
+    def _update_segment_ayah(self, seg: QuranSegment, surah: int, target_ay: int, word_offset: int = 0) -> None:
+        """Updates segment ayah and cascades accurate offset locations to all words and subsegments."""
         seg.ayah = target_ay
         if seg.words:
             for w_idx, w in enumerate(seg.words, 1):
                 loc = w.location
                 if loc and ":" in loc:
                     parts = loc.split(":")
-                    w_num = parts[2] if len(parts) >= 3 else str(w_idx)
-                    w.location = f"{surah}:{target_ay}:{w_num}"
+                    try:
+                        base_num = int(parts[2]) if len(parts) >= 3 else w_idx
+                    except ValueError:
+                        base_num = w_idx
+                    target_w_num = base_num + word_offset
+                    w.location = f"{surah}:{target_ay}:{target_w_num}"
                 else:
-                    w.location = f"{surah}:{target_ay}:{w_idx}"
-            seg.matched_ref = f"{surah}:{target_ay}:1-{surah}:{target_ay}:{len(seg.words)}"
+                    w.location = f"{surah}:{target_ay}:{w_idx + word_offset}"
+
+            w_first = seg.words[0].location.split(":")[2]
+            w_last = seg.words[-1].location.split(":")[2]
+            seg.matched_ref = f"{surah}:{target_ay}:{w_first}-{surah}:{target_ay}:{w_last}"
         else:
             seg.matched_ref = f"{surah}:{target_ay}:1"
+
+        if seg.sub_segments:
+            for sub in seg.sub_segments:
+                if sub.words:
+                    for w_idx, w in enumerate(sub.words, 1):
+                        loc = w.location
+                        if loc and ":" in loc:
+                            parts = loc.split(":")
+                            try:
+                                base_num = int(parts[2]) if len(parts) >= 3 else w_idx
+                            except ValueError:
+                                base_num = w_idx
+                            if parts[1] != str(target_ay):
+                                w.location = f"{surah}:{target_ay}:{base_num + word_offset}"
+                    sw_first = sub.words[0].location.split(":")[2]
+                    sw_last = sub.words[-1].location.split(":")[2]
+                    sub.words_range = f"{surah}:{target_ay}:{sw_first}-{surah}:{target_ay}:{sw_last}"
 
     def _remap_fatiha_segment(self, seg: QuranSegment) -> List[QuranSegment]:
         """Handles the canonical division of Surah Al-Fatiha in Madani / Basri traditions."""
         hafs_ay = seg.ayah
+        # In Madani/Basri traditions, Basmalah (Hafs 1) is not an Ayah of Al-Fatiha; it is opening intro
+        if hafs_ay == 1:
+            seg.ayah = 0
+            if seg.words:
+                for idx, w in enumerate(seg.words, 1):
+                    w.location = f"1:0:{idx}"
+                seg.matched_ref = f"1:0:1-1:0:{len(seg.words)}"
+            if seg.sub_segments:
+                for sub in seg.sub_segments:
+                    if sub.words:
+                        sub.words_range = f"1:0:{sub.words[0].location.split(':')[2]}-1:0:{sub.words[-1].location.split(':')[2]}"
+            return [seg]
+
         # Ayahs 2 to 6 map directly to Ayahs 1 to 5
         if 2 <= hafs_ay <= 6:
             target_ay = hafs_ay - 1
-            self._update_segment_ayah(seg, 1, target_ay)
+            self._update_segment_ayah(seg, 1, target_ay, word_offset=0)
             return [seg]
 
         # Hafs Ayah 7 splits into Warsh Ayah 6 and 7
         if hafs_ay == 7 and seg.words:
             words = seg.words
             if len(words) <= 4:
-                # Reciter only recited the first half
-                self._update_segment_ayah(seg, 1, 6)
+                # Reciter only recited the first half (صِرَاطَ الَّذِينَ أَنْعَمْتَ عَلَيْهِمْ)
+                self._update_segment_ayah(seg, 1, 6, word_offset=0)
                 return [seg]
             elif all(int(getattr(w, "location", "1:7:1").split(":")[2]) > 4 for w in words):
-                # Reciter only recited the second half
+                # Reciter only recited the second half (غَيْرِ الْمَغْضُوبِ عَلَيْهِمْ وَلَا الضَّالِّينَ)
                 for idx, w in enumerate(words, 1):
                     w.location = f"1:7:{idx}"
                 seg.ayah = 7
                 seg.matched_ref = f"1:7:1-1:7:{len(words)}"
+                if seg.sub_segments:
+                    for sub in seg.sub_segments:
+                        if sub.words:
+                            sub.words_range = f"1:7:{sub.words[0].location.split(':')[2]}-1:7:{sub.words[-1].location.split(':')[2]}"
                 return [seg]
             else:
                 # Spans both halves: Split into two segments
@@ -362,7 +423,13 @@ class QiraatAyahMapper:
                     for idx, w in enumerate(w_first, 1):
                         w.location = f"1:6:{idx}"
                     s1.matched_ref = f"1:6:1-1:6:{len(w_first)}"
-                    s1.sub_segments = None
+                    if s1.sub_segments:
+                        for sub in s1.sub_segments:
+                            sub.words = [w for w in sub.words if int(getattr(w, "location", "1:7:1").split(":")[2]) <= 4]
+                            for idx, w in enumerate(sub.words, 1):
+                                w.location = f"1:6:{idx}"
+                            if sub.words:
+                                sub.words_range = f"1:6:1-1:6:{len(sub.words)}"
                     res.append(s1)
 
                 if w_second:
@@ -374,7 +441,13 @@ class QiraatAyahMapper:
                     for idx, w in enumerate(w_second, 1):
                         w.location = f"1:7:{idx}"
                     s2.matched_ref = f"1:7:1-1:7:{len(w_second)}"
-                    s2.sub_segments = None
+                    if s2.sub_segments:
+                        for sub in s2.sub_segments:
+                            sub.words = [w for w in sub.words if int(getattr(w, "location", "1:7:5").split(":")[2]) > 4]
+                            for idx, w in enumerate(sub.words, 1):
+                                w.location = f"1:7:{idx}"
+                            if sub.words:
+                                sub.words_range = f"1:7:1-1:7:{len(sub.words)}"
                     res.append(s2)
 
                 return res if res else [seg]
@@ -397,11 +470,18 @@ class QiraatAyahMapper:
                 curr.end_time = max(curr.end_time, nxt.end_time)
                 if curr.words and nxt.words:
                     curr.words.extend(nxt.words)
-                    for w_idx, w in enumerate(curr.words, 1):
-                        w.location = f"{curr.surah_number}:{curr.ayah}:{w_idx}"
-                    curr.matched_ref = f"{curr.surah_number}:{curr.ayah}:1-{curr.surah_number}:{curr.ayah}:{len(curr.words)}"
+                elif not curr.words and nxt.words:
+                    curr.words = list(nxt.words)
+
+                if curr.words:
+                    w_first = curr.words[0].location.split(":")[2]
+                    w_last = curr.words[-1].location.split(":")[2]
+                    curr.matched_ref = f"{curr.surah_number}:{curr.ayah}:{w_first}-{curr.surah_number}:{curr.ayah}:{w_last}"
+
                 if curr.sub_segments and nxt.sub_segments:
                     curr.sub_segments.extend(nxt.sub_segments)
+                elif not curr.sub_segments and nxt.sub_segments:
+                    curr.sub_segments = list(nxt.sub_segments)
                 i += 1
             merged.append(curr)
             i += 1
