@@ -171,9 +171,10 @@ class QuranWord:
     phonemes: Optional[List[Dict[str, Any]]] = None
     raw_start: Optional[float] = None
     raw_end: Optional[float] = None
+    is_repetition: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d = {
             "word": self.word,
             "location": self.location,
             "ref": self.ref,
@@ -182,6 +183,9 @@ class QuranWord:
             "score": round(self.score, 2) if self.score is not None else 0.0,
             "phonemes": self.phonemes if self.phonemes is not None else [],
         }
+        if self.is_repetition:
+            d["is_repetition"] = True
+        return d
 
 
 def enforce_word_phoneme_monotonicity(word: 'QuranWord') -> None:
@@ -370,6 +374,7 @@ class PipelineResult:
                     "location": str(w.get("location", "")),
                     "start": round(starts[idx], 3),
                     "end": round(max(starts[idx], starts[idx + 1] if idx < len(words) - 1 else dur), 3),
+                    **({"is_repetition": True} if w.get("is_repetition") else {}),
                 }
                 for idx, w in enumerate(words)
             ]
@@ -501,12 +506,15 @@ class PipelineResult:
                     w_e = float(w.end if w.end is not None else sub.end_time) + offset_s
                     if w.score is not None:
                         scores.append(float(w.score))
-                    words_list.append({
+                    w_dict = {
                         "word": str(w.word or ""),
                         "location": str(w.location or f"{seg.surah_number}:{seg.ayah}:1"),
                         "start": max(0.0, round(w_s - sub_abs_s, 3)),
                         "end": min(sub_dur, max(0.0, round(w_e - sub_abs_s, 3))),
-                    })
+                    }
+                    if getattr(w, "is_repetition", False):
+                        w_dict["is_repetition"] = True
+                    words_list.append(w_dict)
 
                 norm_words = _normalize_words(words_list, sub_dur)
 
@@ -536,6 +544,7 @@ class PipelineResult:
                     "error": None,
                     "has_missing_words": False,
                     "potentially_undersegmented": False,
+                    **({"is_repetition": True} if getattr(sub, "is_repetition", False) else {}),
                     "words": norm_words,
                 })
 

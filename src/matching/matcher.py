@@ -462,7 +462,29 @@ def _align_and_package_ayahs(
 
             return None
 
-        for pass_words, is_rep in passes:
+        seen_locations: set[str] = set()
+
+        def _append_chunk(chunk: List[QuranWord]) -> None:
+            if not chunk:
+                return
+            # A subsegment is marked as a repetition if it contains ANY word that has already been recited earlier in this Ayah
+            is_rep_chunk = (
+                has_repeated
+                and bool(chunk)
+                and any((w.location in seen_locations) for w in chunk if w.location)
+            )
+            # Mark repetition flag on each individual word
+            for w in chunk:
+                if has_repeated and w.location and (w.location in seen_locations):
+                    w.is_repetition = True
+                else:
+                    w.is_repetition = False
+                if w.location:
+                    seen_locations.add(w.location)
+
+            sub_segs_list.append(_build_sub(chunk, is_rep_chunk))
+
+        for pass_words, _ in passes:
             current_chunk: List[QuranWord] = []
             for w in pass_words:
                 if current_chunk:
@@ -485,46 +507,13 @@ def _align_and_package_ayahs(
                         enforce_word_phoneme_monotonicity(prev_w)
                         enforce_word_phoneme_monotonicity(w)
 
-                        sub_segs_list.append(_build_sub(current_chunk, is_rep))
+                        _append_chunk(current_chunk)
                         current_chunk = []
 
                 current_chunk.append(w)
 
             if current_chunk:
-                sub_segs_list.append(_build_sub(current_chunk, is_rep))
-
-        # Determine accurate is_repetition for each subsegment:
-        # A subsegment is marked as a repetition if:
-        # 1. Trailing duplicate or subset: its words were already covered by an earlier subsegment.
-        # 2. Leading interrupted start: its words are a strict subset of a later complete subsegment that supersedes it.
-        if sub_segs_list and has_repeated and len(sub_segs_list) > 1:
-            n_subs = len(sub_segs_list)
-            word_sets = [set(w.location for w in s.words if w.location) for s in sub_segs_list]
-            is_rep_flags = [False] * n_subs
-
-            # Pass 1: Trailing duplicates and subsets (classic repeats)
-            for i in range(1, n_subs):
-                if not word_sets[i]:
-                    continue
-                for j in range(0, i):
-                    if not is_rep_flags[j] and word_sets[i].issubset(word_sets[j]):
-                        is_rep_flags[i] = True
-                        break
-
-            # Pass 2: Leading interrupted starts (where reciter stopped, then re-recited the whole phrase later)
-            for i in range(n_subs - 1):
-                if is_rep_flags[i] or not word_sets[i]:
-                    continue
-                for j in range(i + 1, n_subs):
-                    if not is_rep_flags[j] and word_sets[i].issubset(word_sets[j]) and len(word_sets[i]) < len(word_sets[j]):
-                        is_rep_flags[i] = True
-                        break
-
-            for sub, rep in zip(sub_segs_list, is_rep_flags):
-                sub.is_repetition = rep
-        elif sub_segs_list:
-            for sub in sub_segs_list:
-                sub.is_repetition = False
+                _append_chunk(current_chunk)
 
         if len(sub_segs_list) > 1 or has_repeated:
             sub_segments = sub_segs_list
