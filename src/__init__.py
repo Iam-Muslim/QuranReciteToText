@@ -263,6 +263,10 @@ class AudioPipeline:
                         "error": str(exc),
                     }), flush=True)
             finally:
+                if 'result' in locals():
+                    del result
+                if 'out_dict' in locals():
+                    del out_dict
                 del audio_pcm
                 gc.collect()
 

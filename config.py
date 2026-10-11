@@ -33,6 +33,11 @@ FRAME_RATE: float = 25.0                    # 40ms per encoder frame (25 Hz)
 FRAME_STEP: float = 1.0 / FRAME_RATE        # 0.040s
 CLIP_AUDIO_PEAKS: bool = True               # Soft guard against clipping > 1.0
 
+# Memory & Performance Optimization (On = New Way, Off = Old Way)
+OPTIMIZED_FBANK: bool = True                # True (on): Memory-efficient batched Fbank extraction; False (off): Legacy unchunked mode
+FBANK_BATCH_FRAMES: int = 4096              # Frame batch size for optimized Fbank
+
+
 
 # ==============================================================================
 # 3. PHASE 3 MATCHING & WRAPAROUND TUNING (TWEAK MATCHING HERE)

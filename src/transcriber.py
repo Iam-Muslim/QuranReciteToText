@@ -112,6 +112,39 @@ def _numpy_kaldi_fbank(
     half_diff = (frame_len - frame_shift) // 2
     padded_wave = np.pad(waveform, (half_diff, frame_len), mode="reflect")
 
+    # Optimization Toggle: True (on) uses cache-friendly batched frames; False (off) uses legacy single-array
+    use_batched = getattr(config, "OPTIMIZED_FBANK", True)
+    if use_batched:
+        batch_size = getattr(config, "FBANK_BATCH_FRAMES", 4096)
+        out = np.empty((num_frames, num_mel_bins), dtype=np.float32)
+
+        for start_f in range(0, num_frames, batch_size):
+            end_f = min(num_frames, start_f + batch_size)
+            b_count = end_f - start_f
+
+            start_samp = start_f * frame_shift
+            samp_span = (b_count - 1) * frame_shift + frame_len
+            wave_slice = padded_wave[start_samp : start_samp + samp_span]
+
+            shape = (b_count, frame_len)
+            strides = (wave_slice.strides[0] * frame_shift, wave_slice.strides[0])
+            frames = np.lib.stride_tricks.as_strided(wave_slice, shape=shape, strides=strides).copy()
+
+            frames -= np.mean(frames, axis=1, keepdims=True)
+            frames[:, 1:] -= preemphasis * frames[:, :-1]
+            frames[:, 0] -= preemphasis * frames[:, 0]
+            frames *= _CACHED_POVEY_WINDOW
+
+            fft_vals = np.fft.rfft(frames, n=n_fft, axis=1)
+            power_spectrum = (fft_vals[:, : n_fft // 2].real ** 2 + fft_vals[:, : n_fft // 2].imag ** 2)
+
+            mel_energies = np.dot(power_spectrum, _CACHED_KALDI_MEL_BANKS_T)
+            mel_energies = np.maximum(mel_energies, np.finfo(np.float32).eps)
+            out[start_f:end_f] = np.log(mel_energies).astype(np.float32)
+
+        return out
+
+    # Legacy unchunked mode (Off): allocates all frames simultaneously in a single massive array
     shape = (num_frames, frame_len)
     strides = (padded_wave.strides[0] * frame_shift, padded_wave.strides[0])
     frames = np.lib.stride_tricks.as_strided(padded_wave, shape=shape, strides=strides).copy()
