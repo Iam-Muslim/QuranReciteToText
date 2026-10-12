@@ -31,8 +31,10 @@ class PhonemeToken:
         return self.end - self.start
 
     def to_dict(self) -> Dict[str, Any]:
-        d = {"phoneme": self.phoneme, "start": round(self.start, 2), "end": round(self.end, 2)}
+        d = {"phoneme": self.phoneme, "start": round(self.start, 3), "end": round(self.end, 3)}
         if self.is_recovered: d["is_recovered"] = True
+        if self.peak_timestamp is not None: d["peak_timestamp"] = round(self.peak_timestamp, 3)
+        if self.peak_frame is not None: d["peak_frame"] = self.peak_frame
         return d
 
     def to_raw_dict(self, index: int) -> Dict[str, Any]:
@@ -189,43 +191,11 @@ class QuranWord:
 
 
 def enforce_word_phoneme_monotonicity(word: 'QuranWord') -> None:
-    """Cascades boundary adjustments through all phonemes in a word to ensure contiguity and prevent internal overlaps.
+    """No-op: Aligner Viewer strictly preserves raw acoustic phoneme timestamps directly from the aligner.
 
-    Inside a single word, continuous speech dictates that phonemes are strictly contiguous:
-    phoneme[i].start == phoneme[i-1].end, perfectly bridging [word.start, word.end] with NO gaps.
+    Zero artificial snapping, zero micro-gap bridging, zero stretching.
     """
-    if not word.phonemes or len(word.phonemes) < 2:
-        return
-    w_start = word.start if word.start is not None else 0.0
-    w_end = word.end if word.end is not None else word.phonemes[-1].get("end", 0.0)
-
-    num_p = len(word.phonemes)
-    w_dur = max(0.040 * num_p, round(w_end - w_start, 2))
-    min_dur = min(0.100, max(0.040, round(w_dur / num_p, 3)))
-
-    # 1. Forward pass: ensure contiguity within the word
-    word.phonemes[0]["start"] = round(w_start, 2)
-    cur_end = word.phonemes[0].get("end", word.phonemes[0]["start"] + min_dur)
-    word.phonemes[0]["end"] = round(max(cur_end, word.phonemes[0]["start"] + min_dur), 2)
-
-    for i in range(1, num_p):
-        word.phonemes[i]["start"] = word.phonemes[i - 1]["end"]
-        cur_end = word.phonemes[i].get("end", word.phonemes[i]["start"] + min_dur)
-        word.phonemes[i]["end"] = round(max(cur_end, word.phonemes[i]["start"] + min_dur), 2)
-
-    # 2. Pin last phoneme to word end if word.end is set and scale proportionally if needed
-    target_end = round(w_end, 2)
-    if word.phonemes[-1]["end"] != target_end and target_end > round(w_start, 2):
-        total_p_dur = word.phonemes[-1]["end"] - word.phonemes[0]["start"]
-        target_dur = target_end - word.phonemes[0]["start"]
-        if target_dur > 0 and total_p_dur > 0:
-            scale = target_dur / total_p_dur
-            cur_s = word.phonemes[0]["start"]
-            for i in range(num_p):
-                d = max(0.030, (word.phonemes[i]["end"] - word.phonemes[i]["start"]) * scale)
-                word.phonemes[i]["start"] = round(cur_s, 2)
-                word.phonemes[i]["end"] = round(cur_s + d, 2) if i < num_p - 1 else target_end
-                cur_s = word.phonemes[i]["end"]
+    return
 
 
 @dataclass(slots=True)
@@ -343,9 +313,6 @@ class PipelineResult:
     pause_intervals: List[PauseInterval] = field(default_factory=list)
     mfa_results: Optional[List[Any]] = None
 
-    def to_output_dict(self) -> Dict[str, Any]:
-        return {"total_ayahs": len(self.segments), "ayahs": [s.to_dict() for s in self.segments]}
-
     def to_qurancaption_response(
         self,
         offset_s: float = 0.0,
@@ -356,29 +323,6 @@ class PipelineResult:
         Extracts intro segments (Isti'adha/Basmala) and transforms each Ayah's
         sub-segments into individual timeline segments with normalized relative word timings.
         """
-        def _normalize_words(words: List[Dict[str, Any]], duration: float) -> List[Dict[str, Any]]:
-            if not words:
-                return []
-            dur = max(0.0, duration)
-            prev = 0.0
-            starts = []
-            for idx, w in enumerate(words):
-                s = 0.0 if idx == 0 else float(w.get("start", 0.0))
-                clamped = max(prev, min(dur, s))
-                starts.append(clamped)
-                prev = clamped
-
-            return [
-                {
-                    "word": str(w.get("word", "")),
-                    "location": str(w.get("location", "")),
-                    "start": round(starts[idx], 3),
-                    "end": round(max(starts[idx], starts[idx + 1] if idx < len(words) - 1 else dur), 3),
-                    **({"is_repetition": True} if w.get("is_repetition") else {}),
-                }
-                for idx, w in enumerate(words)
-            ]
-
         raw_segments: List[Dict[str, Any]] = []
 
         def _process_intro_dict(intro_d: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -447,15 +391,17 @@ class PipelineResult:
                     w_d = w if isinstance(w, dict) else (w.to_dict() if hasattr(w, "to_dict") else vars(w))
                     ws = float(w_d.get("start", g_abs_s)) + offset_s
                     we = float(w_d.get("end", g_abs_e)) + offset_s
-                    w_list.append({
+                    w_dict = {
                         "word": str(w_d.get("word", "")),
                         "location": str(w_d.get("location", "1:1:1")),
                         "start": max(0.0, round(ws - g_abs_s, 3)),
                         "end": min(g_dur, max(0.0, round(we - g_abs_s, 3))),
-                    })
+                    }
+                    if w_d.get("phonemes"):
+                        w_dict["phonemes"] = w_d["phonemes"]
+                    w_list.append(w_dict)
 
-                norm_words = _normalize_words(w_list, g_dur)
-                text = " ".join(w["word"] for w in norm_words if w.get("word"))
+                text = " ".join(w["word"] for w in w_list if w.get("word"))
                 intro_segs.append({
                     "segment": 0,
                     "time_from": g_abs_s,
@@ -468,7 +414,7 @@ class PipelineResult:
                     "error": None,
                     "has_missing_words": False,
                     "potentially_undersegmented": False,
-                    "words": norm_words,
+                    "words": w_list,
                 })
             return intro_segs
 
@@ -478,7 +424,7 @@ class PipelineResult:
             if intro and isinstance(intro, dict) and intro.get("words"):
                 raw_segments.extend(_process_intro_dict(intro))
 
-        # 2. Extract Ayahs and Sub-segments
+        # 2. Extract Ayahs and Sub-segments with pure acoustic word and phoneme timings
         for seg in self.segments:
             sub_segments = seg.sub_segments or [
                 AyahSubSegment(
@@ -512,24 +458,26 @@ class PipelineResult:
                         "start": max(0.0, round(w_s - sub_abs_s, 3)),
                         "end": min(sub_dur, max(0.0, round(w_e - sub_abs_s, 3))),
                     }
+                    if getattr(w, "phonemes", None):
+                        w_dict["phonemes"] = w.phonemes
+                    if getattr(w, "score", None) is not None:
+                        w_dict["score"] = round(float(w.score), 2)
                     if getattr(w, "is_repetition", False):
                         w_dict["is_repetition"] = True
                     words_list.append(w_dict)
 
-                norm_words = _normalize_words(words_list, sub_dur)
-
-                if norm_words and norm_words[0].get("location") and norm_words[-1].get("location"):
-                    ref_from = norm_words[0]["location"]
-                    ref_to = norm_words[-1]["location"]
-                    matched_text = " ".join(w["word"] for w in norm_words if w.get("word"))
+                if words_list and words_list[0].get("location") and words_list[-1].get("location"):
+                    ref_from = words_list[0]["location"]
+                    ref_to = words_list[-1]["location"]
+                    matched_text = " ".join(w["word"] for w in words_list if w.get("word"))
                 elif sub.words_range:
                     wr = str(sub.words_range)
                     ref_from, ref_to = wr.split("-", 1) if "-" in wr else (wr, wr)
-                    matched_text = " ".join(w["word"] for w in norm_words if w.get("word")) or sub.text
+                    matched_text = " ".join(w["word"] for w in words_list if w.get("word")) or sub.text
                 else:
                     ref_str = str(seg.matched_ref or f"{seg.surah_number}:{seg.ayah}:1")
                     ref_from, ref_to = ref_str.split("-", 1) if "-" in ref_str else (ref_str, ref_str)
-                    matched_text = " ".join(w["word"] for w in norm_words if w.get("word")) or sub.text
+                    matched_text = " ".join(w["word"] for w in words_list if w.get("word")) or sub.text
 
                 conf = round(sum(scores) / max(1, len(scores)), 3) if scores else 1.0
 
@@ -545,22 +493,13 @@ class PipelineResult:
                     "has_missing_words": False,
                     "potentially_undersegmented": False,
                     **({"is_repetition": True} if getattr(sub, "is_repetition", False) else {}),
-                    "words": norm_words,
+                    "words": words_list,
                 })
 
-        # 3. Sort segments by time_from and eliminate overlaps
+        # 3. Sort segments by time_from
         raw_segments.sort(key=lambda s: s["time_from"])
 
-        for i in range(len(raw_segments) - 1):
-            curr_seg = raw_segments[i]
-            next_seg = raw_segments[i + 1]
-            if curr_seg["time_to"] > next_seg["time_from"]:
-                curr_seg["time_to"] = next_seg["time_from"]
-                dur = max(0.0, round(curr_seg["time_to"] - curr_seg["time_from"], 3))
-                if curr_seg.get("words"):
-                    curr_seg["words"] = _normalize_words(curr_seg["words"], dur)
-
-        # 4. Filter out any zero duration segments & re-index 1-based
+        # 4. Filter out any zero duration segments & re-index 1-based (NO artificial timing alteration)
         raw_segments = [s for s in raw_segments if s["time_to"] > s["time_from"]]
         for idx, seg in enumerate(raw_segments, start=start_segment_idx):
             seg["segment"] = idx

@@ -10,6 +10,7 @@ import os
 import json
 import bisect
 import logging
+import re
 from dataclasses import dataclass
 from typing import Optional, List, Dict, Any, Tuple
 from collections import defaultdict
@@ -23,7 +24,6 @@ from src.models import (
     QuranWord,
     QuranSegment,
     AyahSubSegment,
-    enforce_word_phoneme_monotonicity,
 )
 from src.matching.phonetics import (
     get_sub_cost_table,
@@ -75,38 +75,125 @@ def _build_qword(rw: RefWord, tokens: List[PhonemeToken], score: float) -> Quran
         word=rw.uthmani,
         location=rw.location,
         ref=rw.phoneme,
-        start=round(tokens[0].start, 2),
-        end=round(tokens[-1].end, 2),
+        start=round(tokens[0].start, 3),
+        end=round(tokens[-1].end, 3),
         score=round(score, 2),
         phonemes=[t.to_dict() for t in tokens],
         raw_start=round(r_start, 3),
         raw_end=round(r_end, 3),
     )
-    enforce_word_phoneme_monotonicity(qw)
     return qw
 
 
-# Tajweed cross-word assimilation rules: (category, recognizable_suffixes)
-_TAJWEED_BRIDGE_RULES = (
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAJWEED CROSS-WORD BOUNDARY MERGE RULES (OPTION B: NEURAL POSTERIOR CROSSOVER)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_TASHKEEL_RE = re.compile(r"[\u064b-\u065f\u0670\u06d6-\u06ed]")
+_TANWEEN_RE = re.compile(r"[\u064b\u064c\u064d\u06ed\u06e2]")
+
+
+def _strip_tashkeel(s: str) -> str:
+    """Strips Arabic diacritics, tanween, and Quranic recitation marks."""
+    return _TASHKEEL_RE.sub("", s).strip()
+
+
+_TAJWEED_REF_RULES = (
     ("ghunnah", ("مم", "نن", "وو", "يي")),
     ("bila_ghunnah", ("لل", "رر", "ل", "ر")),
-    ("ghunnah", ("۾",)),  # Iqlab
-    ("mutajanisayn", ("ط", "ت", "ذ", "د", "و", "ك", "ق", "ب", "ث")),
+    ("ghunnah", ("۾۾۾", "۾")),
+    ("mutajanisayn", ("ط", "ت", "ذ", "د", "ك", "ق", "ب", "ث", "ف", "ج", "س", "ش", "ص", "ض", "ظ")),
 )
 
 
-def _repair_tajweed_boundary_bridges(words: List[QuranWord]) -> None:
-    """Repairs cross-word Tajweed boundary transitions where bridge phonemes were absorbed into the following word.
+def _detect_tajweed_merge_candidate(
+    w1: QuranWord,
+    w2: QuranWord,
+) -> Optional[Tuple[str, str, str]]:
+    """Detects whether w1 and w2 form a Tajweed phonetic merge boundary.
 
-    Covers all Quranic boundary assimilation phenomena:
-    - Idgham with Ghunnah (Meem, Noon, Waw, Yaa)
-    - Idgham Shafawi (Meem Sakinah into Meem)
-    - Idgham without Ghunnah (Lam, Raa)
-    - Idgham Mutajanisayn & Mutamathilayn (Ta into Taa, Waw into Waw, etc.)
-    - Iqlab (Noon/Tanween into Meem before Baa)
+    Returns (category, bridge_phone, target_char) or None.
+    Handles:
+    - Tanween / Nun Sakinah assimilation (Idgham with Ghunnah, Bila Ghunnah, Iqlab)
+    - Same-letter assimilation (Idgham Mutamathilayn: last letter of w1 == first letter of w2)
+    - Close letters assimilation (Idgham Mutajanisayn / Mutaqaribayn)
+    """
+    w1_ref = w1.ref or ""
+    w2_ref = w2.ref or ""
+    w1_matched_str = "".join(p.get("phoneme", "") for p in (w1.phonemes or []))
+    w2_first_ph = w2.phonemes[0] if w2.phonemes else {}
+    w2_first_str = w2_first_ph.get("phoneme", "")
+
+    # 1. Reference Phoneme Assimilation Suffixes (from ordered_quran_phonemes reference data)
+    for cat, suffixes in _TAJWEED_REF_RULES:
+        for suf in suffixes:
+            if w1_ref.endswith(suf) or (suf in ("۾", "۾۾۾") and "۾" in w1_ref):
+                target_char = "م" if "۾" in suf else suf[0]
+                if not w1_matched_str.endswith(target_char):
+                    if w2_first_str.startswith(target_char) or w2_ref.startswith(target_char):
+                        bridge_phone = "مم" if "۾" in suf else suf
+                        return cat, bridge_phone, target_char
+
+    # 2. Same-Letter Merges (Idgham Mutamathilayn: last letter of w1 == first letter of w2)
+    if w1.word and w2.word:
+        clean1 = _strip_tashkeel(w1.word)
+        clean2 = _strip_tashkeel(w2.word)
+        if clean1 and clean2:
+            last1 = clean1[-1]
+            first2 = clean2[0]
+            if last1 == first2 and last1 not in ("ا", "ى", "و", "ي"):
+                if not w1_matched_str.endswith(last1):
+                    if w2_first_str.startswith(last1) or w2_ref.startswith(last1):
+                        cat = "ghunnah" if last1 in ("م", "ن") else "mutamathilayn"
+                        bridge_phone = "مم" if last1 == "م" else ("نن" if last1 == "ن" else last1)
+                        return cat, bridge_phone, last1
+
+    # 3. Tanween Word Merges from Mushaf Text (Idgham / Iqlab)
+    if w1.word and w2.word:
+        has_tanween = bool(_TANWEEN_RE.search(w1.word))
+        clean2 = _strip_tashkeel(w2.word)
+        if has_tanween and clean2:
+            first2 = clean2[0]
+            if first2 in ("ي", "ن", "م", "و"):
+                target_char = first2
+                bridge_phone = first2 * 2 if first2 in ("م", "ن", "و", "ي") else first2
+                if not w1_matched_str.endswith(target_char):
+                    if w2_first_str.startswith(target_char) or w2_ref.startswith(target_char):
+                        return "ghunnah", bridge_phone, target_char
+            elif first2 in ("ل", "ر"):
+                target_char = first2
+                bridge_phone = first2
+                if not w1_matched_str.endswith(target_char):
+                    if w2_first_str.startswith(target_char) or w2_ref.startswith(target_char):
+                        return "bila_ghunnah", bridge_phone, target_char
+            elif first2 == "ب" or "\u06e2" in w1.word:  # Iqlab
+                target_char = "م"
+                bridge_phone = "مم"
+                if not w1_matched_str.endswith("م"):
+                    if w2_first_str.startswith("م") or "م" in w2_first_str or w1_ref.endswith("مم") or "۾" in w1_ref:
+                        return "ghunnah", bridge_phone, target_char
+
+    return None
+
+
+def _repair_tajweed_boundary_bridges(words: List[QuranWord]) -> None:
+    """Option B: Neural Posterior Crossover boundary repair for merged Tanween and same-letter words.
+
+    In continuous recitation (Wasl), when Tanween or identical/assimilating consonants merge
+    across word boundaries without an acoustic pause, the acoustic model emits a single sustained
+    geminate/nasal token. JumpDTW assigns that entire token to Word 2, cutting Word 1 off prematurely.
+
+    This function locates the exact acoustic crossover frame on the neural encoder 40ms grid (25 Hz)
+    using the posterior emission peak (peak_timestamp) and mechanical release timing:
+    - Word 1 holds the consonant through its acoustic peak (Tanween coda / geminate occlusion).
+    - Word 2 releases into its vocalic body starting at the crossover frame (T_trans).
+    - If the reciter paused (acoustic gap > 0.08s), NO merge is performed (natural Waqf preserved).
+    - Strictly monotonic, zero artificial 80/20 guesswork, anchored to neural posterior peaks.
     """
     if len(words) < 2:
         return
+
+    fs = 0.040  # 40ms acoustic encoder frame step (25 Hz Zipformer/CTC grid)
 
     for i in range(len(words) - 1):
         w1 = words[i]
@@ -117,71 +204,78 @@ def _repair_tajweed_boundary_bridges(words: List[QuranWord]) -> None:
         if w1.end is None or w2.start is None:
             continue
 
-        # Connected speech check: only split if there is no significant acoustic pause (Waqf)
+        # Connected speech check: if acoustic gap > 0.08s (80ms), speaker paused (Waqf) -> DO NOT MERGE!
         gap = w2.start - w1.end
         if gap > 0.08:
             continue
 
-        w1_ref = w1.ref or ""
-        w1_matched_str = "".join(p.get("phoneme", "") for p in w1.phonemes)
+        candidate = _detect_tajweed_merge_candidate(w1, w2)
+        if not candidate:
+            continue
+
+        cat, bridge_phone, target_char = candidate
+
         w2_first_ph = w2.phonemes[0]
-        w2_first_str = w2_first_ph.get("phoneme", "")
+        ph_start = w2_first_ph.get("start", w2.start)
+        ph_end = w2_first_ph.get("end", w2.start)
+        dur = ph_end - ph_start
 
-        bridge_cat = None
-        bridge_phone = None
+        # Require at least 2 encoder frames (80ms) to split into hold + release
+        if dur < 0.080:
+            continue
 
-        for cat, suffixes in _TAJWEED_BRIDGE_RULES:
-            for suf in suffixes:
-                if w1_ref.endswith(suf) or (suf == "۾" and "۾" in w1_ref):
-                    target_char = "م" if suf == "۾" else suf[0]
-                    if not w1_matched_str.endswith(target_char):
-                        if w2_first_str.startswith(target_char):
-                            bridge_cat = cat
-                            bridge_phone = "مم" if suf == "۾" else suf
-                            break
-            if bridge_cat:
-                break
+        # Release timing: 2 frames (80ms) for longer geminates (>= 160ms), 1 frame (40ms) for shorter
+        release_frames = 2 if dur >= 0.160 else 1
+        release_time = ph_end - release_frames * fs
 
-        if bridge_cat and bridge_phone:
-            ph_start = w2_first_ph.get("start", w2.start)
-            ph_end = w2_first_ph.get("end", w2.start)
-            dur = ph_end - ph_start
+        # Neural posterior peak anchor
+        pk = w2_first_ph.get("peak_timestamp")
+        if pk is None and w2_first_ph.get("peak_frame") is not None:
+            pk = w2_first_ph["peak_frame"] * fs
 
-            # Require minimum duration (at least 0.12s) to split
-            if dur >= 0.12:
-                # Dynamic tempo-scaled release duration:
-                # - Ghunnah: 80-85% to Word 1 (Tanween hold), 15-20% to Word 2 (release into vowel)
-                # - Bila Ghunnah: 60% closure to Word 1, 40% release to Word 2
-                # - Mutajanisayn: 65% mechanical closure to Word 1, 35% burst to Word 2
-                rel_ratio = 0.20 if bridge_cat == "ghunnah" else (0.40 if bridge_cat == "bila_ghunnah" else 0.35)
-                max_rel = 0.16 if bridge_cat != "mutajanisayn" else 0.14
-                min_rel = 0.08 if bridge_cat == "ghunnah" else 0.06
-                rel = max(min_rel, min(max_rel, rel_ratio * dur))
+        if pk is not None and (ph_start + fs <= pk <= ph_end - fs):
+            # Hold extends through peak; transition begins at release point
+            t_cand = max(pk, release_time)
+        else:
+            t_cand = release_time
 
-                # Align exactly to the 40ms acoustic encoder frame grid (25 Hz)
-                raw_bound = ph_end - rel
-                max_frames = max(1, int((dur - 0.040) / 0.040))
-                n_frames = max(1, min(max_frames, round((raw_bound - ph_start) / 0.040)))
-                mid_point = round(ph_start + n_frames * 0.040, 2)
+        # Clamp candidate to ensure at least 1 frame for Word 1 hold and 1 frame for Word 2 release
+        t_cand = min(ph_end - fs, max(ph_start + fs, t_cand))
 
-                # Ensure strict monotonic contiguity with previous phoneme
-                b_start = max(w1.phonemes[-1].get("end", ph_start), ph_start)
+        # Quantize exactly to the 40ms encoder frame grid relative to ph_start
+        total_frames = max(2, int(round(dur / fs)))
+        n_frames = int(round((t_cand - ph_start) / fs))
+        n_frames = max(1, min(total_frames - 1, n_frames))
+        mid_point = round(ph_start + n_frames * fs, 3)
 
-                # Assign closing bridge phoneme to w1
-                w1.phonemes.append({
-                    "phoneme": bridge_phone,
-                    "start": round(b_start, 2),
-                    "end": mid_point,
-                    "is_assimilated_bridge": True,
-                })
-                w1.end = mid_point
+        # Monotonic start for bridge phoneme
+        b_start = max(w1.phonemes[-1].get("end", ph_start), ph_start)
 
-                # Update w2's first phoneme and start
-                w2_first_ph["start"] = mid_point
-                w2.start = mid_point
+        # 1. Assign closing bridge phoneme to Word 1
+        bridge_token: Dict[str, Any] = {
+            "phoneme": bridge_phone,
+            "start": round(b_start, 3),
+            "end": mid_point,
+            "is_assimilated_bridge": True,
+        }
+        if pk is not None:
+            bridge_token["peak_timestamp"] = round(min(mid_point, max(b_start, pk)), 3)
 
-                enforce_word_phoneme_monotonicity(w1)
-                enforce_word_phoneme_monotonicity(w2)
+        w1.phonemes.append(bridge_token)
+        w1.end = mid_point
+        if w1.raw_end is not None:
+            w1.raw_end = max(w1.raw_end, mid_point)
+
+        # 2. Update Word 2's starting phoneme and start bounds
+        w2_first_ph["start"] = mid_point
+        if "raw_start" in w2_first_ph and w2_first_ph["raw_start"] is not None:
+            w2_first_ph["raw_start"] = mid_point
+        if w2_first_ph.get("peak_timestamp") is not None and w2_first_ph["peak_timestamp"] < mid_point:
+            w2_first_ph["peak_timestamp"] = mid_point
+
+        w2.start = mid_point
+        if w2.raw_start is not None:
+            w2.raw_start = mid_point
 
 
 def _align_and_package_ayahs(
@@ -491,22 +585,6 @@ def _align_and_package_ayahs(
                     prev_w = current_chunk[-1]
                     p_bounds = _find_pause_cut(prev_w, w)
                     if p_bounds is not None:
-                        cut_pt, p_end = p_bounds
-                        # Enforce clean separation without premature truncation
-                        if prev_w.end and prev_w.end > cut_pt:
-                            prev_w.end = round(cut_pt, 2)
-                            if prev_w.phonemes and prev_w.phonemes[-1]["end"] > prev_w.end:
-                                prev_w.phonemes[-1]["end"] = prev_w.end
-
-                        if w.start and w.start < p_end:
-                            w.start = round(p_end, 2)
-                            if w.phonemes and w.phonemes[0]["start"] < w.start:
-                                w.phonemes[0]["start"] = w.start
-
-                        # Cascade monotonic fix through all phonemes in boundary words
-                        enforce_word_phoneme_monotonicity(prev_w)
-                        enforce_word_phoneme_monotonicity(w)
-
                         _append_chunk(current_chunk)
                         current_chunk = []
 

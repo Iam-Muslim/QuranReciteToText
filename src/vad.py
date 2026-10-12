@@ -35,7 +35,7 @@ from config import (
     VAD_MAX_PAD_S,
     VAD_PREROLL_S,
 )
-from src.models import PauseInterval, QuranWord, QuranSegment, enforce_word_phoneme_monotonicity
+from src.models import PauseInterval, QuranWord, QuranSegment
 
 logger = logging.getLogger(__name__)
 
@@ -730,26 +730,9 @@ def align_ayah_boundaries(
                 break
 
         if inter_pause is not None:
-            p_s = round(inter_pause.start_sec, 2)
-            p_e = round(inter_pause.end_sec, 2)
             cut_pt = round(inter_pause.optimal_cut_point, 2)
-
-            if w_last.end and w_last.end > cut_pt:
-                w_last.end = cut_pt
-                if w_last.phonemes and w_last.phonemes[-1]["end"] > w_last.end:
-                    w_last.phonemes[-1]["end"] = w_last.end
-
-            if w_first.start and w_first.start < p_e:
-                w_first.start = p_e
-                if w_first.phonemes and w_first.phonemes[0]["start"] < w_first.start:
-                    w_first.phonemes[0]["start"] = w_first.start
-
-            # Cascade monotonic fix through all phonemes in boundary words
-            enforce_word_phoneme_monotonicity(w_last)
-            enforce_word_phoneme_monotonicity(w_first)
-
-            seg_prev.end_time = round(w_last.end or seg_prev.end_time, 2)
-            seg_next.start_time = round(w_first.start or seg_next.start_time, 2)
+            seg_prev.end_time = round(max(w_last.end or 0.0, cut_pt), 2)
+            seg_next.start_time = round(min(w_first.start or inter_pause.end_sec, inter_pause.end_sec), 2)
             if seg_prev.sub_segments:
                 seg_prev.sub_segments[-1].end_time = seg_prev.end_time
             if seg_next.sub_segments:

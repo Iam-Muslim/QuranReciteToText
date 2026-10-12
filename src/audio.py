@@ -60,12 +60,16 @@ def _ffmpeg_pipe(source: str | bytes, sample_rate: int) -> np.ndarray:
         "-vn", "-sn", "-dn", "-f", "f32le", "-ac", "1",
         "-ar", str(sample_rate), "-",
     ]
+    popen_kwargs = {}
+    if os.name == "nt":
+        popen_kwargs["creationflags"] = 0x08000000
     pipe = subprocess.Popen(
         cmd,
         stdin=subprocess.PIPE if is_bytes else None,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
         bufsize=2 * 1024 * 1024,
+        **popen_kwargs,
     )
     raw, _ = pipe.communicate(input=source if is_bytes else None)
     if pipe.returncode == 0 and len(raw) > 0:
