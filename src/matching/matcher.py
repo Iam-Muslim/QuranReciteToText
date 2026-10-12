@@ -121,6 +121,7 @@ def _detect_tajweed_merge_candidate(
     w1_ref = w1.ref or ""
     w2_ref = w2.ref or ""
     w1_matched_str = "".join(p.get("phoneme", "") for p in (w1.phonemes or []))
+    w1_clean_str = _strip_tashkeel(w1_matched_str)
     w2_first_ph = w2.phonemes[0] if w2.phonemes else {}
     w2_first_str = w2_first_ph.get("phoneme", "")
 
@@ -129,7 +130,7 @@ def _detect_tajweed_merge_candidate(
         for suf in suffixes:
             if w1_ref.endswith(suf) or (suf in ("۾", "۾۾۾") and "۾" in w1_ref):
                 target_char = "م" if "۾" in suf else suf[0]
-                if not w1_matched_str.endswith(target_char):
+                if not w1_clean_str.endswith(target_char):
                     if w2_first_str.startswith(target_char) or w2_ref.startswith(target_char):
                         bridge_phone = "مم" if "۾" in suf else suf
                         return cat, bridge_phone, target_char
@@ -142,7 +143,7 @@ def _detect_tajweed_merge_candidate(
             last1 = clean1[-1]
             first2 = clean2[0]
             if last1 == first2 and last1 not in ("ا", "ى", "و", "ي"):
-                if not w1_matched_str.endswith(last1):
+                if not w1_clean_str.endswith(last1):
                     if w2_first_str.startswith(last1) or w2_ref.startswith(last1):
                         cat = "ghunnah" if last1 in ("م", "ن") else "mutamathilayn"
                         bridge_phone = "مم" if last1 == "م" else ("نن" if last1 == "ن" else last1)
@@ -157,19 +158,19 @@ def _detect_tajweed_merge_candidate(
             if first2 in ("ي", "ن", "م", "و"):
                 target_char = first2
                 bridge_phone = first2 * 2 if first2 in ("م", "ن", "و", "ي") else first2
-                if not w1_matched_str.endswith(target_char):
+                if not w1_clean_str.endswith(target_char):
                     if w2_first_str.startswith(target_char) or w2_ref.startswith(target_char):
                         return "ghunnah", bridge_phone, target_char
             elif first2 in ("ل", "ر"):
                 target_char = first2
                 bridge_phone = first2
-                if not w1_matched_str.endswith(target_char):
+                if not w1_clean_str.endswith(target_char):
                     if w2_first_str.startswith(target_char) or w2_ref.startswith(target_char):
                         return "bila_ghunnah", bridge_phone, target_char
             elif first2 == "ب" or "\u06e2" in w1.word:  # Iqlab
                 target_char = "م"
                 bridge_phone = "مم"
-                if not w1_matched_str.endswith("م"):
+                if not w1_clean_str.endswith("م"):
                     if w2_first_str.startswith("م") or "م" in w2_first_str or w1_ref.endswith("مم") or "۾" in w1_ref:
                         return "ghunnah", bridge_phone, target_char
 

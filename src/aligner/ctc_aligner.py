@@ -7,7 +7,6 @@ canonical Tajweed sonorant handling, adaptive Viterbi trellising, and JIT-accele
 from __future__ import annotations
 
 import math
-import bisect
 from typing import Optional, List, Dict, Tuple
 import numpy as np
 
@@ -25,9 +24,6 @@ from src.models import PhonemeToken, PauseInterval
 _MIN_PHONEME_DURATION_S = FRAME_STEP
 _MIN_PHONEME_DURATION_FRAMES = 1.0
 
-# Essential Tajweed sonorant roots for substring matching (covers all lengths 2-6 and geminates)
-_TAJWEED_SONORANTS = ("اا", "وو", "يي", "مم", "نن", "ں", "۾", "ۥ", "ۦ")
-
 try:
     from numba import njit
 except ImportError:
@@ -35,29 +31,6 @@ except ImportError:
         def decorator(func):
             return func
         return decorator
-
-
-@njit(fastmath=True, cache=True)
-def _fast_rms_db(pcm: np.ndarray, frame_samples: int, n_frames: int) -> np.ndarray:
-    """Single-pass vectorized RMS energy (dB) directly from PCM audio buffer."""
-    rms_db = np.empty(n_frames, dtype=np.float32)
-    inv_fs = 1.0 / frame_samples
-    pcm_len = len(pcm)
-
-    for i in range(n_frames):
-        offset = i * frame_samples
-        if offset >= pcm_len:
-            rms_db[i] = -60.0
-            continue
-        count = min(frame_samples, pcm_len - offset)
-        sq_sum = 0.0
-        for j in range(count):
-            s = pcm[offset + j]
-            sq_sum += s * s
-        rms = np.sqrt(sq_sum * inv_fs + 1e-12)
-        rms_db[i] = 20.0 * np.log10(rms)
-
-    return rms_db
 
 
 @njit(fastmath=True, cache=True)
@@ -213,7 +186,6 @@ def warmup_aligner_jit() -> None:
         s_b = np.zeros(2, dtype=np.int32)
         bt, vp = _ctc_viterbi_forward(lp, s_arr, sk_m, s_b, 2, 3, 3, 250, 0.5)
         _fast_backtrack_and_extract(bt, s_b, vp, lp, np.array([1], dtype=np.int32), 2, 3, 3, 1)
-        _fast_rms_db(np.zeros(640, dtype=np.float32), 640, 1)
     except Exception:
         pass
 
@@ -347,101 +319,61 @@ class CtcViterbiAligner:
                 raw_starts[k] = peak_frames[k]
                 raw_ends[k] = peak_frames[k]
 
-        # 6. Direct Viterbi Path Extraction (Zero heuristic backward scanning, zero artificial stretching)
+        # 6. Direct Viterbi Path Extraction with Acoustic Grounding
         min_dur_s = _MIN_PHONEME_DURATION_S
         min_dur_f = _MIN_PHONEME_DURATION_FRAMES
 
         token_starts = np.zeros(n, dtype=np.float64)
         token_ends = np.zeros(n, dtype=np.float64)
-        is_silence_gap = np.zeros(n, dtype=bool)
 
-        # First token onset: pure Viterbi start
+        # First token onset: anchor to exact acoustic speech onset from Viterbi path
         token_starts[0] = float(max(0, raw_starts[0]))
 
-        p_starts = [p.start_sec for p in pause_intervals] if pause_intervals else []
-        num_pauses = len(p_starts)
-
-        # 7. Viterbi Path Boundaries across Tokens
+        # 7. Exact Acoustic Boundaries across Tokens
         for k in range(1, n):
             gap_start = int(raw_ends[k - 1] + 1)
             gap_end = int(raw_starts[k] - 1)
-            curr_pk = int(peak_frames[k])
-            prev_pk = int(peak_frames[k - 1])
-
             gap_s_sec = gap_start * cls.frame_step
             gap_e_sec = (gap_end + 1) * cls.frame_step
 
             # Check: confirmed VAD pause overlap (Waqf)
-            has_vad_pause = False
-            if num_pauses > 0:
-                p_idx = bisect.bisect_right(p_starts, gap_e_sec)
-                for i in range(p_idx - 1, -1, -1):
-                    p = pause_intervals[i]
-                    if p.start_sec < gap_s_sec - 15.0:
-                        break
-                    overlap_s = max(gap_s_sec, p.start_sec)
-                    overlap_e = min(gap_e_sec, p.end_sec)
-                    if overlap_e - overlap_s >= 0.05 or (overlap_e > overlap_s and p.duration_sec >= 0.15):
-                        has_vad_pause = True
-                        break
-
-            # A true silence gap: ONLY confirmed acoustic VAD pause (Waqf)
-            # Normal CTC blank transitions in continuous connected speech are NOT silence
-            has_silence = has_vad_pause
-
-            if has_silence:
-                is_silence_gap[k] = True
-                token_ends[k - 1] = max(token_starts[k - 1] + min_dur_f, float(gap_start))
-                token_starts[k] = float(raw_starts[k])
-            else:
-                # Continuous connected speech: find exact neural posterior crossover between phonemes
-                t_prev = int(token_ids[k - 1])
-                t_curr = int(token_ids[k])
-                boundary = -1
-
-                scan_lo = max(0, min(gap_start, prev_pk + 1))
-                scan_hi = min(len(lp), max(raw_starts[k] + 1, curr_pk))
-                if lp is not None and scan_hi > scan_lo:
-                    for f in range(scan_lo, scan_hi):
-                        if lp[f, t_curr] >= lp[f, t_prev]:
-                            boundary = f
+            matched_pause = None
+            if pause_intervals:
+                for p in pause_intervals:
+                    if p.start_sec <= gap_e_sec and p.end_sec >= gap_s_sec:
+                        overlap = min(gap_e_sec, p.end_sec) - max(gap_s_sec, p.start_sec)
+                        if overlap >= 0.06 or p.duration_sec >= 0.15:
+                            matched_pause = p
                             break
 
-                if boundary == -1:
-                    boundary = int(round((gap_start + raw_starts[k]) / 2.0)) if gap_end >= gap_start else raw_starts[k]
-
-                # Peak-frame safety constraint: boundary must strictly separate the two peaks
-                if curr_pk > prev_pk + 1:
-                    boundary = max(boundary, prev_pk + 1)
-                    boundary = min(boundary, curr_pk)
-
-                b_float = float(boundary)
-                token_ends[k - 1] = max(token_starts[k - 1] + min_dur_f, b_float)
+            if matched_pause is not None:
+                p_start_f = int(round(matched_pause.start_sec / cls.frame_step))
+                p_end_f = int(round(matched_pause.end_sec / cls.frame_step))
+                token_ends[k - 1] = float(max(raw_ends[k - 1] + 1, p_start_f))
+                token_starts[k] = float(min(raw_starts[k], max(p_end_f, raw_ends[k - 1] + 1)))
+            else:
+                # Continuous connected speech: token k begins immediately upon completion of token k-1 release
+                token_ends[k - 1] = float(raw_ends[k - 1] + 1)
                 token_starts[k] = token_ends[k - 1]
 
         # Final token offset from Viterbi path
         token_ends[n - 1] = max(token_starts[n - 1] + min_dur_f, float(min(total_frames, raw_ends[n - 1] + 1)))
 
-        # 8. Convert frames to seconds with calibrated lookahead compensation
+        # 8. Convert frames to seconds
         lookahead = float(getattr(config, "LOOKAHEAD_OFFSET_FRAMES", LOOKAHEAD_OFFSET_FRAMES))
 
         s_secs = np.maximum(0.0, (token_starts - lookahead) * cls.frame_step)
         e_secs = np.maximum(s_secs + min_dur_s, (token_ends - lookahead) * cls.frame_step)
         pk_secs = np.maximum(0.0, (peak_frames - lookahead) * cls.frame_step)
 
-        # 9. Clean Monotonicity
+        # 9. Clean Monotonicity (preserving true acoustic silence gaps)
         for k in range(1, n):
-            if not is_silence_gap[k]:
+            if s_secs[k] < e_secs[k - 1]:
                 s_secs[k] = e_secs[k - 1]
-                e_secs[k] = max(s_secs[k] + min_dur_s, e_secs[k])
-            elif s_secs[k] < e_secs[k - 1]:
-                mid = (e_secs[k - 1] + s_secs[k]) / 2.0
-                e_secs[k - 1] = mid
-                s_secs[k] = mid
-                if e_secs[k] < s_secs[k] + min_dur_s:
-                    e_secs[k] = s_secs[k] + min_dur_s
+            if e_secs[k] < s_secs[k] + min_dur_s:
+                e_secs[k] = s_secs[k] + min_dur_s
 
-        # Pause protection for confirmed VAD pauses (pure boundary clamping, zero tail extension)
+        # Pause protection for confirmed VAD pauses
         if pause_intervals:
             for p in pause_intervals:
                 p_s = p.start_sec
@@ -462,12 +394,6 @@ class CtcViterbiAligner:
             s_final = float(min(audio_duration, max(0.0, s_secs[i])))
             e_final = float(min(audio_duration, max(s_final + min_dur_s, e_secs[i])))
             pk_final = float(min(audio_duration, max(s_final, min(e_final, pk_secs[i]))))
-
-            if aligned:
-                if not is_silence_gap[i] or s_final < aligned[-1].end:
-                    s_final = aligned[-1].end
-                    if e_final <= s_final:
-                        e_final = float(min(audio_duration, s_final + min_dur_s))
 
             aligned.append(
                 PhonemeToken(
