@@ -733,7 +733,24 @@ def align_ayah_boundaries(
             cut_pt = round(inter_pause.optimal_cut_point, 2)
             seg_prev.end_time = round(max(w_last.end or 0.0, cut_pt), 2)
             seg_next.start_time = round(min(w_first.start or inter_pause.end_sec, inter_pause.end_sec), 2)
+            w_first.start = seg_next.start_time
+            if w_first.phonemes:
+                w_first.phonemes[0]["start"] = w_first.start
             if seg_prev.sub_segments:
                 seg_prev.sub_segments[-1].end_time = seg_prev.end_time
             if seg_next.sub_segments:
                 seg_next.sub_segments[0].start_time = seg_next.start_time
+        else:
+            # Acoustic silence valley between Ayahs when VAD missed breath pause
+            first_ph = w_first.phonemes[0] if w_first.phonemes else {}
+            pk = first_ph.get("peak_timestamp", w_first.start)
+            last_end = w_last.end or 0.0
+            if pk and (pk - last_end) >= 0.20:
+                mid_onset = round((last_end + pk) / 2.0, 3)
+                if mid_onset > (w_first.start or 0.0):
+                    w_first.start = mid_onset
+                    seg_next.start_time = round(mid_onset, 2)
+                    if w_first.phonemes:
+                        w_first.phonemes[0]["start"] = mid_onset
+                    if seg_next.sub_segments:
+                        seg_next.sub_segments[0].start_time = seg_next.start_time

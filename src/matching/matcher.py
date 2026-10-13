@@ -91,6 +91,7 @@ def _build_qword(rw: RefWord, tokens: List[PhonemeToken], score: float) -> Quran
 
 _TASHKEEL_RE = re.compile(r"[\u064b-\u065f\u0670\u06d6-\u06ed]")
 _TANWEEN_RE = re.compile(r"[\u064b\u064c\u064d\u06ed\u06e2]")
+_SHORT_VOWELS = ("\u064e", "\u064f", "\u0650", "\u064b", "\u064c", "\u064d")
 
 
 def _strip_tashkeel(s: str) -> str:
@@ -212,6 +213,28 @@ def _repair_tajweed_boundary_bridges(words: List[QuranWord]) -> None:
 
         candidate = _detect_tajweed_merge_candidate(w1, w2)
         if not candidate:
+            # Wasl coda transition: Word 1 ends in an unvowelled coda consonant (e.g. ذ, م, ل in
+            # إِذْ هُمْ, وَهُمْ عَلَىٰ, مِنْهُمْ إِلَّآ, هَلْ أَتَىٰكَ, بَلْ هُوَ) or a Wasl particle (بَلِ ٱلَّذِينَ).
+            # In continuous recitation (Wasl), place the boundary at the onset of that coda consonant where
+            # Word 1's vowel core closes and consonant articulates, eliminating playback delay for Word 2.
+            if len(w1.phonemes) >= 2:
+                last_p = w1.phonemes[-1]
+                p_text = last_p.get("phoneme", "")
+                if p_text not in ("اا", "ۦۦ", "ۥۥ", "اااا", "ۦۦۦۦ", "ۥۥۥۥ"):
+                    is_unvowelled = (len(p_text) == 1 and not any(c in p_text for c in _SHORT_VOWELS))
+                    is_wasl_particle = (w1.word in ("بَلِ",) and p_text.startswith("ل"))
+                    if is_unvowelled or is_wasl_particle:
+                        c_s = last_p.get("start", w1.end)
+                        if c_s < w1.end and c_s >= (w1.start or 0.0) + 0.08:
+                            split_t = round(c_s, 3)
+                            w1.end = split_t
+                            if w1.raw_end is not None:
+                                w1.raw_end = min(w1.raw_end, split_t)
+                            w2.start = split_t
+                            if w2.raw_start is not None:
+                                w2.raw_start = min(w2.raw_start, split_t)
+                            if w2.phonemes:
+                                w2.phonemes[0]["start"] = split_t
             continue
 
         cat, bridge_phone, target_char = candidate

@@ -349,15 +349,29 @@ class CtcViterbiAligner:
             if matched_pause is not None:
                 p_start_f = int(round(matched_pause.start_sec / cls.frame_step))
                 p_end_f = int(round(matched_pause.end_sec / cls.frame_step))
-                token_ends[k - 1] = float(max(raw_ends[k - 1] + 1, p_start_f))
+                end_f = float(max(raw_ends[k - 1] + 1, p_start_f))
+                pk_f = float(peak_frames[k - 1])
+                # Consonant release protection: if pause onset triggered prematurely during an occlusion dip
+                # (less than 5 frames / 200ms after the acoustic peak), allow the stop consonant to complete
+                # its natural physical release burst into the pause (up to 7 frames / 280ms or optimal cut point).
+                if (end_f - pk_f) < 5:
+                    opt_cut_f = int(round(matched_pause.optimal_cut_point / cls.frame_step))
+                    release_f = min(pk_f + 7, float(opt_cut_f), float(p_end_f))
+                    if release_f > end_f:
+                        end_f = release_f
+                token_ends[k - 1] = end_f
                 token_starts[k] = float(min(raw_starts[k], max(p_end_f, raw_ends[k - 1] + 1)))
             else:
                 # Continuous connected speech: token k begins immediately upon completion of token k-1 release
                 token_ends[k - 1] = float(raw_ends[k - 1] + 1)
                 token_starts[k] = token_ends[k - 1]
 
-        # Final token offset from Viterbi path
-        token_ends[n - 1] = max(token_starts[n - 1] + min_dur_f, float(min(total_frames, raw_ends[n - 1] + 1)))
+        # Final token offset from Viterbi path (guarantee release window if audio permits)
+        last_pk_f = float(peak_frames[n - 1])
+        last_e = float(min(total_frames, raw_ends[n - 1] + 1))
+        if (last_e - last_pk_f) < 5:
+            last_e = float(min(total_frames, last_pk_f + 7))
+        token_ends[n - 1] = max(token_starts[n - 1] + min_dur_f, last_e)
 
         # 8. Convert frames to seconds
         lookahead = float(getattr(config, "LOOKAHEAD_OFFSET_FRAMES", LOOKAHEAD_OFFSET_FRAMES))
@@ -380,13 +394,17 @@ class CtcViterbiAligner:
                 p_e = p.end_sec
                 if p_e <= p_s:
                     continue
+                cut = getattr(p, "optimal_cut_point", p_s)
                 for k in range(n):
                     if p_s <= s_secs[k] < p_e:
                         s_secs[k] = p_e
                         if e_secs[k] <= s_secs[k]:
                             e_secs[k] = s_secs[k] + min_dur_s
                     elif p_s < e_secs[k] <= p_e:
-                        e_secs[k] = max(s_secs[k] + min_dur_s, p_s)
+                        # Allow natural stop consonant release burst into the pause (up to 280ms post-peak or optimal cut point)
+                        max_allowed = max(p_s, min(cut, pk_secs[k] + 0.28))
+                        if e_secs[k] > max_allowed:
+                            e_secs[k] = max(s_secs[k] + min_dur_s, max_allowed)
 
         # 10. Construct final PhonemeToken outputs with zero overlap and preserved silence gaps
         aligned: List[PhonemeToken] = []
