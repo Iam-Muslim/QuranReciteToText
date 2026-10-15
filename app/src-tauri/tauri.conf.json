@@ -1,0 +1,135 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "Quran Recite2Text",
+  "version": "1.0.0",
+  "identifier": "com.iammuslim.quranrecitetotext",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Quran Recite2Text",
+        "height": 840,
+        "width": 1280,
+        "minWidth": 960,
+        "minHeight": 640,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": false
+      }
+    ],
+    "withGlobalTauri": true,
+    "security": {
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": {
+          "allow": [
+            "**",
+            "*",
+            "$APPCONFIG",
+            "$APPCONFIG/**",
+            "$APPDATA",
+            "$APPDATA/**",
+            "$APPLOCALDATA",
+            "$APPLOCALDATA/**",
+            "$APPCACHE",
+            "$APPCACHE/**",
+            "$APPLOG",
+            "$APPLOG/**",
+            "$AUDIO",
+            "$AUDIO/**",
+            "$CACHE",
+            "$CACHE/**",
+            "$CONFIG",
+            "$CONFIG/**",
+            "$DATA",
+            "$DATA/**",
+            "$LOCALDATA",
+            "$LOCALDATA/**",
+            "$DESKTOP",
+            "$DESKTOP/**",
+            "$DOCUMENT",
+            "$DOCUMENT/**",
+            "$DOWNLOAD",
+            "$DOWNLOAD/**",
+            "$EXE",
+            "$EXE/**",
+            "$FONT",
+            "$FONT/**",
+            "$HOME",
+            "$HOME/**",
+            "$PICTURE",
+            "$PICTURE/**",
+            "$PUBLIC",
+            "$PUBLIC/**",
+            "$RUNTIME",
+            "$RUNTIME/**",
+            "$TEMPLATE",
+            "$TEMPLATE/**",
+            "$VIDEO",
+            "$VIDEO/**",
+            "$RESOURCE",
+            "$RESOURCE/**",
+            "$TEMP",
+            "$TEMP/**"
+          ]
+        }
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "createUpdaterArtifacts": false,
+    "targets": [
+      "deb",
+      "appimage",
+      "app",
+      "dmg",
+      "nsis"
+    ],
+    "resources": {
+      "binaries/**/*": "binaries/",
+      "python/**/*": "python/",
+      "../../src/aligner/**/*": "src/aligner/",
+      "../../src/matching/**/*": "src/matching/",
+      "../../src/*": "src/",
+      "../../data/bin/**/*": "data/bin/",
+      "../../data/mfa/**/*": "data/mfa/",
+      "../../data/onnx/**/*": "data/onnx/",
+      "../../data/*": "data/",
+      "../../run.py": "run.py",
+      "../../config.py": "config.py",
+      "../../requirements.txt": "requirements.txt"
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "entitlements": null,
+      "exceptionDomain": "",
+      "frameworks": [],
+      "providerShortName": null,
+      "signingIdentity": null,
+      "hardenedRuntime": true,
+      "minimumSystemVersion": "10.13"
+    },
+    "linux": {
+      "deb": {
+        "depends": [
+          "libc6",
+          "libgtk-3-0",
+          "libwebkit2gtk-4.1-0"
+        ]
+      }
+    }
+  }
+}
