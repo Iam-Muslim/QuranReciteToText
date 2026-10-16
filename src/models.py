@@ -457,6 +457,8 @@ class PipelineResult:
                         "location": str(w.location or f"{seg.surah_number}:{seg.ayah}:1"),
                         "start": max(0.0, round(w_s - sub_abs_s, 3)),
                         "end": min(sub_dur, max(0.0, round(w_e - sub_abs_s, 3))),
+                        "_abs_start": w_s,
+                        "_abs_end": w_e,
                     }
                     if getattr(w, "phonemes", None):
                         w_dict["phonemes"] = w.phonemes
@@ -499,7 +501,38 @@ class PipelineResult:
         # 3. Sort segments by time_from
         raw_segments.sort(key=lambda s: s["time_from"])
 
-        # 4. Filter out any zero duration segments & re-index 1-based (NO artificial timing alteration)
+        # 3.1 Seamless Subtitle Tiling via VAD Cut Points (Matches QUL/QuranCaption standard)
+        if raw_segments:
+            raw_segments[0]["time_from"] = max(0.0, round(raw_segments[0]["time_from"] - 0.080, 3))
+            pauses = getattr(self, "pause_intervals", []) or []
+            for i in range(len(raw_segments) - 1):
+                s1 = raw_segments[i]
+                s2 = raw_segments[i + 1]
+                if s2["time_from"] > s1["time_to"] + 0.05:
+                    cut = (s1["time_to"] + s2["time_from"]) / 2.0
+                    for p in pauses:
+                        p_s = getattr(p, "start_sec", getattr(p, "start", 0.0))
+                        p_e = getattr(p, "end_sec", getattr(p, "end", 0.0))
+                        p_cut = getattr(p, "optimal_cut_point", getattr(p, "cut_point", (p_s + p_e) / 2.0))
+                        if (p_s - 0.20 <= s1["time_to"]) and (p_e + 0.20 >= s2["time_from"]):
+                            cut = p_cut
+                            break
+                    s1["time_to"] = round(cut - 0.015, 3)
+                    s2["time_from"] = round(cut + 0.015, 3)
+
+            # Recompute relative word timings to new tiled time_from
+            for s in raw_segments:
+                seg_s = s["time_from"]
+                seg_e = s["time_to"]
+                seg_dur = max(0.0, round(seg_e - seg_s, 3))
+                for wd in s.get("words", []):
+                    abs_s = wd.pop("_abs_start", None)
+                    abs_e = wd.pop("_abs_end", None)
+                    if abs_s is not None:
+                        wd["start"] = max(0.0, round(abs_s - seg_s, 3))
+                        wd["end"] = min(seg_dur, max(0.0, round((abs_e if abs_e is not None else abs_s) - seg_s, 3)))
+
+        # 4. Filter out any zero duration segments & re-index 1-based
         raw_segments = [s for s in raw_segments if s["time_to"] > s["time_from"]]
         for idx, seg in enumerate(raw_segments, start=start_segment_idx):
             seg["segment"] = idx

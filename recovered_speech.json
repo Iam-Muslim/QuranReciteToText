@@ -1,0 +1,75 @@
+{
+  "audio_duration_seconds": 649.224,
+  "recovery_summary": {
+    "recovery_time_seconds": 4.713,
+    "scanned_gaps_count": 41,
+    "speech_holes_detected": 2,
+    "recovered_events_count": 2,
+    "recovered_phonemes_count": 5,
+    "energy_threshold_db": -55.0,
+    "min_hole_duration_s": 1.4
+  },
+  "recovery_events": [
+    {
+      "event_id": 1,
+      "gap_start": 513.04,
+      "gap_end": 514.76,
+      "gap_duration": 1.72,
+      "padded_start": 512.88,
+      "padded_end": 515.0,
+      "energy_db": -16.4,
+      "recovered_text": "وَءَ",
+      "phoneme_count": 2,
+      "recovered_phonemes": [
+        {
+          "phoneme": "وَ",
+          "start": 513.6,
+          "end": 513.64,
+          "duration": 0.04,
+          "confidence": 1.0
+        },
+        {
+          "phoneme": "ءَ",
+          "start": 513.84,
+          "end": 513.88,
+          "duration": 0.04,
+          "confidence": 1.0
+        }
+      ]
+    },
+    {
+      "event_id": 2,
+      "gap_start": 582.72,
+      "gap_end": 584.2,
+      "gap_duration": 1.48,
+      "padded_start": 582.56,
+      "padded_end": 584.44,
+      "energy_db": -21.3,
+      "recovered_text": "فَرۥۥ",
+      "phoneme_count": 3,
+      "recovered_phonemes": [
+        {
+          "phoneme": "فَ",
+          "start": 583.52,
+          "end": 583.56,
+          "duration": 0.04,
+          "confidence": 0.93
+        },
+        {
+          "phoneme": "ر",
+          "start": 583.8,
+          "end": 583.84,
+          "duration": 0.04,
+          "confidence": 0.42
+        },
+        {
+          "phoneme": "ۥۥ",
+          "start": 584.0,
+          "end": 584.04,
+          "duration": 0.04,
+          "confidence": 0.95
+        }
+      ]
+    }
+  ]
+}
