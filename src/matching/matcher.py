@@ -179,21 +179,16 @@ def _detect_tajweed_merge_candidate(
 
 
 def _repair_tajweed_boundary_bridges(words: List[QuranWord]) -> None:
-    """Option B: Neural Posterior Crossover boundary repair for merged Tanween and same-letter words.
+    """Intra-word boundary preservation and bleeding prevention.
 
-    In continuous recitation (Wasl), when Tanween or identical/assimilating consonants merge
-    across word boundaries without an acoustic pause, the acoustic model emits a single sustained
-    geminate/nasal token. JumpDTW assigns that entire token to Word 2, cutting Word 1 off prematurely.
-
-    This function locates the exact acoustic crossover frame on the neural encoder 40ms grid (25 Hz)
-    using the posterior emission peak (peak_timestamp) and mechanical release timing:
-    - Word 1 holds the consonant through its acoustic peak (Tanween coda / geminate occlusion).
-    - Word 2 releases into its vocalic body starting at the crossover frame (T_trans).
-    - If the reciter paused (acoustic gap > 0.08s), NO merge is performed (natural Waqf preserved).
-    - Strictly monotonic, zero artificial 80/20 guesswork, anchored to neural posterior peaks.
+    NOTE FOR DEVELOPERS: DO NOT RE-ENABLE ARTIFICIAL CROSS-WORD BRIDGE SPLITTING HERE.
+    In continuous recitation (Wasl), artificially splitting Word 2's initial consonant and
+    appending it onto Word 1 causes Word 1 to bleed into Word 2 (e.g. Word 1 taking the
+    first letter 'ر' or 'م' of Word 2).
+    Each word strictly retains its own canonical phonemes and exact acoustic boundaries
+    produced by the CTC forced aligner and JumpDTW.
     """
-    if len(words) < 2:
-        return
+    return
 
     fs = 0.040  # 40ms acoustic encoder frame step (25 Hz Zipformer/CTC grid)
 

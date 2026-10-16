@@ -61,57 +61,65 @@ _classify_token_str = default_quran_token_classifier
 
 
 def _trace_speech_onset_backward(
-    frame_db: Optional[np.ndarray],
-    pk_frame: int,
-    earliest_frame: int,
+    frame_db_10ms: Optional[np.ndarray],
+    pk_sec: float,
+    earliest_sec: float,
     speech_th_db: float,
-    default_frame: int,
-) -> int:
-    """Traces backwards from an acoustic emission peak to detect true physical speech onset.
+    default_sec: float,
+) -> float:
+    """Traces backwards in high-resolution 10ms steps to detect true physical speech onset.
 
     Acoustic Rationale:
-    In initial consonants (e.g. 'ل', 'م', 'س', 'ء'), physical articulation begins at
-    quiet energy levels (-44 dB to -38 dB) before the loud vowel peak (-20 dB).
-    Searching backwards until energy drops into the silence floor captures the full
-    consonant onset without premature truncation, while strictly stopping at the pause barrier.
+    Initial consonants (e.g. 'ل', 'م', 'س', 'ء') begin quiet airflow articulation
+    (-44 dB to -36 dB) before the loud vowel peak (-20 dB). Scanning backwards in
+    10ms increments discovers the exact articulatory onset without coarse 40ms quantization.
     """
-    if frame_db is None or pk_frame <= 0:
-        return default_frame
+    if frame_db_10ms is None or pk_sec <= 0.0:
+        return default_sec
 
-    onset_f = default_frame
-    for t in range(min(pk_frame, len(frame_db) - 1), max(0, earliest_frame) - 1, -1):
-        if frame_db[t] >= speech_th_db:
-            onset_f = t
+    pk_idx = min(int(round(pk_sec / 0.010)), len(frame_db_10ms) - 1)
+    earliest_idx = max(0, int(round(earliest_sec / 0.010)))
+    if pk_idx <= earliest_idx:
+        return default_sec
+
+    onset_idx = pk_idx
+    for t in range(pk_idx, earliest_idx - 1, -1):
+        if frame_db_10ms[t] >= speech_th_db:
+            onset_idx = t
         else:
-            break  # Crossed into silence floor
-    return onset_f
+            break  # Crossed into ambient noise floor
+    return float(onset_idx * 0.010)
 
 
 def _trace_speech_decay_forward(
-    frame_db: Optional[np.ndarray],
-    pk_frame: int,
-    latest_frame: int,
+    frame_db_10ms: Optional[np.ndarray],
+    pk_sec: float,
+    latest_sec: float,
     speech_th_db: float,
-    default_frame: int,
-) -> int:
-    """Traces forwards from an acoustic emission peak to detect sound decay into pause.
+    default_sec: float,
+) -> float:
+    """Traces forwards in high-resolution 10ms steps to detect sound decay into pause.
 
     Acoustic Rationale:
-    In verse-final words, reciters sustain final vowels, Tanween, or aspiration ('ه')
-    for 200ms to 400ms after the CTC spike. Tracing forwards until energy drops below the
-    speech floor captures the full acoustic release without cutting the word prematurely,
-    while strictly bounded by the pause cut point (T_cut) so it never bleeds into the next verse.
+    Verse-final vowels, Tanween, and aspiration decay over 200ms to 450ms into silence.
+    Tracing forwards in 10ms steps until energy drops below the speech floor captures the
+    full acoustic release without cutting the word, bounded strictly by the pause cut barrier (T_cut).
     """
-    if frame_db is None or pk_frame >= len(frame_db) - 1:
-        return default_frame
+    if frame_db_10ms is None:
+        return default_sec
 
-    decay_f = default_frame
-    for t in range(pk_frame + 1, min(latest_frame, len(frame_db))):
-        if frame_db[t] >= speech_th_db:
-            decay_f = t + 1
+    pk_idx = int(round(pk_sec / 0.010))
+    latest_idx = min(int(round(latest_sec / 0.010)), len(frame_db_10ms))
+    if pk_idx >= latest_idx:
+        return default_sec
+
+    decay_idx = pk_idx
+    for t in range(pk_idx + 1, latest_idx):
+        if frame_db_10ms[t] >= speech_th_db:
+            decay_idx = t + 1
         else:
-            break  # Sound has decayed into background silence
-    return decay_f
+            break  # Decayed into ambient noise floor
+    return float(decay_idx * 0.010)
 
 try:
     from numba import njit
@@ -435,45 +443,64 @@ class CtcViterbiAligner:
                 raw_starts[k] = peak_frames[k]
                 raw_ends[k] = peak_frames[k]
 
-        # 6. Token Classification & Acoustic Energy Contour from audio_pcm
+        # 5.1 Parabolic Sub-Frame Peak Fitting
+        # Continuous quadratic vertex interpolation around discrete CTC emission peak
+        cont_peak_frames = peak_frames.astype(np.float64).copy()
+        if lp is not None and lp.ndim == 2:
+            for k in range(n):
+                pk = peak_frames[k]
+                tok = token_ids[k]
+                if 0 < pk < total_frames - 1 and tok < lp.shape[1]:
+                    y0 = float(lp[pk - 1, tok])
+                    y1 = float(lp[pk, tok])
+                    y2 = float(lp[pk + 1, tok])
+                    denom = 2.0 * (y0 - 2.0 * y1 + y2)
+                    if y1 > y0 and y1 > y2 and denom < -1e-6:
+                        delta = (y0 - y2) / denom
+                        cont_peak_frames[k] = pk + float(np.clip(delta, -0.5, 0.5))
+
+        # 6. Token Classification & High-Resolution Acoustic Energy Contour from audio_pcm
         classifier = token_classifier or default_quran_token_classifier
         token_classes = [classifier(target_phonemes[k].phoneme) for k in range(n)]
 
-        frame_db = None
-        speech_th_db = -40.0
+        frame_db_10ms = None
+        speech_th_db = -38.0
         if audio_pcm is not None and len(audio_pcm) > 0:
             pcm_len = len(audio_pcm)
-            f_len = int(round(actual_frame_step * 16000))
-            n_audio_frames = min(total_frames, pcm_len // f_len)
-            if n_audio_frames > 0:
-                pcm_trunc = audio_pcm[:n_audio_frames * f_len].reshape(n_audio_frames, f_len)
-                rms_arr = np.sqrt(np.mean(pcm_trunc ** 2, axis=1))
-                frame_db = 20.0 * np.log10(np.maximum(1e-5, rms_arr))
-                noise_floor = float(np.percentile(frame_db, 2))
-                speech_th_db = min(-36.0, max(noise_floor + 6.0, -44.0))
+            f_hop = 160  # 10ms hop at 16kHz
+            f_len = 320  # 20ms window for smooth pitch integration
+            n_10ms_frames = (pcm_len - f_len) // f_hop
+            if n_10ms_frames > 0:
+                strided = np.lib.stride_tricks.sliding_window_view(
+                    audio_pcm[:n_10ms_frames * f_hop + f_len], f_len
+                )[::f_hop]
+                rms_arr = np.sqrt(np.mean(strided ** 2, axis=-1))
+                frame_db_10ms = 20.0 * np.log10(np.maximum(1e-5, rms_arr))
+                noise_floor = float(np.percentile(frame_db_10ms, 2))
+                speech_th_db = min(-24.0, max(noise_floor + 6.0, -44.0))
 
         min_dur_s = actual_frame_step
-        min_dur_f = 1.0
+        lookahead = float(getattr(config, "LOOKAHEAD_OFFSET_FRAMES", LOOKAHEAD_OFFSET_FRAMES))
 
-        token_starts = np.zeros(n, dtype=np.float64)
-        token_ends = np.zeros(n, dtype=np.float64)
+        # Initial raw boundaries in physical seconds
+        s_secs = np.maximum(0.0, (raw_starts - lookahead) * actual_frame_step)
+        e_secs = np.maximum(s_secs + min_dur_s, (raw_ends - lookahead) * actual_frame_step)
+        pk_secs = np.maximum(0.0, (cont_peak_frames - lookahead) * actual_frame_step)
 
-        # 1. Utterance-Initial Onset (Token 0): trace backwards up to 600ms (15 frames)
-        token_starts[0] = float(max(0, _trace_speech_onset_backward(
-            frame_db=frame_db,
-            pk_frame=peak_frames[0],
-            earliest_frame=max(0, peak_frames[0] - 15),
+        # 1. Utterance-Initial Onset (Token 0): trace backwards up to 600ms
+        s_secs[0] = max(0.0, _trace_speech_onset_backward(
+            frame_db_10ms=frame_db_10ms,
+            pk_sec=pk_secs[0],
+            earliest_sec=max(0.0, pk_secs[0] - 0.600),
             speech_th_db=speech_th_db,
-            default_frame=raw_starts[0],
-        )))
+            default_sec=s_secs[0],
+        ))
 
         # 2. Token-Class-Aware Boundaries across Tokens
         for k in range(1, n):
-            gap_start = int(raw_ends[k - 1] + 1)
-            gap_end = int(raw_starts[k] - 1)
-            gap_s_sec = gap_start * actual_frame_step
-            gap_e_sec = (gap_end + 1) * actual_frame_step
-            gap_frames = gap_end - gap_start + 1
+            gap_s_sec = e_secs[k - 1]
+            gap_e_sec = s_secs[k]
+            gap_dur = gap_e_sec - gap_s_sec
 
             # Check confirmed VAD pause interval (Waqf)
             matched_pause = None
@@ -490,15 +517,16 @@ class CtcViterbiAligner:
 
             c_prev = token_classes[k - 1]
             c_curr = token_classes[k]
-            pk_prev = peak_frames[k - 1]
-            pk_curr = peak_frames[k]
 
             # Detect acoustic micro-pause (breath / Sakt with drop below speech threshold)
             is_micro_pause = False
-            if matched_pause is None and gap_frames >= 6 and c_curr != AcousticAnchorType.SUSTAINED_HOLD:
-                if frame_db is not None and gap_start < len(frame_db) and gap_end < len(frame_db):
-                    if float(np.min(frame_db[gap_start:min(len(frame_db), gap_end + 1)])) < speech_th_db:
-                        is_micro_pause = True
+            if matched_pause is None and gap_dur >= 0.20 and c_curr != AcousticAnchorType.SUSTAINED_HOLD:
+                if frame_db_10ms is not None:
+                    g_idx_s = int(round(gap_s_sec / 0.010))
+                    g_idx_e = int(round(gap_e_sec / 0.010))
+                    if 0 <= g_idx_s < len(frame_db_10ms) and 0 <= g_idx_e < len(frame_db_10ms) and g_idx_s < g_idx_e:
+                        if float(np.min(frame_db_10ms[g_idx_s:g_idx_e + 1])) < speech_th_db:
+                            is_micro_pause = True
 
             if matched_pause is not None or is_micro_pause:
                 # ─── PAUSE / BREATH GAP (Waqf / Sakt) ───
@@ -509,75 +537,68 @@ class CtcViterbiAligner:
                         p_s = getattr(matched_pause, "start_sec", getattr(matched_pause, "start", 0.0))
                         p_e = getattr(matched_pause, "end_sec", getattr(matched_pause, "end", 0.0))
                         p_cut = (p_s + p_e) / 2.0
-                    pause_barrier_f = int(round(p_cut / actual_frame_step))
                 else:
-                    pause_barrier_f = gap_start + max(1, gap_frames // 2)
+                    p_cut = (gap_s_sec + gap_e_sec) / 2.0
 
-                # End token k-1: trace forward acoustic energy decay into pause (bounded by T_cut)
-                token_ends[k - 1] = float(_trace_speech_decay_forward(
-                    frame_db=frame_db,
-                    pk_frame=pk_prev,
-                    latest_frame=pause_barrier_f,
+                # End token k-1: trace forward acoustic energy decay into pause (bounded by p_cut)
+                e_secs[k - 1] = _trace_speech_decay_forward(
+                    frame_db_10ms=frame_db_10ms,
+                    pk_sec=pk_secs[k - 1],
+                    latest_sec=p_cut,
                     speech_th_db=speech_th_db,
-                    default_frame=min(pause_barrier_f, raw_ends[k - 1] + 2),
-                ))
+                    default_sec=min(p_cut, e_secs[k - 1] + 2 * actual_frame_step),
+                )
 
-                # Start token k: trace backward acoustic speech onset from peak (bounded by T_cut)
-                earliest_f = max(int(token_ends[k - 1]), pause_barrier_f)
-                token_starts[k] = float(max(
-                    token_ends[k - 1],
+                # Start token k: trace backward acoustic speech onset from peak (bounded by p_cut)
+                earliest_s = max(e_secs[k - 1], p_cut)
+                s_secs[k] = max(
+                    e_secs[k - 1],
                     _trace_speech_onset_backward(
-                        frame_db=frame_db,
-                        pk_frame=pk_curr,
-                        earliest_frame=earliest_f,
+                        frame_db_10ms=frame_db_10ms,
+                        pk_sec=pk_secs[k],
+                        earliest_sec=earliest_s,
                         speech_th_db=speech_th_db,
-                        default_frame=raw_starts[k],
+                        default_sec=s_secs[k],
                     ),
-                ))
+                )
 
             else:
                 # ─── CONTINUOUS CONNECTED SPEECH (Wasl inside phrase) ───
                 if c_curr == AcousticAnchorType.SUSTAINED_HOLD:
                     # Sustained phoneme (Madd / Ghunnah / long vowel): absorbs pre-peak hold
-                    token_ends[k - 1] = float(raw_ends[k - 1] + 1)
-                    token_starts[k] = token_ends[k - 1]
+                    e_secs[k - 1] = e_secs[k - 1] + min_dur_s
+                    s_secs[k] = e_secs[k - 1]
                 elif c_curr == AcousticAnchorType.GEMINATE_CLOSURE:
                     # Geminate closure (Shaddah): consonant occlusion before neural emission peak
-                    shaddah_closure_f = max(raw_ends[k - 1] + 1, raw_starts[k] - 3)
-                    token_ends[k - 1] = float(shaddah_closure_f)
-                    token_starts[k] = float(shaddah_closure_f)
+                    shaddah_s = max(e_secs[k - 1] + min_dur_s, s_secs[k] - 3 * actual_frame_step)
+                    e_secs[k - 1] = shaddah_s
+                    s_secs[k] = shaddah_s
                 elif c_curr == AcousticAnchorType.BURST_RELEASE:
                     # Burst release (Qalqalah / plosive stop): occlusion release before burst
-                    token_ends[k - 1] = float(max(raw_ends[k - 1] + 1, raw_starts[k] - 2))
-                    token_starts[k] = token_ends[k - 1]
+                    burst_s = max(e_secs[k - 1] + min_dur_s, s_secs[k] - 2 * actual_frame_step)
+                    e_secs[k - 1] = burst_s
+                    s_secs[k] = burst_s
                 else:
                     # Standard CV: split intermediate blank frames at midpoint
-                    if gap_frames > 0:
-                        mid_f = int(round((raw_ends[k - 1] + raw_starts[k]) / 2.0))
-                        token_ends[k - 1] = float(max(raw_ends[k - 1] + 1, mid_f))
-                        token_starts[k] = token_ends[k - 1]
+                    if gap_dur > 0:
+                        mid_s = (e_secs[k - 1] + s_secs[k]) / 2.0
+                        e_secs[k - 1] = max(e_secs[k - 1] + min_dur_s, mid_s)
+                        s_secs[k] = e_secs[k - 1]
                     else:
-                        token_ends[k - 1] = float(raw_ends[k - 1] + 1)
-                        token_starts[k] = token_ends[k - 1]
+                        e_secs[k - 1] = e_secs[k - 1] + min_dur_s
+                        s_secs[k] = e_secs[k - 1]
 
         # 3. Final Token Offset: trace forward acoustic energy decay to sound completion
-        token_ends[n - 1] = float(max(
-            token_starts[n - 1] + min_dur_f,
+        e_secs[n - 1] = max(
+            s_secs[n - 1] + min_dur_s,
             _trace_speech_decay_forward(
-                frame_db=frame_db,
-                pk_frame=peak_frames[n - 1],
-                latest_frame=total_frames,
+                frame_db_10ms=frame_db_10ms,
+                pk_sec=pk_secs[n - 1],
+                latest_sec=audio_duration,
                 speech_th_db=speech_th_db,
-                default_frame=min(total_frames, raw_ends[n - 1] + 2),
+                default_sec=min(audio_duration, e_secs[n - 1] + 2 * actual_frame_step),
             ),
-        ))
-
-        # 8. Convert frames to seconds using dynamic actual_frame_step
-        lookahead = float(getattr(config, "LOOKAHEAD_OFFSET_FRAMES", LOOKAHEAD_OFFSET_FRAMES))
-
-        s_secs = np.maximum(0.0, (token_starts - lookahead) * actual_frame_step)
-        e_secs = np.maximum(s_secs + min_dur_s, (token_ends - lookahead) * actual_frame_step)
-        pk_secs = np.maximum(0.0, (peak_frames - lookahead) * actual_frame_step)
+        )
 
         # 9. Pause protection: enforce click-free cut point boundary between phrases
         if pause_intervals:

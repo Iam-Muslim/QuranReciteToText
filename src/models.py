@@ -501,31 +501,19 @@ class PipelineResult:
         # 3. Sort segments by time_from
         raw_segments.sort(key=lambda s: s["time_from"])
 
-        # 3.1 Seamless Subtitle Tiling via VAD Cut Points (Matches QUL/QuranCaption standard)
-        if raw_segments:
-            raw_segments[0]["time_from"] = max(0.0, round(raw_segments[0]["time_from"] - 0.080, 3))
-            pauses = getattr(self, "pause_intervals", []) or []
-            for i in range(len(raw_segments) - 1):
-                s1 = raw_segments[i]
-                s2 = raw_segments[i + 1]
-                if s2["time_from"] > s1["time_to"] + 0.05:
-                    cut = (s1["time_to"] + s2["time_from"]) / 2.0
-                    for p in pauses:
-                        p_s = getattr(p, "start_sec", getattr(p, "start", 0.0))
-                        p_e = getattr(p, "end_sec", getattr(p, "end", 0.0))
-                        p_cut = getattr(p, "optimal_cut_point", getattr(p, "cut_point", (p_s + p_e) / 2.0))
-                        if (p_s - 0.20 <= s1["time_to"]) and (p_e + 0.20 >= s2["time_from"]):
-                            cut = p_cut
-                            break
-                    s1["time_to"] = round(cut - 0.015, 3)
-                    s2["time_from"] = round(cut + 0.015, 3)
-
-            # Recompute relative word timings to new tiled time_from
-            for s in raw_segments:
-                seg_s = s["time_from"]
-                seg_e = s["time_to"]
-                seg_dur = max(0.0, round(seg_e - seg_s, 3))
-                for wd in s.get("words", []):
+        # 3.1 Canonical Word-Anchored Segment Boundaries:
+        # NOTE FOR DEVELOPERS: DO NOT MODIFY OR ADD ARTIFICIAL LEAD-IN/BRIDGING HERE.
+        # In this pipeline, segment boundaries are strictly defined by the acoustic start of the
+        # first word and the acoustic end of the last word. Word 0 always starts at relative 0.000s.
+        for s in raw_segments:
+            words = s.get("words", [])
+            if words:
+                seg_s = words[0]["_abs_start"]
+                seg_e = words[-1]["_abs_end"]
+                s["time_from"] = seg_s
+                s["time_to"] = max(seg_s + 0.010, seg_e)
+                seg_dur = max(0.0, round(s["time_to"] - seg_s, 3))
+                for wd in words:
                     abs_s = wd.pop("_abs_start", None)
                     abs_e = wd.pop("_abs_end", None)
                     if abs_s is not None:
