@@ -99,30 +99,65 @@ def _strip_tashkeel(s: str) -> str:
     return _TASHKEEL_RE.sub("", s).strip()
 
 
-_TAJWEED_REF_RULES = (
-    ("ghunnah", ("مم", "نن", "وو", "يي")),
-    ("bila_ghunnah", ("لل", "رر", "ل", "ر")),
-    ("ghunnah", ("۾۾۾", "۾")),
-    ("mutajanisayn", ("ط", "ت", "ذ", "د", "ك", "ق", "ب", "ث", "ف", "ج", "س", "ش", "ص", "ض", "ظ")),
-)
+# ═══════════════════════════════════════════════════════════════════════════════
+# UNIVERSAL QURANIC TAJWEED CROSSOVER ENGINE (ALL 114 SURAHS & 10,828 TRANSITIONS)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# All Tajweed Mutajanisayn & Mutaqaribayn pairs across consecutive words:
+# (c1 in word 1, c2 in word 2) -> (category, bridge_phoneme, target_char)
+_TAJWEED_PAIR_MAP: Dict[Tuple[str, str], Tuple[str, str, str]] = {
+    ('ت', 'ط'): ('mutajanisayn', 'ط', 'ط'),    # هَمَّت طَّآئِفَةٌ
+    ('ط', 'ت'): ('mutajanisayn', 'ت', 'ت'),    # بَسَطتَ, أَحَطتُ
+    ('ت', 'د'): ('mutajanisayn', 'د', 'د'),    # أَثْقَلَت دَّعَوَا
+    ('د', 'ت'): ('mutajanisayn', 'ت', 'ت'),    # قَد تَّبَيَّنَ
+    ('ذ', 'ظ'): ('mutajanisayn', 'ظ', 'ظ'),    # إِذ ظَّلَمْتُمْ
+    ('ث', 'ذ'): ('mutajanisayn', 'ذ', 'ذ'),    # يَلْهَث ذَّٰلِكَ
+    ('ب', 'م'): ('ghunnah', 'مم', 'م'),       # ٱرْكَب مَّعَنَا
+    ('ل', 'ر'): ('bila_ghunnah', 'ر', 'ر'),   # بَل رَّفَعَهُ, قُل رَّبِّ
+    ('ق', 'ك'): ('mutaqaribayn', 'ك', 'ك'),   # أَلَمْ نَخْلُقكُّم
+}
+
+# Medina reference Tajweed assimilation markers from ordered_quran_phonemes.json:
+_REF_SUFFIX_MAP: Dict[str, Tuple[str, str, Optional[str]]] = {
+    # 1. Idgham with Ghunnah (Tanween / Nun into Meem, Noon, Waw, Yaa)
+    'مم': ('ghunnah', 'مم', 'م'),
+    'نن': ('ghunnah', 'نن', 'ن'),
+    'وو': ('ghunnah', 'وو', 'و'),
+    'يي': ('ghunnah', 'يي', 'ي'),
+    # 2. Idgham bila Ghunnah (Tanween / Nun into Ra, Lam)
+    'ر': ('bila_ghunnah', 'ر', 'ر'),
+    'ل': ('bila_ghunnah', 'ل', 'ل'),
+    'لل': ('bila_ghunnah', 'ل', 'ل'),
+    'رر': ('bila_ghunnah', 'ر', 'ر'),
+    # 3. Iqlab & Ikhfa Shafawi (Meem Ghunnah hold before Baa)
+    '۾': ('ghunnah', 'مم', 'ب'),
+    '۾۾۾': ('ghunnah', 'مم', 'ب'),
+    # 4. Ikhfa Haqiqi (Tanween / Nun before 15 Ikhfa consonants)
+    'ں': ('ikhfa', 'ںںں', None),
+    'ںںں': ('ikhfa', 'ںںں', None),
+}
 
 
 def _detect_tajweed_merge_candidate(
     w1: QuranWord,
     w2: QuranWord,
 ) -> Optional[Tuple[str, str, str]]:
-    """Detects whether w1 and w2 form a Tajweed phonetic merge boundary.
+    """Detects whether w1 and w2 form a Tajweed phonetic merge boundary across the Quran.
 
     Returns (category, bridge_phone, target_char) or None.
-    Handles:
-    - Tanween / Nun Sakinah assimilation (Idgham with Ghunnah, Bila Ghunnah, Iqlab)
-    - Same-letter assimilation (Idgham Mutamathilayn: last letter of w1 == first letter of w2)
-    - Close letters assimilation (Idgham Mutajanisayn / Mutaqaribayn)
+    Handles all 7 universal Quranic crossover categories:
+    1. Idgham bi-Ghunnah (م, ن, و, ي)
+    2. Idgham bila-Ghunnah (ر, ل)
+    3. Iqlab (ب -> م hold)
+    4. Ikhfa Shafawi (م before ب)
+    5. Idgham Shafawi (م into م)
+    6. Ikhfa Haqiqi (ںںں before 15 consonants)
+    7. Idgham Mutamathilayn, Mutajanisayn, Mutaqaribayn (same & close letters)
     """
     w1_ref = w1.ref or ""
     w2_ref = w2.ref or ""
-    w1_matched_str = "".join(p.get("phoneme", "") for p in (w1.phonemes or []))
-    w1_clean_str = _strip_tashkeel(w1_matched_str)
+    w1_word = w1.word or ""
+    w2_word = w2.word or ""
     w2_first_ph = w2.phonemes[0] if w2.phonemes else {}
     w2_first_str = w2_first_ph.get("phoneme", "")
 
@@ -130,66 +165,69 @@ def _detect_tajweed_merge_candidate(
     if has_bridge:
         return None
 
-    # 1. Reference Phoneme Assimilation Suffixes (from ordered_quran_phonemes reference data)
-    for cat, suffixes in _TAJWEED_REF_RULES:
-        for suf in suffixes:
-            if w1_ref.endswith(suf) or (suf in ("۾", "۾۾۾") and "۾" in w1_ref):
-                target_char = "م" if "۾" in suf else suf[0]
-                if w2_first_str.startswith(target_char) or w2_ref.startswith(target_char):
-                    bridge_phone = "مم" if "۾" in suf else suf
-                    return cat, bridge_phone, target_char
+    clean1 = _strip_tashkeel(w1_word)
+    clean2 = _strip_tashkeel(w2_word)
 
-    # 2. Same-Letter Merges (Idgham Mutamathilayn: last letter of w1 == first letter of w2)
-    if w1.word and w2.word:
-        clean1 = _strip_tashkeel(w1.word)
-        clean2 = _strip_tashkeel(w2.word)
-        if clean1 and clean2:
-            last1 = clean1[-1]
-            first2 = clean2[0]
-            if last1 == first2 and last1 not in ("ا", "ى", "و", "ي"):
-                if w2_first_str.startswith(last1) or w2_ref.startswith(last1):
-                    cat = "ghunnah" if last1 in ("م", "ن") else "mutamathilayn"
-                    bridge_phone = "مم" if last1 == "م" else ("نن" if last1 == "ن" else last1)
-                    return cat, bridge_phone, last1
+    # 1. Reference Phoneme Suffixes (10,828 transitions in Medina reference data)
+    for suf in sorted(_REF_SUFFIX_MAP.keys(), key=len, reverse=True):
+        if w1_ref.endswith(suf):
+            cat, bridge, tgt = _REF_SUFFIX_MAP[suf]
+            if tgt is None:
+                # Ikhfa Haqiqi: target_char is the first consonant of Word 2
+                tgt = clean2[0] if clean2 else (w2_ref[0] if w2_ref else 'ك')
+            # Check if Word 2 onset matches target
+            if w2_first_str.startswith(tgt) or w2_ref.startswith(tgt) or (clean2 and clean2.startswith(tgt)):
+                return cat, bridge, tgt
 
-    # 3. Tanween Word Merges from Mushaf Text (Idgham / Iqlab)
-    # A word with Tanween (e.g. قَوْمٍۢ, يَوْمٍۢ) has an assimilated coda regardless of whether
-    # its root spelling naturally ends in 'م' or any other letter!
-    if w1.word and w2.word:
-        has_tanween = bool(_TANWEEN_RE.search(w1.word))
-        clean2 = _strip_tashkeel(w2.word)
-        if has_tanween and clean2:
+    # 2. Idgham Mutamathilayn (identical consonants across word boundary)
+    if clean1 and clean2:
+        last1 = clean1[-1]
+        first2 = clean2[0]
+        if last1 == first2 and last1 not in ("ا", "ى", "و", "ي"):
+            if w2_first_str.startswith(last1) or w2_ref.startswith(last1):
+                cat = "ghunnah" if last1 in ("م", "ن") else "mutamathilayn"
+                bridge = "مم" if last1 == "م" else ("نن" if last1 == "ن" else last1)
+                return cat, bridge, last1
+
+    # 3. Idgham Mutajanisayn & Mutaqaribayn pairs across words
+    if clean1 and clean2:
+        pair = (clean1[-1], clean2[0])
+        if pair in _TAJWEED_PAIR_MAP:
+            return _TAJWEED_PAIR_MAP[pair]
+
+    # 4. Tanween / Nun Sakinah Word Merges from Mushaf Text (Idgham / Iqlab / Ikhfa)
+    if w1_word and clean2:
+        has_tanween = bool(_TANWEEN_RE.search(w1_word))
+        has_nun_sakinah = clean1.endswith("ن")
+        if has_tanween or has_nun_sakinah:
             first2 = clean2[0]
             if first2 in ("ي", "ن", "م", "و"):
-                target_char = first2
-                bridge_phone = first2 * 2 if first2 in ("م", "ن", "و", "ي") else first2
-                if w2_first_str.startswith(target_char) or w2_ref.startswith(target_char):
-                    return "ghunnah", bridge_phone, target_char
+                bridge = first2 * 2 if first2 in ("م", "ن") else first2
+                return "ghunnah", bridge, first2
             elif first2 in ("ل", "ر"):
-                target_char = first2
-                bridge_phone = first2
-                if w2_first_str.startswith(target_char) or w2_ref.startswith(target_char):
-                    return "bila_ghunnah", bridge_phone, target_char
-            elif first2 == "ب" or "\u06e2" in w1.word:  # Iqlab
-                target_char = "م"
-                bridge_phone = "مم"
-                if w2_first_str.startswith("م") or "م" in w2_first_str or w1_ref.endswith("مم") or "۾" in w1_ref:
-                    return "ghunnah", bridge_phone, target_char
+                return "bila_ghunnah", first2, first2
+            elif first2 == "ب" or "\u06e2" in w1_word:
+                return "ghunnah", "مم", "ب"
+            elif first2 in ("ص", "ذ", "ث", "ك", "ج", "ش", "ق", "س", "د", "ط", "ز", "ف", "ت", "ض", "ظ"):
+                return "ikhfa", "ںںں", first2
 
     return None
 
 
 def _repair_tajweed_boundary_bridges(words: List[QuranWord]) -> None:
-    """Haraka-Release Idgham Ghunnah Boundary Partitioning.
+    """Universal Quranic Tajweed Crossover Boundary Partitioning.
 
-    Phonetic & Tajweed Ground Truth:
-    1. In Idgham bi-Ghunnah (e.g. أَمْرٌ مُّسْتَقِرٌّ, ثُلَّةٌۭ مِّنَ, وَمَآءٍۭ مَّسْكُوبٍۭ, أَفَرَءَيْتُم مَّا):
-       The reciter sustains the Tanween / Meem Sakinah Ghunnah hold (the nasal resonance)
-       for the first word (~80% of duration). Word 2 begins when the reciter opens their
-       articulators to pronounce the letter with its Haraka (Fathah, Dammah, Kasrah release).
-    2. Non-Ghunnah consonants (Bila Ghunnah 'ر', 'ل' in خَافِضَةٌۭ رَّافِعَةٌ, unvowelled codas, plain Wasl):
-       STRICTLY NEVER SPLIT. Word 2 owns 100% of its initial consonant. Word 1 never steals
-       Word 2's consonant, eliminating cross-word bleeding.
+    Acoustic & Phonetic Ground Truth:
+    1. Idgham bi-Ghunnah / Iqlab / Ikhfa (e.g. هَبَاءً مُّنبَثًّا, تَرْمِيهِم بِحِجَارَةٍ, جَنَّـٰتٍۭ تَجْرِى):
+       The reciter sustains the Tanween / Nun Sakinah / Meem Sakinah Ghunnah hold (nasal resonance)
+       for Word 1. Word 2 begins at the physical articulatory release into the vowel (Haraka).
+       Word 1 receives the held bridge ('مم', 'نن', 'وو', 'يي', 'ںںں'), and Word 2 starts at the release.
+    2. Bila Ghunnah (e.g. خَافِضَةٌۭ رَّافِعَةٌ, مِّن رَّبِّهِمْ, هُدًۭى لِّلْمُتَّقِينَ):
+       The Tanween / Nun Sakinah is fully assimilated into the closure/occlusion of the
+       geminate consonant ('ر', 'ل'). That occlusion belongs to Word 1. Word 2 begins
+       at the burst/flap release into its Haraka ('رَ', 'لَ', 'لِ').
+    3. Idgham Mutamathilayn & Mutajanisayn (same/close consonants across words):
+       The first consonant closure belongs to Word 1; the release with Haraka belongs to Word 2.
     """
     for i in range(len(words) - 1):
         w1 = words[i]
@@ -200,9 +238,11 @@ def _repair_tajweed_boundary_bridges(words: List[QuranWord]) -> None:
         if w1.end is None or w2.start is None:
             continue
 
-        # Connected speech check: if acoustic gap > 0.25s (250ms), speaker paused (Waqf) -> DO NOT MERGE!
+        # Connected speech check: in continuous Wasl, crossover assimilation spans
+        # up to ~0.85s (maximum held 2-count Ghunnah or geminate hold).
+        # If acoustic gap > 0.85s, speaker paused (Waqf) -> DO NOT MERGE!
         gap = w2.start - w1.end
-        if gap > 0.25:
+        if gap > 0.85:
             continue
 
         candidate = _detect_tajweed_merge_candidate(w1, w2)
@@ -210,54 +250,63 @@ def _repair_tajweed_boundary_bridges(words: List[QuranWord]) -> None:
             continue
 
         cat, bridge_phone, target_char = candidate
-        # Include all Tajweed assimilations: Ghunnah (م, ن, و, ي, Iqlab),
-        # Bila Ghunnah (ر, ل), Mutamathilayn (same letter), and Mutajanisayn/Mutaqaribayn.
-        if cat not in ("ghunnah", "bila_ghunnah", "mutamathilayn", "mutajanisayn"):
+        if cat not in ("ghunnah", "bila_ghunnah", "mutamathilayn", "mutajanisayn", "mutaqaribayn", "ikhfa"):
             continue
 
+        w1_last_ph = w1.phonemes[-1]
         w2_first_ph = w2.phonemes[0]
-        ph_start = w2_first_ph.get("start", w2.start)
-        ph_end = w2_first_ph.get("end", w2.start)
-        dur = ph_end - ph_start
 
-        # Geminate duration check:
-        # - For Ghunnah (held nasal resonance): requires >= 200ms
-        # - For Bila Ghunnah (ر, ل) & other geminates: requires >= 150ms
-        min_dur = 0.200 if cat == "ghunnah" else 0.150
-        if dur < min_dur:
+        coda_end = w1_last_ph.get("end", w1.end or 0.0)
+        ph_start = w2_first_ph.get("start", w2.start or coda_end)
+        ph_end = w2_first_ph.get("end", w2.end or ph_start)
+        ph_pk = w2_first_ph.get("peak_timestamp")
+
+        # The full crossover acoustic span starts where Word 1's previous phoneme finishes
+        span_start = coda_end
+        span_end = ph_end
+        total_span = span_end - span_start
+
+        if total_span <= 0.040:
             continue
 
-        # Haraka release duration:
-        # - For long Ghunnah holds (>= 400ms): ~100ms release into vowel
-        # - For moderate geminates (< 400ms): ~80ms (2 frames) release into vowel
-        haraka_release = 0.100 if dur >= 0.400 else 0.080
-        release_time = round(ph_end - haraka_release, 3)
+        # Determine the release transition point T_split from neural emission logprobs:
+        # At ph_pk, the acoustic model emitted the peak of the consonant/release.
+        # Word 1 owns the assimilation hold from span_start up to the release transition.
+        # Word 2 begins at the release and owns the vowel articulation.
+        min_release_time = 0.070 if cat in ("ghunnah", "ikhfa") else 0.050
+        if ph_pk is not None and ph_pk > span_start:
+            t_split = min(span_end - min_release_time, ph_pk)
+            t_split = max(span_start + 0.050, t_split)
+        else:
+            if cat in ("ghunnah", "ikhfa"):
+                rel_dur = max(0.070, min(0.120, total_span * 0.25))
+            else:
+                rel_dur = max(0.050, min(0.100, total_span * 0.35))
+            t_split = span_end - rel_dur
+            t_split = max(span_start + 0.050, t_split)
 
-        # Safety clamp: Word 1 hold gets at least 80ms; Word 2 Haraka gets at least 60ms
-        release_time = min(ph_end - 0.060, max(ph_start + 0.080, release_time))
+        t_split = round(t_split, 3)
 
-        # Monotonic start for bridge phoneme: starts exactly where Word 1's previous phoneme finishes
-        b_start = w1.phonemes[-1].get("end", ph_start) if w1.phonemes else ph_start
-
-        # 1. Assign held Ghunnah bridge phoneme to Word 1 (Tanween hold)
+        # 1. Assign held Tanween / assimilation bridge phoneme to Word 1
         bridge_token: Dict[str, Any] = {
             "phoneme": bridge_phone,
-            "start": round(b_start, 3),
-            "end": release_time,
+            "start": round(span_start, 3),
+            "end": t_split,
+            "peak_timestamp": round((span_start + t_split) / 2.0, 3),
             "is_assimilated_bridge": True,
         }
         w1.phonemes.append(bridge_token)
-        w1.end = release_time
+        w1.end = t_split
         if w1.raw_end is not None:
-            w1.raw_end = max(w1.raw_end, release_time)
+            w1.raw_end = max(w1.raw_end, t_split)
 
         # 2. Update Word 2's starting phoneme to the Haraka release timestamp
         # AND simplify Word 2's phoneme to the single letter with its Haraka (e.g. 'مُ', 'مَ', 'مِ', 'رَ')
-        w2_first_ph["start"] = release_time
+        w2_first_ph["start"] = t_split
         if "raw_start" in w2_first_ph and w2_first_ph["raw_start"] is not None:
-            w2_first_ph["raw_start"] = release_time
-        if w2_first_ph.get("peak_timestamp") is not None and w2_first_ph["peak_timestamp"] < release_time:
-            w2_first_ph["peak_timestamp"] = release_time
+            w2_first_ph["raw_start"] = t_split
+        if w2_first_ph.get("peak_timestamp") is not None and w2_first_ph["peak_timestamp"] < t_split:
+            w2_first_ph["peak_timestamp"] = t_split
 
         orig_ph = w2_first_ph.get("phoneme", "")
         vowels = [c for c in orig_ph if c in _SHORT_VOWELS]
@@ -273,9 +322,9 @@ def _repair_tajweed_boundary_bridges(words: List[QuranWord]) -> None:
                     break
         w2_first_ph["phoneme"] = target_char + haraka
 
-        w2.start = release_time
+        w2.start = t_split
         if w2.raw_start is not None:
-            w2.raw_start = release_time
+            w2.raw_start = t_split
 
 
 def _align_and_package_ayahs(

@@ -587,38 +587,40 @@ class CtcViterbiAligner:
 
             else:
                 # ─── CONTINUOUS CONNECTED SPEECH (Wasl inside phrase) ───
-                if c_prev == AcousticAnchorType.SUSTAINED_HOLD:
-                    # Token k-1 is a sustained hold (Madd / Ghunnah, e.g. ۦۦۦۦ, اااا, ۥۥۥۥ, مم, ںںں).
-                    # Token k-1 OWNS the sustained blank frames!
-                    # Token k only starts at its physical articulatory onset before its emission peak.
-                    if c_curr == AcousticAnchorType.GEMINATE_CLOSURE:
-                        lead = 4 * actual_frame_step  # ~160ms for Shaddah
-                    elif c_curr == AcousticAnchorType.BURST_RELEASE:
-                        lead = 2 * actual_frame_step  # ~80ms for stop/burst
-                    else:
-                        lead = 2 * actual_frame_step  # ~80ms for standard consonant
-
-                    boundary = max(e_secs[k - 1] + min_dur_s, pk_secs[k] - lead)
-                    e_secs[k - 1] = boundary
-                    s_secs[k] = boundary
-
+                # Determine articulatory lead-in duration before token k's emission peak
+                if c_curr == AcousticAnchorType.GEMINATE_CLOSURE:
+                    lead = 3 * actual_frame_step  # ~120ms closure for Shaddah/geminate
+                elif c_curr == AcousticAnchorType.BURST_RELEASE:
+                    lead = 2 * actual_frame_step  # ~80ms closure for plosive/stop/burst
                 elif c_curr == AcousticAnchorType.SUSTAINED_HOLD:
-                    # Token k is a Madd or Ghunnah; absorbs hold from preceding short consonant
-                    s_secs[k] = e_secs[k - 1]
-
-                elif c_curr in (AcousticAnchorType.GEMINATE_CLOSURE, AcousticAnchorType.BURST_RELEASE):
-                    # Token k is a Shaddah or plosive stop closure
-                    s_secs[k] = e_secs[k - 1]
-
+                    lead = 2 * actual_frame_step  # ~80ms for Madd/Ghunnah
                 else:
-                    # Standard CV to standard CV: fair split of transition gap
+                    lead = 2 * actual_frame_step  # ~80ms for standard consonant/vowel
+
+                # Token k-1 must complete its minimum duration and acoustic center,
+                # while Token k must claim its articulatory onset before its emission peak (pk_secs[k])
+                min_boundary = max(s_secs[k - 1] + min_dur_s, pk_secs[k - 1] + min_dur_s * 0.5)
+                target_boundary = pk_secs[k] - lead
+
+                if c_prev == AcousticAnchorType.SUSTAINED_HOLD:
+                    # Token k-1 is a sustained Madd / Ghunnah hold: holds until token k's onset
+                    boundary = max(min_boundary, min(e_secs[k - 1], target_boundary))
+                elif c_curr in (AcousticAnchorType.GEMINATE_CLOSURE, AcousticAnchorType.BURST_RELEASE):
+                    # Token k is a stop/closure: boundary sits at the start of closure
+                    boundary = max(min_boundary, min(e_secs[k - 1], target_boundary))
+                else:
+                    # Standard continuous transition: fair split between token k-1 offset and token k onset
                     gap = s_secs[k] - e_secs[k - 1]
                     if gap > 0:
                         mid_s = (e_secs[k - 1] + s_secs[k]) / 2.0
-                        e_secs[k - 1] = max(e_secs[k - 1] + min_dur_s, mid_s)
-                        s_secs[k] = e_secs[k - 1]
+                        boundary = max(min_boundary, min(mid_s, target_boundary))
                     else:
-                        s_secs[k] = e_secs[k - 1]
+                        boundary = max(min_boundary, min(e_secs[k - 1], target_boundary))
+
+                # Hard invariant: Token k always retains at least 0.5 frame before its emission peak
+                boundary = min(boundary, max(min_boundary, pk_secs[k] - actual_frame_step * 0.5))
+                e_secs[k - 1] = boundary
+                s_secs[k] = boundary
 
         # 3. Final Token Offset: trace forward acoustic energy decay to sound completion
         e_secs[n - 1] = max(
