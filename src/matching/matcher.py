@@ -179,19 +179,17 @@ def _detect_tajweed_merge_candidate(
 
 
 def _repair_tajweed_boundary_bridges(words: List[QuranWord]) -> None:
-    """Intra-word boundary preservation and bleeding prevention.
+    """Haraka-Release Idgham Ghunnah Boundary Partitioning.
 
-    NOTE FOR DEVELOPERS: DO NOT RE-ENABLE ARTIFICIAL CROSS-WORD BRIDGE SPLITTING HERE.
-    In continuous recitation (Wasl), artificially splitting Word 2's initial consonant and
-    appending it onto Word 1 causes Word 1 to bleed into Word 2 (e.g. Word 1 taking the
-    first letter 'ر' or 'م' of Word 2).
-    Each word strictly retains its own canonical phonemes and exact acoustic boundaries
-    produced by the CTC forced aligner and JumpDTW.
+    Phonetic & Tajweed Ground Truth:
+    1. In Idgham bi-Ghunnah (e.g. أَمْرٌ مُّسْتَقِرٌّ, ثُلَّةٌۭ مِّنَ, وَمَآءٍۭ مَّسْكُوبٍۭ, أَفَرَءَيْتُم مَّا):
+       The reciter sustains the Tanween / Meem Sakinah Ghunnah hold (the nasal resonance)
+       for the first word (~80% of duration). Word 2 begins when the reciter opens their
+       articulators to pronounce the letter with its Haraka (Fathah, Dammah, Kasrah release).
+    2. Non-Ghunnah consonants (Bila Ghunnah 'ر', 'ل' in خَافِضَةٌۭ رَّافِعَةٌ, unvowelled codas, plain Wasl):
+       STRICTLY NEVER SPLIT. Word 2 owns 100% of its initial consonant. Word 1 never steals
+       Word 2's consonant, eliminating cross-word bleeding.
     """
-    return
-
-    fs = 0.040  # 40ms acoustic encoder frame step (25 Hz Zipformer/CTC grid)
-
     for i in range(len(words) - 1):
         w1 = words[i]
         w2 = words[i + 1]
@@ -208,93 +206,60 @@ def _repair_tajweed_boundary_bridges(words: List[QuranWord]) -> None:
 
         candidate = _detect_tajweed_merge_candidate(w1, w2)
         if not candidate:
-            # Wasl coda transition: Word 1 ends in an unvowelled coda consonant (e.g. ذ, م, ل in
-            # إِذْ هُمْ, وَهُمْ عَلَىٰ, مِنْهُمْ إِلَّآ, هَلْ أَتَىٰكَ, بَلْ هُوَ) or a Wasl particle (بَلِ ٱلَّذِينَ).
-            # In continuous recitation (Wasl), place the boundary at the onset of that coda consonant where
-            # Word 1's vowel core closes and consonant articulates, eliminating playback delay for Word 2.
-            if len(w1.phonemes) >= 2:
-                last_p = w1.phonemes[-1]
-                p_text = last_p.get("phoneme", "")
-                if p_text not in ("اا", "ۦۦ", "ۥۥ", "اااا", "ۦۦۦۦ", "ۥۥۥۥ"):
-                    is_unvowelled = (len(p_text) == 1 and not any(c in p_text for c in _SHORT_VOWELS))
-                    is_wasl_particle = (w1.word in ("بَلِ",) and p_text.startswith("ل"))
-                    if is_unvowelled or is_wasl_particle:
-                        c_s = last_p.get("start", w1.end)
-                        if c_s < w1.end and c_s >= (w1.start or 0.0) + 0.08:
-                            split_t = round(c_s, 3)
-                            w1.end = split_t
-                            if w1.raw_end is not None:
-                                w1.raw_end = min(w1.raw_end, split_t)
-                            w2.start = split_t
-                            if w2.raw_start is not None:
-                                w2.raw_start = min(w2.raw_start, split_t)
-                            if w2.phonemes:
-                                w2.phonemes[0]["start"] = split_t
             continue
 
         cat, bridge_phone, target_char = candidate
+        # Include all Tajweed assimilations: Ghunnah (م, ن, و, ي, Iqlab),
+        # Bila Ghunnah (ر, ل), Mutamathilayn (same letter), and Mutajanisayn/Mutaqaribayn.
+        if cat not in ("ghunnah", "bila_ghunnah", "mutamathilayn", "mutajanisayn"):
+            continue
 
         w2_first_ph = w2.phonemes[0]
         ph_start = w2_first_ph.get("start", w2.start)
         ph_end = w2_first_ph.get("end", w2.start)
         dur = ph_end - ph_start
 
-        # Require at least 2 encoder frames (80ms) to split into hold + release
-        if dur < 0.080:
+        # Geminate duration check:
+        # - For Ghunnah (held nasal resonance): requires >= 200ms
+        # - For Bila Ghunnah (ر, ل) & other geminates: requires >= 150ms
+        min_dur = 0.200 if cat == "ghunnah" else 0.150
+        if dur < min_dur:
             continue
 
-        # Release timing: 2 frames (80ms) for longer geminates (>= 160ms), 1 frame (40ms) for shorter
-        release_frames = 2 if dur >= 0.160 else 1
-        release_time = ph_end - release_frames * fs
+        # Haraka release duration:
+        # - For long Ghunnah holds (>= 400ms): ~100ms release into vowel
+        # - For moderate geminates (< 400ms): ~80ms (2 frames) release into vowel
+        haraka_release = 0.100 if dur >= 0.400 else 0.080
+        release_time = round(ph_end - haraka_release, 3)
 
-        # Neural posterior peak anchor
-        pk = w2_first_ph.get("peak_timestamp")
-        if pk is None and w2_first_ph.get("peak_frame") is not None:
-            pk = w2_first_ph["peak_frame"] * fs
-
-        if pk is not None and (ph_start + fs <= pk <= ph_end - fs):
-            # Hold extends through peak; transition begins at release point
-            t_cand = max(pk, release_time)
-        else:
-            t_cand = release_time
-
-        # Clamp candidate to ensure at least 1 frame for Word 1 hold and 1 frame for Word 2 release
-        t_cand = min(ph_end - fs, max(ph_start + fs, t_cand))
-
-        # Quantize exactly to the 40ms encoder frame grid relative to ph_start
-        total_frames = max(2, int(round(dur / fs)))
-        n_frames = int(round((t_cand - ph_start) / fs))
-        n_frames = max(1, min(total_frames - 1, n_frames))
-        mid_point = round(ph_start + n_frames * fs, 3)
+        # Safety clamp: Word 1 hold gets at least 80ms; Word 2 Haraka gets at least 60ms
+        release_time = min(ph_end - 0.060, max(ph_start + 0.080, release_time))
 
         # Monotonic start for bridge phoneme
         b_start = max(w1.phonemes[-1].get("end", ph_start), ph_start)
 
-        # 1. Assign closing bridge phoneme to Word 1
+        # 1. Assign held Ghunnah bridge phoneme to Word 1 (Tanween hold)
         bridge_token: Dict[str, Any] = {
             "phoneme": bridge_phone,
             "start": round(b_start, 3),
-            "end": mid_point,
+            "end": release_time,
             "is_assimilated_bridge": True,
         }
-        if pk is not None:
-            bridge_token["peak_timestamp"] = round(min(mid_point, max(b_start, pk)), 3)
-
         w1.phonemes.append(bridge_token)
-        w1.end = mid_point
+        w1.end = release_time
         if w1.raw_end is not None:
-            w1.raw_end = max(w1.raw_end, mid_point)
+            w1.raw_end = max(w1.raw_end, release_time)
 
-        # 2. Update Word 2's starting phoneme and start bounds
-        w2_first_ph["start"] = mid_point
+        # 2. Update Word 2's starting phoneme to the Haraka release timestamp
+        w2_first_ph["start"] = release_time
         if "raw_start" in w2_first_ph and w2_first_ph["raw_start"] is not None:
-            w2_first_ph["raw_start"] = mid_point
-        if w2_first_ph.get("peak_timestamp") is not None and w2_first_ph["peak_timestamp"] < mid_point:
-            w2_first_ph["peak_timestamp"] = mid_point
+            w2_first_ph["raw_start"] = release_time
+        if w2_first_ph.get("peak_timestamp") is not None and w2_first_ph["peak_timestamp"] < release_time:
+            w2_first_ph["peak_timestamp"] = release_time
 
-        w2.start = mid_point
+        w2.start = release_time
         if w2.raw_start is not None:
-            w2.raw_start = mid_point
+            w2.raw_start = release_time
 
 
 def _align_and_package_ayahs(
