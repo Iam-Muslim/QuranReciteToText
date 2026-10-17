@@ -236,8 +236,8 @@ def _repair_tajweed_boundary_bridges(words: List[QuranWord]) -> None:
         # Safety clamp: Word 1 hold gets at least 80ms; Word 2 Haraka gets at least 60ms
         release_time = min(ph_end - 0.060, max(ph_start + 0.080, release_time))
 
-        # Monotonic start for bridge phoneme
-        b_start = max(w1.phonemes[-1].get("end", ph_start), ph_start)
+        # Monotonic start for bridge phoneme: starts exactly where Word 1's previous phoneme finishes
+        b_start = w1.phonemes[-1].get("end", ph_start) if w1.phonemes else ph_start
 
         # 1. Assign held Ghunnah bridge phoneme to Word 1 (Tanween hold)
         bridge_token: Dict[str, Any] = {
@@ -262,6 +262,15 @@ def _repair_tajweed_boundary_bridges(words: List[QuranWord]) -> None:
         orig_ph = w2_first_ph.get("phoneme", "")
         vowels = [c for c in orig_ph if c in _SHORT_VOWELS]
         haraka = vowels[-1] if vowels else ""
+        if not haraka and w2.ref:
+            v_ref = [c for c in w2.ref if c in _SHORT_VOWELS]
+            if v_ref:
+                haraka = v_ref[0]
+        if not haraka and w2.word:
+            for c in w2.word:
+                if c in _SHORT_VOWELS:
+                    haraka = c
+                    break
         w2_first_ph["phoneme"] = target_char + haraka
 
         w2.start = release_time
@@ -470,11 +479,31 @@ def _align_and_package_ayahs(
         else:
             passes = [(qwords, False)]
 
+        # Seamless Wasl closure across consecutive words in continuous speech:
+        # Closes unaligned CTC blank gaps (e.g. sibilant friction 'سس' in 'فَوَرَبِّ ٱلسَّمَآءِ')
+        # where there is no acoustic pause (gap <= 0.35s).
+        def _close_inter_word_gaps(w_list: List[QuranWord]) -> None:
+            for i in range(len(w_list) - 1):
+                cw1 = w_list[i]
+                cw2 = w_list[i + 1]
+                if cw1.end is not None and cw2.start is not None:
+                    cgap = round(cw2.start - cw1.end, 3)
+                    if -0.05 <= cgap <= 0.35:
+                        cw2.start = cw1.end
+                        if cw2.raw_start is not None:
+                            cw2.raw_start = min(cw2.raw_start, cw1.end)
+                        if cw2.phonemes:
+                            cw2.phonemes[0]["start"] = cw1.end
+                            if "raw_start" in cw2.phonemes[0] and cw2.phonemes[0]["raw_start"] is not None:
+                                cw2.phonemes[0]["raw_start"] = cw1.end
+
         # Repair cross-word Tajweed boundary bridges across words in connected speech
         if has_repeated:
             _repair_tajweed_boundary_bridges(qwords)
+            _close_inter_word_gaps(qwords)
         for pass_words, _ in passes:
             _repair_tajweed_boundary_bridges(pass_words)
+            _close_inter_word_gaps(pass_words)
 
         # Tier 2: Split passes on Phase 1 pauses with 'Never Cut Word' geometric validation
         sub_segs_list: List[AyahSubSegment] = []
@@ -560,7 +589,7 @@ def _align_and_package_ayahs(
                 cw2 = chunk[i + 1]
                 if cw1.end is not None and cw2.start is not None:
                     cgap = round(cw2.start - cw1.end, 3)
-                    if 0 < cgap <= 0.35:
+                    if -0.05 <= cgap <= 0.35:
                         cw2.start = cw1.end
                         if cw2.raw_start is not None:
                             cw2.raw_start = min(cw2.raw_start, cw1.end)
@@ -610,21 +639,6 @@ def _align_and_package_ayahs(
             seg_start = sub_segments[0].start_time
             seg_end = sub_segments[-1].end_time
         elif qwords:
-            # Ensure zero inter-word dead-air gaps inside continuous speech segment:
-            # Word 2 begins immediately when Word 1 ends, absorbing unaligned consonant onset (e.g. 'سس' in 'فَوَرَبِّ ٱلسَّمَآءِ')!
-            for i in range(len(qwords) - 1):
-                qw1 = qwords[i]
-                qw2 = qwords[i + 1]
-                if qw1.end is not None and qw2.start is not None:
-                    qgap = round(qw2.start - qw1.end, 3)
-                    if 0 < qgap <= 0.35:
-                        qw2.start = qw1.end
-                        if qw2.raw_start is not None:
-                            qw2.raw_start = min(qw2.raw_start, qw1.end)
-                        if qw2.phonemes:
-                            qw2.phonemes[0]["start"] = qw1.end
-                            if "raw_start" in qw2.phonemes[0] and qw2.phonemes[0]["raw_start"] is not None:
-                                qw2.phonemes[0]["raw_start"] = qw1.end
             seg_start = qwords[0].start or 0.0
             seg_end = qwords[-1].end or 0.0
         else:

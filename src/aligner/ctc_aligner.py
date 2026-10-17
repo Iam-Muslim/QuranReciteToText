@@ -519,8 +519,18 @@ class CtcViterbiAligner:
             c_curr = token_classes[k]
 
             # Detect acoustic micro-pause (breath / Sakt with drop below speech threshold)
+            # Physical stop closures (Shaddah / Qalqalah) naturally have acoustic silence/occlusion
+            # before release and MUST NOT be misclassified as pauses.
             is_micro_pause = False
-            if matched_pause is None and gap_dur >= 0.20 and c_curr != AcousticAnchorType.SUSTAINED_HOLD:
+            if (
+                matched_pause is None
+                and gap_dur >= 0.28
+                and c_curr not in (
+                    AcousticAnchorType.SUSTAINED_HOLD,
+                    AcousticAnchorType.GEMINATE_CLOSURE,
+                    AcousticAnchorType.BURST_RELEASE,
+                )
+            ):
                 if frame_db_10ms is not None:
                     g_idx_s = int(round(gap_s_sec / 0.010))
                     g_idx_e = int(round(gap_e_sec / 0.010))
@@ -564,29 +574,9 @@ class CtcViterbiAligner:
 
             else:
                 # ─── CONTINUOUS CONNECTED SPEECH (Wasl inside phrase) ───
-                if c_curr == AcousticAnchorType.SUSTAINED_HOLD:
-                    # Sustained phoneme (Madd / Ghunnah / long vowel): absorbs pre-peak hold
-                    e_secs[k - 1] = e_secs[k - 1] + min_dur_s
-                    s_secs[k] = e_secs[k - 1]
-                elif c_curr == AcousticAnchorType.GEMINATE_CLOSURE:
-                    # Geminate closure (Shaddah): consonant occlusion before neural emission peak
-                    shaddah_s = max(e_secs[k - 1] + min_dur_s, s_secs[k] - 3 * actual_frame_step)
-                    e_secs[k - 1] = shaddah_s
-                    s_secs[k] = shaddah_s
-                elif c_curr == AcousticAnchorType.BURST_RELEASE:
-                    # Burst release (Qalqalah / plosive stop): occlusion release before burst
-                    burst_s = max(e_secs[k - 1] + min_dur_s, s_secs[k] - 2 * actual_frame_step)
-                    e_secs[k - 1] = burst_s
-                    s_secs[k] = burst_s
-                else:
-                    # Standard CV: split intermediate blank frames at midpoint
-                    if gap_dur > 0:
-                        mid_s = (e_secs[k - 1] + s_secs[k]) / 2.0
-                        e_secs[k - 1] = max(e_secs[k - 1] + min_dur_s, mid_s)
-                        s_secs[k] = e_secs[k - 1]
-                    else:
-                        e_secs[k - 1] = e_secs[k - 1] + min_dur_s
-                        s_secs[k] = e_secs[k - 1]
+                # Seamless physical continuity: Token k starts immediately where Token k-1 finishes.
+                # Eliminates artificial dead-air holes in the speech stream.
+                s_secs[k] = e_secs[k - 1]
 
         # 3. Final Token Offset: trace forward acoustic energy decay to sound completion
         e_secs[n - 1] = max(
