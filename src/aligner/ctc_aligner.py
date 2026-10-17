@@ -83,11 +83,16 @@ def _trace_speech_onset_backward(
         return default_sec
 
     onset_idx = pk_idx
+    dip_count = 0
+    # Allow up to 3 frames (30ms) of transient dip (e.g. plosive closure or glottal catch)
     for t in range(pk_idx, earliest_idx - 1, -1):
         if frame_db_10ms[t] >= speech_th_db:
             onset_idx = t
+            dip_count = 0
         else:
-            break  # Crossed into ambient noise floor
+            dip_count += 1
+            if dip_count > 3:
+                break
     return float(onset_idx * 0.010)
 
 
@@ -114,11 +119,15 @@ def _trace_speech_decay_forward(
         return default_sec
 
     decay_idx = pk_idx
+    dip_count = 0
     for t in range(pk_idx + 1, latest_idx):
         if frame_db_10ms[t] >= speech_th_db:
             decay_idx = t + 1
+            dip_count = 0
         else:
-            break  # Decayed into ambient noise floor
+            dip_count += 1
+            if dip_count > 3:
+                break
     return float(decay_idx * 0.010)
 
 try:
@@ -477,7 +486,7 @@ class CtcViterbiAligner:
                 rms_arr = np.sqrt(np.mean(strided ** 2, axis=-1))
                 frame_db_10ms = 20.0 * np.log10(np.maximum(1e-5, rms_arr))
                 noise_floor = float(np.percentile(frame_db_10ms, 2))
-                speech_th_db = min(-24.0, max(noise_floor + 6.0, -44.0))
+                speech_th_db = min(-26.0, max(noise_floor + 4.0, -46.0))
 
         min_dur_s = actual_frame_step
         lookahead = float(getattr(config, "LOOKAHEAD_OFFSET_FRAMES", LOOKAHEAD_OFFSET_FRAMES))
@@ -561,22 +570,55 @@ class CtcViterbiAligner:
 
                 # Start token k: trace backward acoustic speech onset from peak (bounded by p_cut)
                 earliest_s = max(e_secs[k - 1], p_cut)
-                s_secs[k] = max(
-                    e_secs[k - 1],
-                    _trace_speech_onset_backward(
-                        frame_db_10ms=frame_db_10ms,
-                        pk_sec=pk_secs[k],
-                        earliest_sec=earliest_s,
-                        speech_th_db=speech_th_db,
-                        default_sec=s_secs[k],
-                    ),
+                p_min_db = getattr(matched_pause, "min_energy_db", None) if matched_pause is not None else None
+                if p_min_db is not None and not math.isnan(p_min_db):
+                    local_th = min(speech_th_db, max(p_min_db + 4.0, -45.0))
+                else:
+                    local_th = speech_th_db
+
+                s_onset = _trace_speech_onset_backward(
+                    frame_db_10ms=frame_db_10ms,
+                    pk_sec=pk_secs[k],
+                    earliest_sec=earliest_s,
+                    speech_th_db=local_th,
+                    default_sec=s_secs[k],
                 )
+                s_secs[k] = max(earliest_s, s_onset)
 
             else:
                 # ─── CONTINUOUS CONNECTED SPEECH (Wasl inside phrase) ───
-                # Seamless physical continuity: Token k starts immediately where Token k-1 finishes.
-                # Eliminates artificial dead-air holes in the speech stream.
-                s_secs[k] = e_secs[k - 1]
+                if c_prev == AcousticAnchorType.SUSTAINED_HOLD:
+                    # Token k-1 is a sustained hold (Madd / Ghunnah, e.g. ۦۦۦۦ, اااا, ۥۥۥۥ, مم, ںںں).
+                    # Token k-1 OWNS the sustained blank frames!
+                    # Token k only starts at its physical articulatory onset before its emission peak.
+                    if c_curr == AcousticAnchorType.GEMINATE_CLOSURE:
+                        lead = 4 * actual_frame_step  # ~160ms for Shaddah
+                    elif c_curr == AcousticAnchorType.BURST_RELEASE:
+                        lead = 2 * actual_frame_step  # ~80ms for stop/burst
+                    else:
+                        lead = 2 * actual_frame_step  # ~80ms for standard consonant
+
+                    boundary = max(e_secs[k - 1] + min_dur_s, pk_secs[k] - lead)
+                    e_secs[k - 1] = boundary
+                    s_secs[k] = boundary
+
+                elif c_curr == AcousticAnchorType.SUSTAINED_HOLD:
+                    # Token k is a Madd or Ghunnah; absorbs hold from preceding short consonant
+                    s_secs[k] = e_secs[k - 1]
+
+                elif c_curr in (AcousticAnchorType.GEMINATE_CLOSURE, AcousticAnchorType.BURST_RELEASE):
+                    # Token k is a Shaddah or plosive stop closure
+                    s_secs[k] = e_secs[k - 1]
+
+                else:
+                    # Standard CV to standard CV: fair split of transition gap
+                    gap = s_secs[k] - e_secs[k - 1]
+                    if gap > 0:
+                        mid_s = (e_secs[k - 1] + s_secs[k]) / 2.0
+                        e_secs[k - 1] = max(e_secs[k - 1] + min_dur_s, mid_s)
+                        s_secs[k] = e_secs[k - 1]
+                    else:
+                        s_secs[k] = e_secs[k - 1]
 
         # 3. Final Token Offset: trace forward acoustic energy decay to sound completion
         e_secs[n - 1] = max(
@@ -584,7 +626,7 @@ class CtcViterbiAligner:
             _trace_speech_decay_forward(
                 frame_db_10ms=frame_db_10ms,
                 pk_sec=pk_secs[n - 1],
-                latest_sec=audio_duration,
+                latest_sec=min(audio_duration, pk_secs[n - 1] + 0.800),
                 speech_th_db=speech_th_db,
                 default_sec=min(audio_duration, e_secs[n - 1] + 2 * actual_frame_step),
             ),
