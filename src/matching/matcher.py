@@ -126,15 +126,18 @@ def _detect_tajweed_merge_candidate(
     w2_first_ph = w2.phonemes[0] if w2.phonemes else {}
     w2_first_str = w2_first_ph.get("phoneme", "")
 
+    has_bridge = bool(w1.phonemes and w1.phonemes[-1].get("is_assimilated_bridge"))
+    if has_bridge:
+        return None
+
     # 1. Reference Phoneme Assimilation Suffixes (from ordered_quran_phonemes reference data)
     for cat, suffixes in _TAJWEED_REF_RULES:
         for suf in suffixes:
             if w1_ref.endswith(suf) or (suf in ("۾", "۾۾۾") and "۾" in w1_ref):
                 target_char = "م" if "۾" in suf else suf[0]
-                if not w1_clean_str.endswith(target_char):
-                    if w2_first_str.startswith(target_char) or w2_ref.startswith(target_char):
-                        bridge_phone = "مم" if "۾" in suf else suf
-                        return cat, bridge_phone, target_char
+                if w2_first_str.startswith(target_char) or w2_ref.startswith(target_char):
+                    bridge_phone = "مم" if "۾" in suf else suf
+                    return cat, bridge_phone, target_char
 
     # 2. Same-Letter Merges (Idgham Mutamathilayn: last letter of w1 == first letter of w2)
     if w1.word and w2.word:
@@ -144,13 +147,14 @@ def _detect_tajweed_merge_candidate(
             last1 = clean1[-1]
             first2 = clean2[0]
             if last1 == first2 and last1 not in ("ا", "ى", "و", "ي"):
-                if not w1_clean_str.endswith(last1):
-                    if w2_first_str.startswith(last1) or w2_ref.startswith(last1):
-                        cat = "ghunnah" if last1 in ("م", "ن") else "mutamathilayn"
-                        bridge_phone = "مم" if last1 == "م" else ("نن" if last1 == "ن" else last1)
-                        return cat, bridge_phone, last1
+                if w2_first_str.startswith(last1) or w2_ref.startswith(last1):
+                    cat = "ghunnah" if last1 in ("م", "ن") else "mutamathilayn"
+                    bridge_phone = "مم" if last1 == "م" else ("نن" if last1 == "ن" else last1)
+                    return cat, bridge_phone, last1
 
     # 3. Tanween Word Merges from Mushaf Text (Idgham / Iqlab)
+    # A word with Tanween (e.g. قَوْمٍۢ, يَوْمٍۢ) has an assimilated coda regardless of whether
+    # its root spelling naturally ends in 'م' or any other letter!
     if w1.word and w2.word:
         has_tanween = bool(_TANWEEN_RE.search(w1.word))
         clean2 = _strip_tashkeel(w2.word)
@@ -159,21 +163,18 @@ def _detect_tajweed_merge_candidate(
             if first2 in ("ي", "ن", "م", "و"):
                 target_char = first2
                 bridge_phone = first2 * 2 if first2 in ("م", "ن", "و", "ي") else first2
-                if not w1_clean_str.endswith(target_char):
-                    if w2_first_str.startswith(target_char) or w2_ref.startswith(target_char):
-                        return "ghunnah", bridge_phone, target_char
+                if w2_first_str.startswith(target_char) or w2_ref.startswith(target_char):
+                    return "ghunnah", bridge_phone, target_char
             elif first2 in ("ل", "ر"):
                 target_char = first2
                 bridge_phone = first2
-                if not w1_clean_str.endswith(target_char):
-                    if w2_first_str.startswith(target_char) or w2_ref.startswith(target_char):
-                        return "bila_ghunnah", bridge_phone, target_char
+                if w2_first_str.startswith(target_char) or w2_ref.startswith(target_char):
+                    return "bila_ghunnah", bridge_phone, target_char
             elif first2 == "ب" or "\u06e2" in w1.word:  # Iqlab
                 target_char = "م"
                 bridge_phone = "مم"
-                if not w1_clean_str.endswith("م"):
-                    if w2_first_str.startswith("م") or "م" in w2_first_str or w1_ref.endswith("مم") or "۾" in w1_ref:
-                        return "ghunnah", bridge_phone, target_char
+                if w2_first_str.startswith("م") or "م" in w2_first_str or w1_ref.endswith("مم") or "۾" in w1_ref:
+                    return "ghunnah", bridge_phone, target_char
 
     return None
 
@@ -199,9 +200,9 @@ def _repair_tajweed_boundary_bridges(words: List[QuranWord]) -> None:
         if w1.end is None or w2.start is None:
             continue
 
-        # Connected speech check: if acoustic gap > 0.08s (80ms), speaker paused (Waqf) -> DO NOT MERGE!
+        # Connected speech check: if acoustic gap > 0.25s (250ms), speaker paused (Waqf) -> DO NOT MERGE!
         gap = w2.start - w1.end
-        if gap > 0.08:
+        if gap > 0.25:
             continue
 
         candidate = _detect_tajweed_merge_candidate(w1, w2)
@@ -251,11 +252,17 @@ def _repair_tajweed_boundary_bridges(words: List[QuranWord]) -> None:
             w1.raw_end = max(w1.raw_end, release_time)
 
         # 2. Update Word 2's starting phoneme to the Haraka release timestamp
+        # AND simplify Word 2's phoneme to the single letter with its Haraka (e.g. 'مُ', 'مَ', 'مِ', 'رَ')
         w2_first_ph["start"] = release_time
         if "raw_start" in w2_first_ph and w2_first_ph["raw_start"] is not None:
             w2_first_ph["raw_start"] = release_time
         if w2_first_ph.get("peak_timestamp") is not None and w2_first_ph["peak_timestamp"] < release_time:
             w2_first_ph["peak_timestamp"] = release_time
+
+        orig_ph = w2_first_ph.get("phoneme", "")
+        vowels = [c for c in orig_ph if c in _SHORT_VOWELS]
+        haraka = vowels[-1] if vowels else ""
+        w2_first_ph["phoneme"] = target_char + haraka
 
         w2.start = release_time
         if w2.raw_start is not None:
@@ -545,6 +552,23 @@ def _align_and_package_ayahs(
         def _append_chunk(chunk: List[QuranWord]) -> None:
             if not chunk:
                 return
+
+            # Ensure zero inter-word dead-air gaps inside continuous speech segment:
+            # Word 2 begins immediately when Word 1 ends, absorbing unaligned consonant onset (e.g. 'سس' in 'فَوَرَبِّ ٱلسَّمَآءِ')!
+            for i in range(len(chunk) - 1):
+                cw1 = chunk[i]
+                cw2 = chunk[i + 1]
+                if cw1.end is not None and cw2.start is not None:
+                    cgap = round(cw2.start - cw1.end, 3)
+                    if 0 < cgap <= 0.35:
+                        cw2.start = cw1.end
+                        if cw2.raw_start is not None:
+                            cw2.raw_start = min(cw2.raw_start, cw1.end)
+                        if cw2.phonemes:
+                            cw2.phonemes[0]["start"] = cw1.end
+                            if "raw_start" in cw2.phonemes[0] and cw2.phonemes[0]["raw_start"] is not None:
+                                cw2.phonemes[0]["raw_start"] = cw1.end
+
             # A subsegment is marked as a repetition if it contains ANY word that has already been recited earlier in this Ayah
             is_rep_chunk = (
                 has_repeated
@@ -586,6 +610,21 @@ def _align_and_package_ayahs(
             seg_start = sub_segments[0].start_time
             seg_end = sub_segments[-1].end_time
         elif qwords:
+            # Ensure zero inter-word dead-air gaps inside continuous speech segment:
+            # Word 2 begins immediately when Word 1 ends, absorbing unaligned consonant onset (e.g. 'سس' in 'فَوَرَبِّ ٱلسَّمَآءِ')!
+            for i in range(len(qwords) - 1):
+                qw1 = qwords[i]
+                qw2 = qwords[i + 1]
+                if qw1.end is not None and qw2.start is not None:
+                    qgap = round(qw2.start - qw1.end, 3)
+                    if 0 < qgap <= 0.35:
+                        qw2.start = qw1.end
+                        if qw2.raw_start is not None:
+                            qw2.raw_start = min(qw2.raw_start, qw1.end)
+                        if qw2.phonemes:
+                            qw2.phonemes[0]["start"] = qw1.end
+                            if "raw_start" in qw2.phonemes[0] and qw2.phonemes[0]["raw_start"] is not None:
+                                qw2.phonemes[0]["raw_start"] = qw1.end
             seg_start = qwords[0].start or 0.0
             seg_end = qwords[-1].end or 0.0
         else:
