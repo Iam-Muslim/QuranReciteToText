@@ -308,8 +308,66 @@
         </div>
       </div>
 
-      <!-- Right: Zoom, Speed & Audio File Load -->
+      <!-- Center: View Mode Switcher (Fixed in playback bar, zero floating overlap) -->
+      <div class="control-bar-center" v-if="projectStore.activeSurah.value">
+        <div class="view-toggle-pill">
+          <button 
+            class="toggle-btn" 
+            :class="{ 'active': projectStore.viewMode.value === 'mushaf_page' }"
+            @click="projectStore.viewMode.value = 'mushaf_page'"
+            title="Medina Mushaf Sacred Page"
+          >
+            <BookOpen :size="12" />
+            <span>Mushaf</span>
+          </button>
+
+          <button 
+            class="toggle-btn" 
+            :class="{ 'active': projectStore.viewMode.value === 'ayah_studio' }"
+            @click="projectStore.viewMode.value = 'ayah_studio'"
+            title="Verses Studio Cards"
+          >
+            <ListTree :size="12" />
+            <span>Verses</span>
+          </button>
+
+          <button 
+            class="toggle-btn" 
+            :class="{ 'active': projectStore.viewMode.value === 'phoneme_inspector' }"
+            @click="projectStore.viewMode.value = 'phoneme_inspector'"
+            title="Phoneme Atoms Inspector"
+          >
+            <Layers :size="12" />
+            <span>Phonemes</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Right: Font Stepper, Zoom & Speed -->
       <div class="control-bar-right">
+        <!-- Font Size Stepper (Mushaf Page Mode) -->
+        <div class="font-stepper-group" v-if="projectStore.viewMode.value === 'mushaf_page' && projectStore.activeSurah.value" title="Adjust Quran Font Size">
+          <button 
+            class="stepper-btn" 
+            @click="projectStore.setMushafFontSize(projectStore.mushafFontSize.value - 0.15)"
+            title="Decrease Font Size"
+            :disabled="projectStore.mushafFontSize.value <= 1.3"
+          >
+            <span>A-</span>
+          </button>
+          <span class="stepper-val">{{ Math.round((projectStore.mushafFontSize.value / 1.95) * 100) }}%</span>
+          <button 
+            class="stepper-btn" 
+            @click="projectStore.setMushafFontSize(projectStore.mushafFontSize.value + 0.15)"
+            title="Increase Font Size"
+            :disabled="projectStore.mushafFontSize.value >= 3.2"
+          >
+            <span>A+</span>
+          </button>
+        </div>
+
+        <div class="bar-divider" v-if="projectStore.viewMode.value === 'mushaf_page' && projectStore.activeSurah.value"></div>
+
         <div class="zoom-cluster">
           <input
             type="range"
@@ -338,10 +396,8 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch, computed, nextTick } from 'vue';
-import WaveSurfer from 'wavesurfer.js';
-import MinimapPlugin from 'wavesurfer.js/dist/plugins/minimap.esm.js';
 import { projectStore } from '../services/projectStore';
-import { isTauriEnvironment, getAudioStreamUrl, resolveAudioSourceUrl, getAudioWaveform, getDuration } from '../services/api';
+import { isTauriEnvironment, getAudioStreamUrl, resolveAudioSourceUrl } from '../services/api';
 import type { AlignedWord, TimelineSegmentItem } from '../types/aligner';
 import { 
   Play, 
@@ -351,8 +407,13 @@ import {
   UploadCloud, 
   Repeat, 
   FileAudio, 
-  Loader2 
+  Loader2,
+  BookOpen,
+  ListTree,
+  Layers
 } from 'lucide-vue-next';
+import { usePlaybackTransport } from '../composables/usePlaybackTransport';
+import { useTimelineDrag, type SharedDivider } from '../composables/useTimelineDrag';
 
 const emit = defineEmits<{
   (e: 'word-context-menu', event: MouseEvent, word: AlignedWord): void;
@@ -366,28 +427,72 @@ const scrollbarTrack = ref<HTMLElement | null>(null);
 const fileInput = ref<HTMLInputElement | null>(null);
 const segmentPlayheadLine = ref<HTMLElement | null>(null);
 const wordPlayheadLine = ref<HTMLElement | null>(null);
-
-let wavesurfer: WaveSurfer | null = null;
-let minimapPlugin: any = null;
-let isInternalTimeUpdate = false;
-let currentlyLoadedAudioUrl: string | null = null;
-let resizeObserver: ResizeObserver | null = null;
-
-const isPlaying = ref(false);
-const currentTime = ref(0);
-const duration = ref(0);
-const zoomLevel = ref(120);
-const playbackRate = ref(1.0);
 const isDraggingFile = ref(false);
-const hasAudioLoaded = ref(false);
-const isPanning = ref(false);
-const currentScrollLeft = ref(0);
-const viewportClientWidth = ref(800);
-const activeDraggingDividerId = ref<string | null>(null);
+const isUploadingAudio = ref(false);
+const selectedWordStartTime = ref<number | null>(null);
+let resizeObserver: ResizeObserver | null = null;
 
 const selectedWord = computed<AlignedWord | undefined>(() => {
   if (!projectStore.activeWordLocation.value) return undefined;
   return projectStore.findWordByLocation(projectStore.activeWordLocation.value);
+});
+
+function handleLoopCheck(t: number) {
+  const ws = transport.getWaveSurfer();
+  if (!ws || !transport.isPlaying.value) return;
+
+  if (projectStore.loopMode.value === 'word' && selectedWord.value) {
+    const w = selectedWord.value;
+    if (t >= w.end) {
+      ws.setTime(w.start);
+    }
+  } else if (projectStore.loopMode.value === 'ayah' && projectStore.activeAyah.value) {
+    const a = projectStore.activeAyah.value;
+    if (t >= a.end) {
+      ws.setTime(a.start);
+    }
+  }
+}
+
+const transport = usePlaybackTransport(
+  waveformMount,
+  minimapMount,
+  segmentPlayheadLine,
+  wordPlayheadLine,
+  ayahTrackViewport,
+  wordTrackViewport,
+  handleLoopCheck
+);
+
+const {
+  isPlaying,
+  currentTime,
+  duration,
+  zoomLevel,
+  playbackRate,
+  hasAudioLoaded,
+  currentScrollLeft,
+  viewportClientWidth,
+  initWaveSurfer,
+  loadAudioUrl,
+  togglePlay,
+  skipBackward,
+  skipForward,
+  adjustZoom,
+  updateZoom,
+  changePlaybackRate,
+  auditionSelectedWord,
+  syncTrackScroll,
+  onTrackViewportScroll,
+  updateViewportDimensions,
+  updatePlayheadDirect,
+  handleThemeChanged,
+  destroy: destroyTransport,
+} = transport;
+
+// Timeline Segments
+const timelineSegments = computed<TimelineSegmentItem[]>(() => {
+  return projectStore.activeSegments.value;
 });
 
 // Total timeline canvas width in pixels
@@ -400,49 +505,6 @@ const totalTimelineWidth = computed(() => {
     }
   }
   return Math.max(800, Math.ceil(dur * zoomLevel.value));
-});
-
-// Timeline Segments (matching QuranCaption segment/repetition multi-track architecture)
-const timelineSegments = computed<TimelineSegmentItem[]>(() => {
-  return projectStore.activeSegments.value;
-});
-
-interface SharedDivider {
-  id: string;
-  segmentId: string;
-  leftIndex: number;
-  rightIndex: number;
-  leftWord: AlignedWord;
-  rightWord: AlignedWord;
-  time: number;
-}
-
-// Compute contiguous magnetic dividers between adjacent words ONLY within the SAME segment when actually contiguous
-const wordDividers = computed<SharedDivider[]>(() => {
-  const segments = timelineSegments.value;
-  const dividers: SharedDivider[] = [];
-  for (const seg of segments) {
-    const words = seg.words;
-    for (let i = 0; i < words.length - 1; i++) {
-      const left = words[i];
-      const right = words[i + 1];
-
-      // ONLY create shared divider if adjacent words touch (<= 10ms gap).
-      // If there is silence between them, each word has its own independent boundary handles!
-      if (Math.abs(right.start - left.end) <= 0.01) {
-        dividers.push({
-          id: `div_${seg.id}_${i}_${i + 1}`,
-          segmentId: seg.id,
-          leftIndex: i,
-          rightIndex: i + 1,
-          leftWord: left,
-          rightWord: right,
-          time: left.end,
-        });
-      }
-    }
-  }
-  return dividers;
 });
 
 // Scrollbar calculations
@@ -463,14 +525,59 @@ const scrollbarThumbLeft = computed(() => {
   return Math.round(progress * maxThumbLeft);
 });
 
-function updatePlayheadDirect(t: number) {
-  const px = t * zoomLevel.value;
-  if (segmentPlayheadLine.value) {
-    segmentPlayheadLine.value.style.transform = `translateX(${px}px)`;
+// Compute contiguous magnetic dividers between adjacent words ONLY within the SAME segment when actually contiguous
+const wordDividers = computed<SharedDivider[]>(() => {
+  const segments = timelineSegments.value;
+  const dividers: SharedDivider[] = [];
+  for (const seg of segments) {
+    const words = seg.words;
+    for (let i = 0; i < words.length - 1; i++) {
+      const left = words[i];
+      const right = words[i + 1];
+
+      if (Math.abs(right.start - left.end) <= 0.01) {
+        dividers.push({
+          id: `div_${seg.id}_${i}_${i + 1}`,
+          segmentId: seg.id,
+          leftIndex: i,
+          rightIndex: i + 1,
+          leftWord: left,
+          rightWord: right,
+          time: left.end,
+        });
+      }
+    }
   }
-  if (wordPlayheadLine.value) {
-    wordPlayheadLine.value.style.transform = `translateX(${px}px)`;
-  }
+  return dividers;
+});
+
+const {
+  isPanning,
+  activeDraggingDividerId,
+  activeDraggingBoundary,
+  startDragDivider,
+  isWordBoundaryStart,
+  isWordBoundaryEnd,
+  startDragWordBoundary,
+  startDragSegmentBoundary,
+  handleTimelineMouseDown,
+  handleScrollbarTrackClick,
+  startDragScrollbarThumb,
+  handleTimelineWheel: handleWheelRaw,
+} = useTimelineDrag(
+  transport.getWaveSurfer,
+  zoomLevel,
+  duration,
+  totalTimelineWidth,
+  viewportClientWidth,
+  scrollbarThumbWidth,
+  scrollbarTrack,
+  syncTrackScroll,
+  adjustZoom
+);
+
+function handleTimelineWheel(e: WheelEvent) {
+  handleWheelRaw(e, hasAudioLoaded.value);
 }
 
 function formatAccurateTime(secs: number): string {
@@ -481,11 +588,263 @@ function formatAccurateTime(secs: number): string {
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(ms).padStart(2, '0')}`;
 }
 
-/**
- * Resolves the playable URL for a surah's audio (shared logic in api.ts).
- */
 function resolveSurahAudioUrl(s: { audio_file?: string | null; audio_url?: string | null }): string | null {
   return resolveAudioSourceUrl(s) || null;
+}
+
+function handleSegmentClick(seg: TimelineSegmentItem) {
+  projectStore.selectAyah(seg.ayahNumber);
+  const ws = transport.getWaveSurfer();
+  if (ws) {
+    ws.setTime(seg.start);
+    updatePlayheadDirect(seg.start);
+  }
+}
+
+function handleWordClick(w: AlignedWord) {
+  selectedWordStartTime.value = w.start;
+  projectStore.selectWord(w.location, false);
+  const ws = transport.getWaveSurfer();
+  if (ws) {
+    ws.setTime(w.start);
+    updatePlayheadDirect(w.start);
+  }
+}
+
+function isTimelineWordActive(w: AlignedWord): boolean {
+  return projectStore.currentKaraokeLocation.value === w.location;
+}
+
+function isTimelineWordSelected(w: AlignedWord): boolean {
+  if (isPlaying.value) return false;
+  if (projectStore.activeWordLocation.value !== w.location) return false;
+  if (selectedWordStartTime.value === null) return true;
+  return Math.abs(selectedWordStartTime.value - w.start) < 0.001;
+}
+
+function isSegmentPlaying(seg: TimelineSegmentItem): boolean {
+  return projectStore.activeAyahNumber.value === seg.ayahNumber;
+}
+
+const WBW_DISPLAY_STRIP_MARKERS = /[۟۠]/g;
+function formatTimelineWord(text: string): string {
+  return (text || '').replace(WBW_DISPLAY_STRIP_MARKERS, '');
+}
+
+function handleContextMenu(e: MouseEvent, w: AlignedWord) {
+  emit('word-context-menu', e, w);
+}
+
+function cycleLoopMode() {
+  const modes: ('none' | 'ayah' | 'word')[] = ['none', 'ayah', 'word'];
+  const curIdx = modes.indexOf(projectStore.loopMode.value);
+  projectStore.loopMode.value = modes[(curIdx + 1) % modes.length];
+}
+
+function triggerFileInput() {
+  fileInput.value?.click();
+}
+
+function handleFileUpload(event: Event) {
+  const target = event.target as HTMLInputElement;
+  const file = target.files?.[0];
+  if (!file) return;
+  loadLocalFile(file);
+  target.value = '';
+}
+
+function handleFileDrop(e: DragEvent) {
+  isDraggingFile.value = false;
+  const file = e.dataTransfer?.files?.[0];
+  if (file && (file.type.startsWith('audio/') || file.type.startsWith('video/'))) {
+    loadLocalFile(file);
+  }
+}
+
+async function loadLocalFile(file: File) {
+  isUploadingAudio.value = true;
+  hasAudioLoaded.value = false;
+
+  try {
+    const nativePath: string = (file as any).path || '';
+    if (nativePath && isTauriEnvironment()) {
+      const assetUrl = getAudioStreamUrl(nativePath);
+      projectStore.setLoadedAudio(nativePath, assetUrl);
+      const ws = transport.getWaveSurfer();
+      if (ws) ws.load(assetUrl);
+    } else {
+      const localBlobUrl = URL.createObjectURL(file);
+      projectStore.setLoadedAudio(file.name, localBlobUrl);
+      const ws = transport.getWaveSurfer();
+      if (ws) ws.load(localBlobUrl);
+    }
+  } catch (err: any) {
+    console.warn('Audio load error, using blob fallback:', err);
+    const localBlobUrl = URL.createObjectURL(file);
+    projectStore.setLoadedAudio(file.name, localBlobUrl);
+    const ws = transport.getWaveSurfer();
+    if (ws) ws.load(localBlobUrl);
+  } finally {
+    isUploadingAudio.value = false;
+  }
+}
+
+function isTypingTarget(target: EventTarget | null): boolean {
+  if (!target || !(target instanceof HTMLElement)) return false;
+  return (
+    target.tagName === 'INPUT' ||
+    target.tagName === 'TEXTAREA' ||
+    target.tagName === 'SELECT' ||
+    target.isContentEditable ||
+    !!target.closest('input, textarea, select, [contenteditable="true"]')
+  );
+}
+
+function handleKeydown(e: KeyboardEvent) {
+  if (isTypingTarget(e.target)) return;
+
+  const ws = transport.getWaveSurfer();
+
+  if (e.code === 'Space') {
+    e.preventDefault();
+    if (e.shiftKey) {
+      auditionSelectedWord(selectedWord.value);
+    } else {
+      togglePlay();
+    }
+    return;
+  }
+
+  if ((e.key === 'p' || e.key === 'P') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    e.preventDefault();
+    auditionSelectedWord(selectedWord.value);
+    return;
+  }
+
+  if ((e.key === 'j' || e.key === 'J') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    e.preventDefault();
+    skipBackward(2);
+    return;
+  }
+  if ((e.key === 'k' || e.key === 'K') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    e.preventDefault();
+    togglePlay();
+    return;
+  }
+  if ((e.key === 'l' || e.key === 'L') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    e.preventDefault();
+    skipForward(2);
+    return;
+  }
+
+  if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight') && projectStore.activeWordLocation.value) {
+    e.preventDefault();
+    const nudgeAmount = (e.key === 'ArrowLeft' ? -1 : 1) * (e.shiftKey ? 0.05 : 0.025);
+    projectStore.nudgeWord(projectStore.activeWordLocation.value, nudgeAmount, 'end');
+    return;
+  }
+
+  if ((e.key === 'w' || e.key === 'W') && !e.ctrlKey && !e.metaKey && !e.altKey && projectStore.activeWordLocation.value) {
+    e.preventDefault();
+    const curTime = ws ? ws.getCurrentTime() : currentTime.value;
+    projectStore.updateWordStart(projectStore.activeWordLocation.value, curTime);
+    return;
+  }
+  if ((e.key === 'e' || e.key === 'E') && !e.ctrlKey && !e.metaKey && !e.altKey && projectStore.activeWordLocation.value) {
+    e.preventDefault();
+    const curTime = ws ? ws.getCurrentTime() : currentTime.value;
+    projectStore.updateWordEnd(projectStore.activeWordLocation.value, curTime);
+    return;
+  }
+
+  if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+    e.preventDefault();
+    const step = e.shiftKey ? 0.2 : 0.05;
+    const direction = e.key === 'ArrowLeft' ? -1 : 1;
+    if (ws) {
+      const cur = ws.getCurrentTime() || currentTime.value;
+      const newT = Math.max(0, Math.min(duration.value, cur + direction * step));
+      ws.setTime(newT);
+      currentTime.value = newT;
+      projectStore.updateCurrentTime(newT);
+      updatePlayheadDirect(newT);
+    }
+  }
+
+  if (e.key === 'PageUp' || e.key === 'PageDown') {
+    e.preventDefault();
+    const curT = ws?.getCurrentTime() || currentTime.value;
+    const segments = projectStore.activeSegments.value;
+    if (segments.length > 0) {
+      if (e.key === 'PageDown') {
+        const nextSeg = segments.find(s => s.start > curT + 0.1);
+        if (nextSeg && ws) {
+          ws.setTime(nextSeg.start);
+          currentTime.value = nextSeg.start;
+          projectStore.updateCurrentTime(nextSeg.start);
+          updatePlayheadDirect(nextSeg.start);
+        }
+      } else {
+        const prevSegs = segments.filter(s => s.start < curT - 0.1);
+        const prevSeg = prevSegs.length > 0 ? prevSegs[prevSegs.length - 1] : null;
+        if (prevSeg && ws) {
+          ws.setTime(prevSeg.start);
+          currentTime.value = prevSeg.start;
+          projectStore.updateCurrentTime(prevSeg.start);
+          updatePlayheadDirect(prevSeg.start);
+        }
+      }
+    }
+  }
+
+  if (e.key === 'Home' || ((e.key === 'i' || e.key === 'I') && !e.ctrlKey && !e.metaKey)) {
+    e.preventDefault();
+    if (ws) {
+      ws.setTime(0);
+      currentTime.value = 0;
+      projectStore.updateCurrentTime(0);
+      updatePlayheadDirect(0);
+    }
+  }
+
+  if (e.key === '[' && projectStore.activeWordLocation.value) {
+    e.preventDefault();
+    projectStore.nudgeWord(projectStore.activeWordLocation.value, e.shiftKey ? -0.05 : -0.01, 'end');
+  }
+  if (e.key === ']' && projectStore.activeWordLocation.value) {
+    e.preventDefault();
+    projectStore.nudgeWord(projectStore.activeWordLocation.value, e.shiftKey ? 0.05 : 0.01, 'end');
+  }
+  if (e.key === 'Tab') {
+    e.preventDefault();
+    projectStore.jumpToNextIssue();
+  }
+
+  if ((e.key === 'v' || e.key === 'V') && !e.ctrlKey && !e.metaKey && !e.altKey && projectStore.activeWordLocation.value) {
+    const loc = projectStore.activeWordLocation.value;
+    const curTime = ws ? ws.getCurrentTime() : currentTime.value;
+    let issue = projectStore.issues.value.find(i => i.location === loc && Math.abs(i.timestamp - curTime) < 1.0);
+    if (!issue) {
+      issue = projectStore.issues.value.find(i => i.location === loc);
+    }
+    if (issue) {
+      e.preventDefault();
+      projectStore.toggleIssueVerified(issue.id);
+    }
+  }
+
+  if (e.ctrlKey && e.key.toLowerCase() === 'z') {
+    e.preventDefault();
+    if (e.shiftKey) {
+      projectStore.redo();
+    } else {
+      projectStore.undo();
+    }
+  }
+  if (e.ctrlKey && e.key.toLowerCase() === 'y') {
+    e.preventDefault();
+    projectStore.redo();
+  }
 }
 
 onMounted(() => {
@@ -531,9 +890,10 @@ onMounted(() => {
         nextTick(() => {
           updateViewportDimensions();
           syncTrackScroll();
-          if (wavesurfer) {
+          const ws = transport.getWaveSurfer();
+          if (ws) {
             try {
-              wavesurfer.setOptions({ minPxPerSec: zoomLevel.value });
+              ws.setOptions({ minPxPerSec: zoomLevel.value });
             } catch {}
           }
           if (projectStore.activeSurah.value) {
@@ -550,1835 +910,38 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
-  stopPlaybackClock();
   window.removeEventListener('keydown', handleKeydown);
   window.removeEventListener('quran-theme-changed', handleThemeChanged);
   if (resizeObserver) {
     resizeObserver.disconnect();
   }
-  if (wavesurfer) {
-    wavesurfer.destroy();
-  }
+  destroyTransport();
 });
-
-let playbackRafId: number | null = null;
-
-function startPlaybackClock() {
-  if (playbackRafId !== null) return;
-  const tick = () => {
-    if (!wavesurfer || !isPlaying.value) {
-      playbackRafId = null;
-      return;
-    }
-    const t = wavesurfer.getCurrentTime();
-    // 1. Hardware accelerated direct GPU translation (60-120 FPS fluid, 0ms latency)
-    updatePlayheadDirect(t);
-    currentTime.value = t;
-    projectStore.updateCurrentTime(t);
-    handleLoopCheck(t);
-    playbackRafId = requestAnimationFrame(tick);
-  };
-  playbackRafId = requestAnimationFrame(tick);
-}
-
-function stopPlaybackClock() {
-  if (playbackRafId !== null) {
-    cancelAnimationFrame(playbackRafId);
-    playbackRafId = null;
-  }
-}
-
-/* Re-tint wavesurfer colors when the user switches theme/accent live */
-function handleThemeChanged() {
-  if (!wavesurfer) return;
-  const cs = getComputedStyle(document.documentElement);
-  const read = (name: string, fallback: string) => cs.getPropertyValue(name).trim() || fallback;
-  const next = {
-    accent: read('--accent-primary', '#2e7ce4'),
-    wave: read('--wave-base', '#4a4a50'),
-    waveDim: read('--wave-base-dim', '#333338'),
-    cursor: read('--playhead-color', '#ffffff'),
-  };
-  try { wavesurfer.setOptions({ waveColor: next.wave, progressColor: next.accent, cursorColor: next.cursor }); } catch {}
-  try { (minimapPlugin as unknown as { setOptions: (o: object) => void } | null)?.setOptions?.({ waveColor: next.waveDim, progressColor: next.accent, cursorColor: next.cursor }); } catch {}
-}
-
-function initWaveSurfer() {  if (!waveformMount.value) return;
-
-  // Theme-aware colors (read from live CSS tokens; react to live theme swaps)
-  const themeTokens = () => {
-    const cs = getComputedStyle(document.documentElement);
-    const read = (name: string, fallback: string) => cs.getPropertyValue(name).trim() || fallback;
-    return {
-      accent: read('--accent-primary', '#2e7ce4'),
-      wave: read('--wave-base', '#4a4a50'),
-      waveDim: read('--wave-base-dim', '#333338'),
-      cursor: read('--playhead-color', '#ffffff'),
-    };
-  };
-  const tokens = themeTokens();
-
-  minimapPlugin = MinimapPlugin.create({
-    container: minimapMount.value || undefined,
-    height: 22,
-    waveColor: tokens.waveDim,
-    progressColor: tokens.accent,
-    cursorColor: tokens.cursor,
-  });
-
-  wavesurfer = WaveSurfer.create({
-    container: waveformMount.value,
-    waveColor: tokens.wave,
-    progressColor: tokens.accent,
-    cursorColor: tokens.cursor,
-    cursorWidth: 1.5,
-    height: 105,
-    minPxPerSec: zoomLevel.value,
-    autoScroll: true,
-    autoCenter: true,
-    hideScrollbar: true, // We provide the DAW custom interactive scrollbar
-    plugins: [
-      minimapPlugin,
-    ],
-  });
-
-  wavesurfer.on('play', () => {
-    hasAudioLoaded.value = true;
-    isPlaying.value = true;
-    projectStore.isPlaying.value = true;
-    startPlaybackClock();
-  });
-
-  wavesurfer.on('pause', () => {
-    isPlaying.value = false;
-    projectStore.isPlaying.value = false;
-    stopPlaybackClock();
-  });
-
-  wavesurfer.on('timeupdate', (t: number) => {
-    if (!isPlaying.value) {
-      updatePlayheadDirect(t);
-      currentTime.value = t;
-      projectStore.updateCurrentTime(t);
-    }
-    handleLoopCheck(t);
-  });
-
-  wavesurfer.on('seeking', (t: number) => {
-    currentTime.value = t;
-    projectStore.updateCurrentTime(t);
-    updatePlayheadDirect(t);
-  });
-
-  wavesurfer.on('ready', () => {
-    hasAudioLoaded.value = true;
-    duration.value = wavesurfer?.getDuration() || 0;
-    updateViewportDimensions();
-    syncTrackScroll();
-    updatePlayheadDirect(currentTime.value);
-  });
-
-  wavesurfer.on('decode', (dur: number) => {
-    if (dur > 0) {
-      duration.value = dur;
-      hasAudioLoaded.value = true;
-      updateViewportDimensions();
-      syncTrackScroll();
-    }
-  });
-
-  wavesurfer.on('error', (err) => {
-    console.error('WaveSurfer audio load error:', err, 'for streamUrl:', currentlyLoadedAudioUrl);
-  });
-
-  // 1:1 Scroll Synchronization between WaveSurfer, Ayah lane, and Word lane
-  wavesurfer.on('scroll', () => {
-    syncTrackScroll();
-  });
-}
-
-function updateViewportDimensions() {
-  if (waveformMount.value) {
-    viewportClientWidth.value = waveformMount.value.clientWidth || 800;
-  }
-}
-
-function syncTrackScroll() {
-  if (!wavesurfer) return;
-  const scrollLeft = wavesurfer.getScroll();
-  currentScrollLeft.value = scrollLeft;
-  if (wordTrackViewport.value && Math.abs(wordTrackViewport.value.scrollLeft - scrollLeft) > 1) {
-    wordTrackViewport.value.scrollLeft = scrollLeft;
-  }
-  if (ayahTrackViewport.value && Math.abs(ayahTrackViewport.value.scrollLeft - scrollLeft) > 1) {
-    ayahTrackViewport.value.scrollLeft = scrollLeft;
-  }
-}
-
-function onTrackViewportScroll(event: Event) {
-  const el = event.target as HTMLElement;
-  if (!el || !wavesurfer) return;
-  if (Math.abs(wavesurfer.getScroll() - el.scrollLeft) > 1) {
-    wavesurfer.setScroll(el.scrollLeft);
-    syncTrackScroll();
-  }
-}
-
-// Master Mouse Wheel Handler (QuranCaption Pattern)
-// Converts vertical mouse wheel (deltaY) to horizontal timeline scroll,
-// and Ctrl + Wheel to smooth zoom centered at the cursor!
-function handleTimelineWheel(event: WheelEvent) {
-  if (!wavesurfer || !hasAudioLoaded.value) return;
-
-  // 1. Zoom with Ctrl or Cmd + Wheel
-  if (event.ctrlKey || event.metaKey) {
-    event.preventDefault();
-    const zoomDelta = event.deltaY < 0 ? 15 : -15;
-    adjustZoom(zoomDelta, event.clientX);
-    return;
-  }
-
-  // 2. Horizontal Scrolling with standard Mouse Wheel or Trackpad
-  event.preventDefault();
-  const delta = event.deltaX !== 0 ? event.deltaX : event.deltaY;
-  const scrollMultiplier = event.shiftKey ? 2.5 : 1.2;
-  const currentScroll = wavesurfer.getScroll();
-  const maxScroll = Math.max(0, totalTimelineWidth.value - viewportClientWidth.value);
-  const targetScroll = Math.max(0, Math.min(maxScroll, currentScroll + (delta * scrollMultiplier)));
-
-  wavesurfer.setScroll(targetScroll);
-  syncTrackScroll();
-}
-
-// Interactive Scrollbar Track Click & Drag
-function handleScrollbarTrackClick(e: MouseEvent) {
-  if (!scrollbarTrack.value || !wavesurfer) return;
-  const rect = scrollbarTrack.value.getBoundingClientRect();
-  const clickX = e.clientX - rect.left;
-  const trackW = rect.width;
-  const thumbW = scrollbarThumbWidth.value;
-  const maxThumbLeft = trackW - thumbW;
-  if (maxThumbLeft <= 0) return;
-
-  const targetThumbLeft = Math.max(0, Math.min(maxThumbLeft, clickX - thumbW / 2));
-  const progress = targetThumbLeft / maxThumbLeft;
-  const maxScroll = Math.max(0, totalTimelineWidth.value - viewportClientWidth.value);
-  wavesurfer.setScroll(progress * maxScroll);
-  syncTrackScroll();
-}
-
-function startDragScrollbarThumb(e: MouseEvent) {
-  if (!scrollbarTrack.value || !wavesurfer) return;
-  const startX = e.clientX;
-  const startScroll = wavesurfer.getScroll();
-  const trackW = scrollbarTrack.value.clientWidth;
-  const thumbW = scrollbarThumbWidth.value;
-  const maxThumbLeft = trackW - thumbW;
-  const maxScroll = Math.max(0, totalTimelineWidth.value - viewportClientWidth.value);
-  if (maxThumbLeft <= 0) return;
-
-  function onMouseMove(moveEvt: MouseEvent) {
-    const deltaX = moveEvt.clientX - startX;
-    const scrollDelta = (deltaX / maxThumbLeft) * maxScroll;
-    const targetScroll = Math.max(0, Math.min(maxScroll, startScroll + scrollDelta));
-    wavesurfer?.setScroll(targetScroll);
-    syncTrackScroll();
-  }
-
-  function onMouseUp() {
-    window.removeEventListener('mousemove', onMouseMove);
-    window.removeEventListener('mouseup', onMouseUp);
-  }
-
-  window.addEventListener('mousemove', onMouseMove);
-  window.addEventListener('mouseup', onMouseUp);
-}
-
-// Middle Click or Alt+Drag Timeline Pan Handler (DAW & QuranCaption Standard)
-function handleTimelineMouseDown(e: MouseEvent) {
-  if (e.button === 1 || (e.button === 0 && e.altKey)) {
-    e.preventDefault();
-    isPanning.value = true;
-    const startX = e.clientX;
-    const initialScroll = wavesurfer ? wavesurfer.getScroll() : 0;
-    const maxScroll = Math.max(0, totalTimelineWidth.value - viewportClientWidth.value);
-
-    function onPanMove(moveEvt: MouseEvent) {
-      const deltaX = moveEvt.clientX - startX;
-      const targetScroll = Math.max(0, Math.min(maxScroll, initialScroll - deltaX));
-      wavesurfer?.setScroll(targetScroll);
-      syncTrackScroll();
-    }
-
-    function onPanUp() {
-      isPanning.value = false;
-      window.removeEventListener('mousemove', onPanMove);
-      window.removeEventListener('mouseup', onPanUp);
-    }
-
-    window.addEventListener('mousemove', onPanMove);
-    window.addEventListener('mouseup', onPanUp);
-  }
-}
-
-// In-Memory Waveform Peaks Cache (Mirrors QuranCaption WaveformService.svelte.ts)
-const peaksCache = new Map<string, { peaks: number[]; duration: number; url?: string }>();
-
-// Precomputed Peak Loading (Fast, 0MB WebAudio Memory Allocation - QuranCaption Model)
-async function loadAudioUrl(url: string, filePath?: string | null) {
-  if (!wavesurfer) return;
-
-  const effectivePath = filePath || projectStore.activeAudioFilePath.value || url;
-  
-  // Resolve streamUrl using environment-aware bridge
-  let streamUrl = url;
-  // Session-only sources (blob:/data: — e.g. embedded portable audio) resolve everywhere
-  if (/^(blob:|data:)/.test(url)) {
-    streamUrl = url;
-  } else if (isTauriEnvironment()) {
-    streamUrl = getAudioStreamUrl(effectivePath || url);
-  } else {
-    // In Browser: ALWAYS use HTTP stream URL or Blob URL! NEVER asset://!
-    if (url && (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('/api') || url.startsWith('blob:'))) {
-      streamUrl = url;
-    } else if (effectivePath) {
-      streamUrl = getAudioStreamUrl(effectivePath);
-    }
-  }
-
-  if (currentlyLoadedAudioUrl === streamUrl && hasAudioLoaded.value) return;
-  currentlyLoadedAudioUrl = streamUrl;
-
-  // 1. Instant Cache hit (0ms latency)
-  if (peaksCache.has(effectivePath)) {
-    const cached = peaksCache.get(effectivePath)!;
-    try {
-      duration.value = cached.duration;
-      wavesurfer.load(cached.url || streamUrl, [cached.peaks], cached.duration);
-      return;
-    } catch {}
-  }
-
-  let peaksData: number[] | null = null;
-  let dur: number | null = null;
-
-  // 2. Exact duration via ffprobe & Precomputed peak extraction via FFmpeg (QuranCaption model)
-  if (isTauriEnvironment() && effectivePath && (effectivePath.includes(':') || effectivePath.startsWith('/'))) {
-    try {
-      const exactDurationMs = await getDuration(effectivePath);
-      if (exactDurationMs > 0) {
-        dur = exactDurationMs / 1000.0;
-        duration.value = dur;
-      }
-    } catch (e) {
-      console.debug('ffprobe exact duration fallback:', e);
-    }
-
-    try {
-      const backendPeaks = await getAudioWaveform(effectivePath);
-      if (backendPeaks && backendPeaks.length > 0) {
-        peaksData = backendPeaks;
-        // FFmpeg PCM decoded peak count is 100 peaks/sec (4000Hz / 40 samples per peak).
-        // This is the TRUE acoustic PCM duration, bypassing inaccurate MP3/VBR container headers!
-        const pcmDuration = backendPeaks.length / 100.0;
-        dur = pcmDuration;
-        duration.value = dur;
-        peaksCache.set(effectivePath, { peaks: backendPeaks, duration: dur, url: streamUrl });
-      }
-    } catch (e) {
-      console.debug('Fast peaks extraction fallback to client WebAudio:', e);
-    }
-  }
-
-  // 3. Load into WaveSurfer
-  try {
-    if (peaksData && dur) {
-      wavesurfer.load(streamUrl, [peaksData], dur);
-    } else {
-      wavesurfer.load(streamUrl);
-    }
-  } catch (loadErr) {
-    console.error('Failed to load streamUrl into WaveSurfer:', loadErr);
-  }
-}
-
-// Shared-Vertex Divider Drag Handler (Contiguous Words Only, Safe Clamping, MouseUp History Commit)
-function startDragDivider(divider: SharedDivider, e: MouseEvent) {
-  activeDraggingDividerId.value = divider.id;
-  const startX = e.clientX;
-  const initialTime = divider.time;
-  const leftStart = divider.leftWord.start;
-  const rightEnd = divider.rightWord.end;
-
-  // Safe clamp limits: leave at least 20ms for each word
-  // Invariant: minTime <= initialTime <= maxTime (never jump!)
-  let minTime = Number((leftStart + 0.02).toFixed(3));
-  let maxTime = Number((rightEnd - 0.02).toFixed(3));
-
-  if (minTime > initialTime) minTime = initialTime;
-  if (maxTime < initialTime) maxTime = initialTime;
-  if (maxTime < minTime) maxTime = minTime;
-
-  function onMouseMove(moveEvent: MouseEvent) {
-    const deltaPx = moveEvent.clientX - startX;
-    const deltaTime = deltaPx / zoomLevel.value;
-    const rawTime = initialTime + deltaTime;
-    const clampedTime = Number(Math.max(minTime, Math.min(maxTime, rawTime)).toFixed(3));
-
-    divider.leftWord.end = clampedTime;
-    divider.rightWord.start = clampedTime;
-    divider.leftWord.is_edited = true;
-    divider.rightWord.is_edited = true;
-    divider.time = clampedTime;
-  }
-
-  function onMouseUp() {
-    activeDraggingDividerId.value = null;
-    window.removeEventListener('mousemove', onMouseMove);
-    window.removeEventListener('mouseup', onMouseUp);
-
-    projectStore.updateAyahBounds(divider.leftWord.location);
-
-    const finalTime = divider.leftWord.end;
-    if (Math.abs(finalTime - initialTime) > 0.001) {
-      projectStore.recordDividerHistory(
-        divider.leftWord,
-        divider.rightWord,
-        initialTime,
-        initialTime,
-        finalTime
-      );
-    }
-  }
-
-  window.addEventListener('mousemove', onMouseMove);
-  window.addEventListener('mouseup', onMouseUp);
-}
-
-const activeDraggingBoundary = ref<{ id: string; edge: 'start' | 'end'; time: number } | null>(null);
-
-function isWordBoundaryStart(_seg: TimelineSegmentItem, w: AlignedWord, wIdx: number): boolean {
-  if (wIdx === 0) return true;
-  const prev = _seg.words[wIdx - 1];
-  // Word has independent start handle if facing silence or separated from previous word
-  return (w.start - prev.end) > 0.01;
-}
-
-function isWordBoundaryEnd(seg: TimelineSegmentItem, w: AlignedWord, wIdx: number): boolean {
-  if (wIdx === seg.words.length - 1) return true;
-  const next = seg.words[wIdx + 1];
-  // Word has independent end handle if facing silence or separated from next word
-  return (next.start - w.end) > 0.01;
-}
-
-function startDragWordBoundary(
-  seg: TimelineSegmentItem,
-  w: AlignedWord,
-  wIdx: number,
-  edge: 'start' | 'end',
-  e: MouseEvent
-) {
-  const boundaryId = `${seg.id}_${wIdx}`;
-  const startX = e.clientX;
-  const initialTime = edge === 'start' ? w.start : w.end;
-  activeDraggingBoundary.value = { id: boundaryId, edge, time: initialTime };
-
-  let minTime: number;
-  let maxTime: number;
-
-  if (edge === 'start') {
-    // Word start can NEVER exceed its end minus 20ms
-    maxTime = Number((w.end - 0.02).toFixed(3));
-
-    if (wIdx === 0) {
-      // First word of segment: can be stretched to left into silence up to previous segment's end (or 0)
-      let prevLimit = 0;
-      for (const s of projectStore.activeSegments.value) {
-        if (s.id !== seg.id && s.end < initialTime) {
-          if (s.end > prevLimit) prevLimit = s.end;
-        }
-      }
-      minTime = Number(prevLimit.toFixed(3));
-    } else {
-      // Preceding word in the same segment: cannot overlap previous word's end
-      minTime = Number(seg.words[wIdx - 1].end.toFixed(3));
-    }
-
-    // Safety invariant: minTime must never push beyond initialTime
-    if (minTime > initialTime) minTime = initialTime;
-    if (maxTime < minTime) maxTime = minTime;
-  } else {
-    // Word end can NEVER precede its start plus 20ms
-    minTime = Number((w.start + 0.02).toFixed(3));
-
-    if (wIdx === seg.words.length - 1) {
-      // Last word of segment: can be stretched to right into silence up to next segment's start (or duration)
-      let nextLimit = duration.value > 0 ? duration.value : 999999;
-      for (const s of projectStore.activeSegments.value) {
-        if (s.id !== seg.id && s.start > initialTime) {
-          if (s.start < nextLimit) nextLimit = s.start;
-        }
-      }
-      maxTime = Number(nextLimit.toFixed(3));
-    } else {
-      // Next word in the same segment: cannot overlap next word's start
-      maxTime = Number(seg.words[wIdx + 1].start.toFixed(3));
-    }
-
-    // Safety invariant: maxTime must never push before initialTime
-    if (maxTime < initialTime) maxTime = initialTime;
-    if (minTime > maxTime) minTime = maxTime;
-  }
-
-  function onMouseMove(moveEvent: MouseEvent) {
-    const deltaPx = moveEvent.clientX - startX;
-    const deltaTime = deltaPx / zoomLevel.value;
-    const rawTime = initialTime + deltaTime;
-    const clampedTime = Number(Math.max(minTime, Math.min(maxTime, rawTime)).toFixed(3));
-
-    if (edge === 'start') {
-      w.start = clampedTime;
-      if (wIdx === 0) {
-        seg.start = clampedTime;
-      }
-    } else {
-      w.end = clampedTime;
-      if (wIdx === seg.words.length - 1) {
-        seg.end = clampedTime;
-      }
-    }
-    w.is_edited = true;
-    if (activeDraggingBoundary.value) {
-      activeDraggingBoundary.value.time = clampedTime;
-    }
-  }
-
-  function onMouseUp() {
-    activeDraggingBoundary.value = null;
-    window.removeEventListener('mousemove', onMouseMove);
-    window.removeEventListener('mouseup', onMouseUp);
-
-    projectStore.updateAyahBounds(w.location);
-
-    const finalTime = edge === 'start' ? w.start : w.end;
-    if (Math.abs(finalTime - initialTime) > 0.001) {
-      projectStore.recordWordBoundaryHistory(w, edge, initialTime, finalTime);
-    }
-  }
-
-  window.addEventListener('mousemove', onMouseMove);
-  window.addEventListener('mouseup', onMouseUp);
-}
-
-function startDragSegmentBoundary(seg: TimelineSegmentItem, edge: 'start' | 'end', e: MouseEvent) {
-  if (!seg.words || seg.words.length === 0) return;
-  const targetWord = edge === 'start' ? seg.words[0] : seg.words[seg.words.length - 1];
-  const initialTime = edge === 'start' ? targetWord.start : targetWord.end;
-  activeDraggingBoundary.value = { id: seg.id, edge, time: initialTime };
-
-  let minTime: number;
-  let maxTime: number;
-
-  if (edge === 'start') {
-    maxTime = Number((targetWord.end - 0.02).toFixed(3));
-    let prevLimit = 0;
-    for (const s of projectStore.activeSegments.value) {
-      if (s.id !== seg.id && s.end < initialTime) {
-        if (s.end > prevLimit) prevLimit = s.end;
-      }
-    }
-    minTime = Number(prevLimit.toFixed(3));
-    if (minTime > initialTime) minTime = initialTime;
-    if (maxTime < minTime) maxTime = minTime;
-  } else {
-    minTime = Number((targetWord.start + 0.02).toFixed(3));
-    let nextLimit = duration.value > 0 ? duration.value : 999999;
-    for (const s of projectStore.activeSegments.value) {
-      if (s.id !== seg.id && s.start > initialTime) {
-        if (s.start < nextLimit) nextLimit = s.start;
-      }
-    }
-    maxTime = Number(nextLimit.toFixed(3));
-    if (maxTime < initialTime) maxTime = initialTime;
-    if (minTime > maxTime) minTime = maxTime;
-  }
-
-  const startX = e.clientX;
-
-  function onMouseMove(moveEvent: MouseEvent) {
-    const deltaPx = moveEvent.clientX - startX;
-    const deltaTime = deltaPx / zoomLevel.value;
-    const rawTime = initialTime + deltaTime;
-    const clampedTime = Number(Math.max(minTime, Math.min(maxTime, rawTime)).toFixed(3));
-
-    if (edge === 'start') {
-      targetWord.start = clampedTime;
-      seg.start = clampedTime;
-    } else {
-      targetWord.end = clampedTime;
-      seg.end = clampedTime;
-    }
-    targetWord.is_edited = true;
-    if (activeDraggingBoundary.value) {
-      activeDraggingBoundary.value.time = clampedTime;
-    }
-  }
-
-  function onMouseUp() {
-    activeDraggingBoundary.value = null;
-    window.removeEventListener('mousemove', onMouseMove);
-    window.removeEventListener('mouseup', onMouseUp);
-
-    projectStore.updateAyahBounds(targetWord.location);
-
-    const finalTime = edge === 'start' ? targetWord.start : targetWord.end;
-    if (Math.abs(finalTime - initialTime) > 0.001) {
-      projectStore.recordWordBoundaryHistory(targetWord, edge, initialTime, finalTime);
-    }
-  }
-
-  window.addEventListener('mousemove', onMouseMove);
-  window.addEventListener('mouseup', onMouseUp);
-}
-
-function handleSegmentClick(seg: TimelineSegmentItem) {
-  projectStore.selectAyah(seg.ayahNumber);
-  if (wavesurfer) {
-    wavesurfer.setTime(seg.start);
-    updatePlayheadDirect(seg.start);
-  }
-}
-
-const selectedWordStartTime = ref<number | null>(null);
-
-function handleWordClick(w: AlignedWord) {
-  selectedWordStartTime.value = w.start;
-  projectStore.selectWord(w.location, false);
-  if (wavesurfer) {
-    wavesurfer.setTime(w.start);
-    updatePlayheadDirect(w.start);
-  }
-}
-
-function isTimelineWordActive(w: AlignedWord): boolean {
-  const t = currentTime.value;
-  return t >= w.start && t <= w.end;
-}
-
-function isTimelineWordSelected(w: AlignedWord): boolean {
-  // When playing, the moving playhead/karaoke is the sole active highlight.
-  // The clicked blue box is NOT stuck while the playhead moves!
-  if (isPlaying.value) return false;
-  if (projectStore.activeWordLocation.value !== w.location) return false;
-  if (selectedWordStartTime.value === null) return true;
-  return Math.abs(selectedWordStartTime.value - w.start) < 0.001;
-}
-
-function isSegmentPlaying(seg: TimelineSegmentItem): boolean {
-  const t = currentTime.value;
-  return t >= seg.start && t <= seg.end;
-}
-
-// QuranCaption display pattern: strip silent-alif round zero markers (U+06DF / U+06E0) on miniature timeline chips
-const WBW_DISPLAY_STRIP_MARKERS = /[۟۠]/g;
-function formatTimelineWord(text: string): string {
-  return (text || '').replace(WBW_DISPLAY_STRIP_MARKERS, '');
-}
-
-function handleContextMenu(e: MouseEvent, w: AlignedWord) {
-  emit('word-context-menu', e, w);
-}
-
-function handleLoopCheck(t: number) {
-  if (!wavesurfer || !isPlaying.value) return;
-
-  if (projectStore.loopMode.value === 'word' && selectedWord.value) {
-    const w = selectedWord.value;
-    if (t >= w.end) {
-      wavesurfer.setTime(w.start);
-    }
-  } else if (projectStore.loopMode.value === 'ayah' && projectStore.activeAyah.value) {
-    const a = projectStore.activeAyah.value;
-    if (t >= a.end) {
-      wavesurfer.setTime(a.start);
-    }
-  }
-}
-
-function cycleLoopMode() {
-  const modes: ('none' | 'ayah' | 'word')[] = ['none', 'ayah', 'word'];
-  const curIdx = modes.indexOf(projectStore.loopMode.value);
-  projectStore.loopMode.value = modes[(curIdx + 1) % modes.length];
-}
 
 watch(() => projectStore.currentTime.value, (newT) => {
-  if (isInternalTimeUpdate) return;
-  if (wavesurfer && Math.abs(wavesurfer.getCurrentTime() - newT) > 0.15) {
-    wavesurfer.setTime(newT);
+  const ws = transport.getWaveSurfer();
+  if (ws && Math.abs(ws.getCurrentTime() - newT) > 0.15) {
+    ws.setTime(newT);
   }
 });
 
-// Auto-scroll timeline when a word is selected externally (e.g. from Auditor drawer or Tab key)
 watch(() => projectStore.activeWordLocation.value, (loc) => {
-  if (!loc || !wavesurfer) return;
+  const ws = transport.getWaveSurfer();
+  if (!loc || !ws) return;
   const word = projectStore.findWordByLocation(loc, projectStore.currentTime.value);
   if (!word) return;
 
   selectedWordStartTime.value = word.start;
-
   const wordPx = word.start * zoomLevel.value;
-  const currentScroll = wavesurfer.getScroll();
+  const currentScroll = ws.getScroll();
   const vpWidth = viewportClientWidth.value;
 
   if (wordPx < currentScroll || wordPx > (currentScroll + vpWidth - 120)) {
     const targetScroll = Math.max(0, wordPx - vpWidth / 3);
-    wavesurfer.setScroll(targetScroll);
+    ws.setScroll(targetScroll);
     syncTrackScroll();
   }
 });
-
-function togglePlay() {
-  if (!wavesurfer) return;
-  if (!hasAudioLoaded.value && wavesurfer.getDuration() > 0) {
-    hasAudioLoaded.value = true;
-  }
-  if (!hasAudioLoaded.value) {
-    console.warn('Playback paused: audio is still loading or URL failed to load:', currentlyLoadedAudioUrl);
-    return;
-  }
-  wavesurfer.playPause();
-}
-
-function skipBackward(amount: number) {
-  if (!wavesurfer) return;
-  if (!hasAudioLoaded.value && wavesurfer.getDuration() > 0) hasAudioLoaded.value = true;
-  if (!hasAudioLoaded.value) return;
-  wavesurfer.setTime(Math.max(0, wavesurfer.getCurrentTime() - amount));
-}
-
-function skipForward(amount: number) {
-  if (!wavesurfer) return;
-  if (!hasAudioLoaded.value && wavesurfer.getDuration() > 0) hasAudioLoaded.value = true;
-  if (!hasAudioLoaded.value) return;
-  wavesurfer.setTime(Math.min(duration.value, wavesurfer.getCurrentTime() + amount));
-}
-
-function updateZoom() {
-  if (!wavesurfer) return;
-  wavesurfer.zoom(zoomLevel.value);
-  projectStore.zoomPxPerSec.value = zoomLevel.value;
-  syncTrackScroll();
-}
-
-function adjustZoom(delta: number, clientX?: number) {
-  if (!wavesurfer) return;
-  const oldZoom = zoomLevel.value;
-  const newZoom = Math.max(40, Math.min(320, oldZoom + delta));
-  if (newZoom === oldZoom) return;
-
-  const currentScroll = wavesurfer.getScroll();
-  const vpWidth = viewportClientWidth.value;
-
-  // Preserve focal anchor point under mouse cursor or center of viewport
-  let focalOffset = vpWidth / 2;
-  if (clientX !== undefined && waveformMount.value) {
-    const rect = waveformMount.value.getBoundingClientRect();
-    const relX = clientX - rect.left;
-    if (relX >= 0 && relX <= vpWidth) {
-      focalOffset = relX;
-    }
-  }
-
-  const focalTime = (currentScroll + focalOffset) / oldZoom;
-
-  zoomLevel.value = newZoom;
-  wavesurfer.zoom(newZoom);
-  projectStore.zoomPxPerSec.value = newZoom;
-
-  // Restore scroll so focal time remains anchored
-  const targetScroll = Math.max(0, focalTime * newZoom - focalOffset);
-  wavesurfer.setScroll(targetScroll);
-  syncTrackScroll();
-}
-
-function changePlaybackRate() {
-  if (!wavesurfer) return;
-  wavesurfer.setPlaybackRate(playbackRate.value);
-  projectStore.playbackRate.value = playbackRate.value;
-}
-
-function triggerFileInput() {
-  fileInput.value?.click();
-}
-
-function handleFileUpload(event: Event) {
-  const target = event.target as HTMLInputElement;
-  const file = target.files?.[0];
-  if (!file) return;
-  loadLocalFile(file);
-}
-
-function handleFileDrop(e: DragEvent) {
-  isDraggingFile.value = false;
-  const file = e.dataTransfer?.files?.[0];
-  if (file && (file.type.startsWith('audio/') || file.type.startsWith('video/'))) {
-    loadLocalFile(file);
-  }
-}
-
-const isUploadingAudio = ref(false);
-
-async function loadLocalFile(file: File) {
-  isUploadingAudio.value = true;
-  hasAudioLoaded.value = false;
-
-  try {
-    // Tauri gives us the native path on the File object
-    const nativePath: string = (file as any).path || '';
-    if (nativePath && isTauriEnvironment()) {
-      const assetUrl = getAudioStreamUrl(nativePath);
-      projectStore.setLoadedAudio(nativePath, assetUrl);
-      currentlyLoadedAudioUrl = assetUrl;
-      if (wavesurfer) {
-        wavesurfer.load(assetUrl);
-      }
-    } else {
-      // Browser: local blob URL for instant playback + background upload to engine
-      const localBlobUrl = URL.createObjectURL(file);
-      projectStore.setLoadedAudio(file.name, localBlobUrl);
-      currentlyLoadedAudioUrl = localBlobUrl;
-      if (wavesurfer) {
-        wavesurfer.load(localBlobUrl);
-      }
-    }
-  } catch (err: any) {
-    console.warn('Audio load error, using blob fallback:', err);
-    const localBlobUrl = URL.createObjectURL(file);
-    projectStore.setLoadedAudio(file.name, localBlobUrl);
-    currentlyLoadedAudioUrl = localBlobUrl;
-    if (wavesurfer) {
-      wavesurfer.load(localBlobUrl);
-    }
-  } finally {
-    isUploadingAudio.value = false;
-  }
-}
-
-function isTypingTarget(target: EventTarget | null): boolean {
-  if (!target || !(target instanceof HTMLElement)) return false;
-  return (
-    target.tagName === 'INPUT' ||
-    target.tagName === 'TEXTAREA' ||
-    target.tagName === 'SELECT' ||
-    target.isContentEditable ||
-    !!target.closest('input, textarea, select, [contenteditable="true"]')
-  );
-}
-
-function auditionSelectedWord() {
-  if (!wavesurfer) return;
-  const word = selectedWord.value || (projectStore.activeWordLocation.value ? projectStore.findWordByLocation(projectStore.activeWordLocation.value, currentTime.value) : null);
-  if (!word) return;
-
-  wavesurfer.setTime(word.start);
-  currentTime.value = word.start;
-  projectStore.updateCurrentTime(word.start);
-  updatePlayheadDirect(word.start);
-  wavesurfer.play();
-
-  const targetEnd = word.end;
-  const onAuditionUpdate = (t: number) => {
-    if (t >= targetEnd) {
-      wavesurfer?.pause();
-      wavesurfer?.un('timeupdate', onAuditionUpdate);
-    }
-  };
-  wavesurfer.on('timeupdate', onAuditionUpdate);
-}
-
-function handleKeydown(e: KeyboardEvent) {
-  if (isTypingTarget(e.target)) return;
-
-  // Space / Shift+Space: Audition Word or Toggle Play
-  if (e.code === 'Space') {
-    e.preventDefault();
-    if (e.shiftKey) {
-      auditionSelectedWord();
-    } else {
-      togglePlay();
-    }
-    return;
-  }
-
-  // 'P': Audition currently selected word
-  if ((e.key === 'p' || e.key === 'P') && !e.ctrlKey && !e.metaKey && !e.altKey) {
-    e.preventDefault();
-    auditionSelectedWord();
-    return;
-  }
-
-  // QuranCaption & DAW standard transport: J (Rewind 2s), K (Play/Pause), L (Forward 2s)
-  if ((e.key === 'j' || e.key === 'J') && !e.ctrlKey && !e.metaKey && !e.altKey) {
-    e.preventDefault();
-    skipBackward(2);
-    return;
-  }
-  if ((e.key === 'k' || e.key === 'K') && !e.ctrlKey && !e.metaKey && !e.altKey) {
-    e.preventDefault();
-    togglePlay();
-    return;
-  }
-  if ((e.key === 'l' || e.key === 'L') && !e.ctrlKey && !e.metaKey && !e.altKey) {
-    e.preventDefault();
-    skipForward(2);
-    return;
-  }
-
-  // Alt + ArrowLeft / ArrowRight: Nudge Active Word Boundary (QuranCaption standard)
-  if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight') && projectStore.activeWordLocation.value) {
-    e.preventDefault();
-    const nudgeAmount = (e.key === 'ArrowLeft' ? -1 : 1) * (e.shiftKey ? 0.05 : 0.025);
-    projectStore.nudgeWord(projectStore.activeWordLocation.value, nudgeAmount, 'end');
-    return;
-  }
-
-  // QuranCaption Hotkeys: Snap Selected Word Boundaries to Current Playhead
-  // 'W' snaps start boundary to playhead, 'E' snaps end boundary to playhead
-  if ((e.key === 'w' || e.key === 'W') && !e.ctrlKey && !e.metaKey && !e.altKey && projectStore.activeWordLocation.value) {
-    e.preventDefault();
-    const curTime = wavesurfer ? wavesurfer.getCurrentTime() : currentTime.value;
-    projectStore.updateWordStart(projectStore.activeWordLocation.value, curTime);
-    return;
-  }
-  if ((e.key === 'e' || e.key === 'E') && !e.ctrlKey && !e.metaKey && !e.altKey && projectStore.activeWordLocation.value) {
-    e.preventDefault();
-    const curTime = wavesurfer ? wavesurfer.getCurrentTime() : currentTime.value;
-    projectStore.updateWordEnd(projectStore.activeWordLocation.value, curTime);
-    return;
-  }
-
-  // Micro-scrubbing ArrowLeft / ArrowRight (QuranCaption standard)
-  if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-    e.preventDefault();
-    const step = e.shiftKey ? 0.2 : 0.05; // 50ms default or 200ms with Shift
-    const direction = e.key === 'ArrowLeft' ? -1 : 1;
-    if (wavesurfer) {
-      const cur = wavesurfer.getCurrentTime() || currentTime.value;
-      const newT = Math.max(0, Math.min(duration.value, cur + direction * step));
-      wavesurfer.setTime(newT);
-      currentTime.value = newT;
-      projectStore.updateCurrentTime(newT);
-      updatePlayheadDirect(newT);
-    }
-  }
-
-  // PageUp / PageDown: Jump to previous / next segment (QuranCaption standard)
-  if (e.key === 'PageUp' || e.key === 'PageDown') {
-    e.preventDefault();
-    const curT = wavesurfer?.getCurrentTime() || currentTime.value;
-    const segments = projectStore.activeSegments.value;
-    if (segments.length > 0) {
-      if (e.key === 'PageDown') {
-        const nextSeg = segments.find(s => s.start > curT + 0.1);
-        if (nextSeg && wavesurfer) {
-          wavesurfer.setTime(nextSeg.start);
-          currentTime.value = nextSeg.start;
-          projectStore.updateCurrentTime(nextSeg.start);
-          updatePlayheadDirect(nextSeg.start);
-        }
-      } else {
-        const prevSegs = segments.filter(s => s.start < curT - 0.1);
-        const prevSeg = prevSegs.length > 0 ? prevSegs[prevSegs.length - 1] : null;
-        if (prevSeg && wavesurfer) {
-          wavesurfer.setTime(prevSeg.start);
-          currentTime.value = prevSeg.start;
-          projectStore.updateCurrentTime(prevSeg.start);
-          updatePlayheadDirect(prevSeg.start);
-        }
-      }
-    }
-  }
-
-  // Home or 'i' to jump to beginning (QuranCaption standard: GO_TO_START)
-  if (e.key === 'Home' || ((e.key === 'i' || e.key === 'I') && !e.ctrlKey && !e.metaKey)) {
-    e.preventDefault();
-    if (wavesurfer) {
-      wavesurfer.setTime(0);
-      currentTime.value = 0;
-      projectStore.updateCurrentTime(0);
-      updatePlayheadDirect(0);
-    }
-  }
-
-  if (e.key === '[' && projectStore.activeWordLocation.value) {
-    e.preventDefault();
-    projectStore.nudgeWord(projectStore.activeWordLocation.value, e.shiftKey ? -0.05 : -0.01, 'end');
-  }
-  if (e.key === ']' && projectStore.activeWordLocation.value) {
-    e.preventDefault();
-    projectStore.nudgeWord(projectStore.activeWordLocation.value, e.shiftKey ? 0.05 : 0.01, 'end');
-  }
-  if (e.key === 'Tab') {
-    e.preventDefault();
-    projectStore.jumpToNextIssue();
-  }
-
-  // 'V' toggles verification of the issue for currently selected word (Auditor fast-review workflow)
-  if ((e.key === 'v' || e.key === 'V') && !e.ctrlKey && !e.metaKey && !e.altKey && projectStore.activeWordLocation.value) {
-    const loc = projectStore.activeWordLocation.value;
-    const curTime = wavesurfer ? wavesurfer.getCurrentTime() : currentTime.value;
-    let issue = projectStore.issues.value.find(i => i.location === loc && Math.abs(i.timestamp - curTime) < 1.0);
-    if (!issue) {
-      issue = projectStore.issues.value.find(i => i.location === loc);
-    }
-    if (issue) {
-      e.preventDefault();
-      projectStore.toggleIssueVerified(issue.id);
-    }
-  }
-
-  if (e.ctrlKey && e.key.toLowerCase() === 'z') {
-    e.preventDefault();
-    if (e.shiftKey) {
-      projectStore.redo();
-    } else {
-      projectStore.undo();
-    }
-  }
-  if (e.ctrlKey && e.key.toLowerCase() === 'y') {
-    e.preventDefault();
-    projectStore.redo();
-  }
-}
 </script>
 
-<style scoped>
-.waveform-editor {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  width: 100%;
-  background: var(--bg-surface);
-  user-select: none;
-  overflow: hidden;
-}
-
-/* ============================================================
-   Unified Static Timeline Control Bar
-   Fixed directly below the multi-track canvas, zero floating, zero dead gap
-   ============================================================ */
-.timeline-control-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 12px;
-  height: 38px;
-  background: var(--bg-surface);
-  border-top: 1px solid var(--border-subtle);
-  border-bottom: 1px solid var(--border-subtle);
-  user-select: none;
-  flex-shrink: 0;
-  z-index: 20;
-}
-
-.control-bar-left,
-.control-bar-right {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.zoom-cluster {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.zoom-slider {
-  width: 64px;
-  height: 3px;
-  accent-color: var(--accent-primary);
-  cursor: pointer;
-}
-
-/* Small screens: keep the bar readable, drop the zoom slider */
-@media (max-width: 700px) {
-  .timeline-control-bar {
-    height: 34px;
-    padding: 3px 8px;
-    gap: 4px;
-  }
-
-  .control-bar-left,
-  .control-bar-right {
-    gap: 3px;
-  }
-
-  .zoom-slider {
-    display: none;
-  }
-}
-
-.bar-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  height: 26px;
-  padding: 0 7px;
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--text-muted);
-  border-radius: var(--radius-xs);
-  cursor: pointer;
-  font-size: 11px;
-  font-weight: 500;
-  transition: all var(--dur-fast) var(--ease-out);
-}
-.bar-btn:hover:not(:disabled) {
-  background: var(--bg-surface-elevated);
-  border-color: var(--border-subtle);
-  color: var(--text-main);
-}
-.bar-btn:active:not(:disabled) {
-  background: var(--hover-overlay);
-}
-.bar-btn:disabled {
-  opacity: 0.3;
-  cursor: not-allowed;
-}
-
-.bar-play-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  background: var(--accent-primary);
-  color: #ffffff;
-  border: none;
-  border-radius: var(--radius-xs);
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out);
-  margin: 0 2px;
-}
-.bar-play-btn:hover:not(:disabled) {
-  background: var(--accent-hover);
-}
-.bar-play-btn:active:not(:disabled) {
-  background: var(--accent-deep);
-}
-.bar-play-btn:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
-}
-
-.bar-divider {
-  width: 1px;
-  height: 14px;
-  background: var(--border-subtle);
-  margin: 0 4px;
-}
-
-.loop-btn.loop-active {
-  color: var(--sky-primary);
-  background: var(--sky-bg);
-  border-color: rgba(56, 189, 248, 0.3);
-}
-.loop-indicator {
-  font-family: var(--font-mono);
-  font-size: 9px;
-  font-weight: 700;
-  line-height: 1;
-}
-
-.time-readout {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  padding: 0 6px 0 2px;
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-
-.current-time {
-  color: var(--text-main);
-  font-weight: 600;
-}
-
-.speed-select {
-  background: var(--bg-surface-elevated);
-  border: 1px solid var(--border-subtle);
-  color: var(--text-secondary);
-  border-radius: var(--radius-xs);
-  padding: 2px 6px;
-  font-size: 11px;
-  font-family: var(--font-mono);
-  outline: none;
-  cursor: pointer;
-  transition: border-color var(--dur-fast) var(--ease-out);
-}
-.speed-select:focus {
-  border-color: var(--border-focus);
-}
-.speed-select option {
-  background: var(--bg-surface-elevated);
-  color: var(--text-main);
-}
-
-.minimap-container {
-  height: 24px;
-  background: var(--minimap-bg);
-  border-bottom: 1px solid var(--border-subtle);
-  overflow: hidden;
-}
-
-/* Master Timeline Container */
-.waveform-container {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  background: var(--bg-base);
-  flex: 1;
-  min-height: 0;
-  cursor: default;
-  overflow: hidden;
-}
-
-.waveform-container.is-panning {
-  cursor: grab;
-}
-
-#waveform-mount {
-  height: 105px;
-  position: relative;
-}
-
-/* Base Track Viewport (Synced Horizontal Scrolling) */
-.track-viewport {
-  position: relative;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;
-}
-.track-viewport::-webkit-scrollbar {
-  display: none;
-}
-
-.track-canvas {
-  height: 100%;
-  position: relative;
-  contain: layout style;
-}
-
-/* Track Headers & DAW Timeline Viewports */
-.lane-header-pill {
-  position: absolute;
-  left: 8px;
-  top: 50%;
-  transform: translateY(-50%);
-  z-index: 28;
-  font-family: var(--font-mono);
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  color: var(--text-muted);
-  background: var(--bg-surface-elevated);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-xs);
-  padding: 2px 6px;
-  pointer-events: none;
-  opacity: 0.85;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
-}
-
-/* Track 1: Ayah / Verse Lane (QuranCaption Style) */
-.ayah-track-viewport {
-  height: 34px;
-  background: var(--lane-bg);
-  border-top: 1px solid var(--border-subtle);
-  position: relative;
-}
-
-.timeline-ayah-block {
-  position: absolute;
-  top: 3px;
-  bottom: 3px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 8px;
-  background: rgba(56, 189, 248, 0.08);
-  border: 1px solid rgba(56, 189, 248, 0.22);
-  border-radius: var(--radius-xs);
-  cursor: pointer;
-  overflow: hidden;
-  transition: all var(--dur-fast) var(--ease-out);
-  user-select: none;
-}
-
-.timeline-ayah-block:hover {
-  background: rgba(56, 189, 248, 0.16);
-  border-color: rgba(56, 189, 248, 0.45);
-}
-
-.timeline-ayah-block.ayah-active {
-  background: rgba(56, 189, 248, 0.22);
-  border-color: var(--sky-primary);
-}
-
-.timeline-ayah-block.ayah-selected {
-  border-color: #a78bfa;
-  background: rgba(167, 139, 250, 0.18);
-}
-
-.empty-audio-dropzone {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 32px 16px;
-  border: 1.5px dashed var(--border-medium);
-  border-radius: var(--radius-md);
-  margin: 20px;
-  cursor: pointer;
-  background: var(--hover-overlay);
-  animation: rise-in var(--dur-rise) var(--ease-spring) both;
-}
-
-.empty-audio-dropzone:hover {
-  border-color: var(--accent-primary);
-  background: rgba(59, 130, 246, 0.08);
-}
-
-.empty-audio-dropzone .drop-icon {
-  color: var(--accent-primary);
-}
-
-.empty-title {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text-main);
-}
-
-.empty-formats {
-  font-size: 11px;
-  color: var(--text-muted);
-}
-
-.segment-badges-row {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  flex-shrink: 0;
-}
-
-.ayah-label-badge {
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--sky-primary);
-  white-space: nowrap;
-}
-
-.badge-repetition {
-  font-size: 9px;
-  font-weight: 600;
-  padding: 1px 5px;
-  background: rgba(168, 85, 247, 0.25);
-  border: 1px solid rgba(168, 85, 247, 0.5);
-  color: #b79af8;
-  border-radius: 3px;
-  white-space: nowrap;
-}
-
-.badge-issue {
-  font-size: 9px;
-  font-weight: 600;
-  padding: 1px 5px;
-  border-radius: 3px;
-  white-space: nowrap;
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  cursor: help;
-}
-
-.badge-issue.warning {
-  background: rgba(245, 158, 11, 0.22);
-  border: 1px solid rgba(245, 158, 11, 0.6);
-  color: var(--amber-primary);
-}
-
-.badge-issue.critical {
-  background: rgba(239, 68, 68, 0.25);
-  border: 1px solid rgba(239, 68, 68, 0.65);
-  color: var(--ruby-primary);
-}
-
-.word-low-conf-dot {
-  position: absolute;
-  top: 2px;
-  right: 2px;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background-color: var(--amber-primary);
-  pointer-events: auto;
-}
-
-.ayah-duration-badge {
-  font-size: 9px;
-  font-family: var(--font-mono);
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-
-.ayah-snippet-text {
-  font-family: var(--font-arabic);
-  font-size: 13px;
-  color: var(--text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  direction: rtl;
-  opacity: 0.75;
-}
-
-/* Track 2: Word Alignment Track */
-.word-track-viewport {
-  height: 54px;
-  background: var(--lane-bg-soft);
-  border-top: 1px solid var(--border-subtle);
-  position: relative;
-}
-
-.timeline-word-block {
-  position: absolute;
-  top: 4px;
-  bottom: 4px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  background: var(--bg-surface-elevated);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-xs);
-  padding: 0 4px;
-  cursor: pointer;
-  overflow: hidden;
-  transition: all 0.08s ease;
-  user-select: none;
-}
-
-.timeline-word-block:hover {
-  background: var(--bg-surface-hover);
-  border-color: var(--accent-border);
-  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.4);
-}
-
-.word-uthmani-text {
-  font-family: var(--font-arabic);
-  font-size: 16px;
-  line-height: 1.2;
-  color: var(--text-main);
-  white-space: nowrap;
-  pointer-events: none;
-}
-
-.word-meta-row {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  line-height: 1;
-  pointer-events: none;
-}
-
-.word-duration-pill {
-  font-size: 9px;
-  font-family: var(--font-mono);
-  color: var(--text-muted);
-}
-
-.word-karaoke-active {
-  background: var(--accent-subtle) !important;
-  border-color: var(--accent-primary) !important;
-}
-
-.word-karaoke-active .word-uthmani-text {
-  color: var(--text-main) !important;
-  font-weight: 600;
-}
-
-.word-selected {
-  border-color: var(--accent-primary) !important;
-  background: var(--accent-subtle) !important;
-}
-
-/* Light Mode Word Highlighting */
-html[data-theme='light'] .word-karaoke-active {
-  background: #dfe5f4 !important;
-  border-color: var(--accent-primary) !important;
-}
-
-html[data-theme='light'] .word-karaoke-active .word-uthmani-text {
-  color: #181a1f !important;
-  font-weight: 600;
-}
-
-html[data-theme='light'] .word-selected {
-  border-color: var(--accent-primary) !important;
-  background: #eaedf6 !important;
-}
-
-html[data-theme='light'] .word-selected .word-uthmani-text {
-  color: #181a1f !important;
-  font-weight: 600;
-}
-
-.word-edited {
-  border-bottom: 2px solid var(--accent-primary);
-}
-
-.word-phonemes-layer {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  height: 13px;
-  background: var(--hover-overlay);
-  border-top: 1px solid var(--border-subtle);
-  pointer-events: none;
-  overflow: hidden;
-}
-
-.phoneme-tick-cell {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-right: 1px solid rgba(var(--accent-rgb), 0.45);
-  background: rgba(var(--accent-rgb), 0.1);
-  box-sizing: border-box;
-}
-
-.phoneme-tick-char {
-  font-family: var(--font-arabic);
-  font-size: 9px;
-  color: var(--text-secondary);
-  line-height: 1;
-  transform: scale(0.9);
-}
-
-/* Vertical Playhead Cursor across tracks (Pro DAW Laser Needle) */
-.track-playhead-line {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  width: 1px;
-  background: var(--playhead-color, var(--ruby-primary));
-  pointer-events: none;
-  z-index: 45;
-  will-change: transform;
-}
-
-.track-playhead-line::before {
-  content: none;
-}
-
-/* Shared-Vertex Magnetic Vertical Dividers */
-.shared-divider-handle {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 14px;
-  margin-left: -7px;
-  display: flex;
-  justify-content: center;
-  cursor: col-resize;
-  z-index: 20;
-}
-
-.divider-line {
-  width: 2px;
-  height: 100%;
-  background: var(--contrast-line);
-  transition: background 0.1s ease, width 0.1s ease;
-}
-
-.divider-grabber {
-  position: absolute;
-  top: 2px;
-  width: 10px;
-  height: 8px;
-  border-radius: 2px;
-  background: var(--contrast-line);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.1s ease;
-}
-
-.divider-grip-dot {
-  width: 4px;
-  height: 2px;
-  background: var(--on-contrast);
-  border-radius: 1px;
-}
-
-.shared-divider-handle:hover .divider-line,
-.shared-divider-handle.is-dragging .divider-line {
-  background: var(--sky-primary);
-  width: 2.5px;
-  box-shadow: var(--shadow-e1);
-}
-
-.shared-divider-handle:hover .divider-grabber,
-.shared-divider-handle.is-dragging .divider-grabber {
-  background: var(--sky-primary);
-}
-
-.divider-time-tooltip {
-  position: absolute;
-  bottom: 100%;
-  left: 50%;
-  transform: translateX(-50%);
-  background: var(--bg-surface-elevated);
-  color: var(--sky-primary);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 700;
-  padding: 2px 7px;
-  border-radius: var(--radius-xs);
-  border: 1px solid rgba(var(--sky-rgb), 0.4);
-  white-space: nowrap;
-  pointer-events: none;
-  z-index: 30;
-  box-shadow: var(--shadow-e2);
-  animation: fade-in var(--dur-fast) var(--ease-out) both;
-}
-
-/* Custom Interactive Timeline Scrollbar (QuranCaption & DAW pattern) */
-.timeline-scrollbar-track {
-  height: 12px;
-  background: var(--lanesheet-bg);
-  border-top: 1px solid var(--border-subtle);
-  position: relative;
-  cursor: pointer;
-}
-
-.timeline-scrollbar-thumb {
-  position: absolute;
-  top: 2px;
-  bottom: 2px;
-  background: var(--scroll-thumb-hover);
-  border-radius: var(--radius-pill);
-  cursor: grab;
-  transition: background var(--dur-fast) var(--ease-out),
-              box-shadow var(--dur-fast) var(--ease-out);
-}
-
-.timeline-scrollbar-thumb:hover,
-.timeline-scrollbar-thumb:active {
-  background: rgba(var(--sky-rgb), 0.55);
-  box-shadow: var(--shadow-e1);
-}
-
-.empty-audio-dropzone {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  height: 170px;
-  gap: 8px;
-  color: var(--text-muted);
-  cursor: pointer;
-  transition: color var(--dur-base) var(--ease-out),
-              background var(--dur-base) var(--ease-out),
-              border-color var(--dur-base) var(--ease-out);
-}
-
-.empty-audio-dropzone:hover {
-  color: var(--text-secondary);
-}
-
-.drag-drop-overlay {
-  position: absolute;
-  inset: 0;
-  background: rgba(var(--accent-rgb), 0.35);
-  backdrop-filter: blur(4px);
-  z-index: 50;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  color: #fff;
-  border: 2px dashed var(--accent-primary);
-}
-/* Word Outer Boundary Handles (First word / Last word / Facing silence) */
-.word-boundary-handle {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 14px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: col-resize;
-  z-index: 24;
-  user-select: none;
-}
-
-.word-boundary-handle.handle-start {
-  left: -7px;
-}
-
-.word-boundary-handle.handle-end {
-  right: -7px;
-}
-
-.boundary-line {
-  width: 2.5px;
-  height: 100%;
-  background: var(--emerald-primary); /* Emerald green for outer boundaries */
-  box-shadow: var(--shadow-e1);
-  transition: all 0.1s ease;
-}
-
-.boundary-bracket {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 800;
-  color: var(--emerald-primary);
-  line-height: 1;
-  text-shadow: var(--shadow-e1);
-  pointer-events: none;
-}
-
-.word-boundary-handle:hover .boundary-line,
-.word-boundary-handle.is-dragging .boundary-line {
-  background: var(--emerald-primary);
-  width: 3.5px;
-  box-shadow: var(--shadow-e1);
-}
-
-.word-boundary-handle:hover .boundary-bracket,
-.word-boundary-handle.is-dragging .boundary-bracket {
-  color: var(--emerald-primary);
-  transform: scale(1.15);
-}
-
-/* Ayah Lane Edge Handles */
-.ayah-edge-handle {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 10px;
-  cursor: col-resize;
-  z-index: 20;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.ayah-edge-handle.edge-left {
-  left: 0;
-}
-
-.ayah-edge-handle.edge-right {
-  right: 0;
-}
-
-.edge-grip-bar {
-  width: 2.5px;
-  height: 60%;
-  background: rgba(var(--sky-rgb), 0.5);
-  border-radius: 1px;
-  transition: all 0.1s ease;
-}
-
-.ayah-edge-handle:hover .edge-grip-bar,
-.ayah-edge-handle.is-dragging .edge-grip-bar {
-  background: var(--sky-primary);
-  height: 90%;
-  box-shadow: var(--shadow-e1);
-}
-
-/* Boundary Drag Time Tooltip */
-.boundary-time-tooltip {
-  position: absolute;
-  bottom: 100%;
-  left: 50%;
-  transform: translateX(-50%);
-  background: var(--bg-surface-elevated);
-  color: #a7f3d0;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 700;
-  padding: 2px 7px;
-  border-radius: var(--radius-xs);
-  border: 1px solid rgba(52, 211, 153, 0.4);
-  white-space: nowrap;
-  pointer-events: none;
-  z-index: 35;
-  box-shadow: var(--shadow-e2);
-  margin-bottom: 2px;
-  animation: fade-in var(--dur-fast) var(--ease-out) both;
-}
-
-/* Light Theme High-Contrast Overrides */
-html[data-theme='light'] .timeline-ayah-block {
-  background: rgba(2, 132, 199, 0.08);
-  border-color: rgba(2, 132, 199, 0.30);
-}
-html[data-theme='light'] .timeline-ayah-block:hover {
-  background: rgba(2, 132, 199, 0.16);
-  border-color: rgba(2, 132, 199, 0.55);
-}
-html[data-theme='light'] .timeline-ayah-block.ayah-active {
-  background: #e6edf9;
-  border-color: var(--sky-primary);
-}
-html[data-theme='light'] .timeline-ayah-block.ayah-selected {
-  background: #f1e9fb;
-  border-color: var(--qc-purple);
-}
-html[data-theme='light'] .timeline-ayah-block.ayah-selected .ayah-label-badge {
-  color: var(--qc-purple);
-}
-html[data-theme='light'] .ayah-snippet-text {
-  color: #334155;
-  opacity: 0.95;
-}
-html[data-theme='light'] .badge-repetition {
-  background: #f3e8ff;
-  border-color: #d8b4fe;
-  color: var(--qc-purple);
-}
-html[data-theme='light'] .badge-issue.warning {
-  background: #fef3c7;
-  border-color: #fcd34d;
-  color: #b45309;
-}
-html[data-theme='light'] .badge-issue.critical {
-  background: #fee2e2;
-  border-color: var(--ruby-primary);
-  color: #b91c1c;
-}
-html[data-theme='light'] .boundary-time-tooltip {
-  background: #ffffff;
-  color: #047857;
-  border-color: var(--emerald-primary);
-}
-html[data-theme='light'] .divider-time-tooltip {
-  background: #ffffff;
-  color: #0369a1;
-  border-color: #0284c7;
-}
-</style>
+<style scoped src="./waveform/waveformEditor.css"></style>

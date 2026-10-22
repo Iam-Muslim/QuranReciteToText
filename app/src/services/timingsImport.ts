@@ -65,7 +65,7 @@ function parseLocationSurah(loc: unknown): number | undefined {
 
 /** Best-effort surah number from a stem like "002", "002 Al-Baqarah", "2". */
 export function surahNumberFromStem(stem: string): number | undefined {
-  const m = stem.match(/^0*(\d{1,3})\b/);
+  const m = stem.match(/^0*(\d{1,3})(?:[\s_\-.]|$)/);
   if (!m) return undefined;
   const n = parseInt(m[1], 10);
   return n >= 1 && n <= 114 ? n : undefined;
@@ -193,6 +193,36 @@ export function normalizeTimedJson(data: any, audioDurSec?: number, stemHint?: s
     for (const item of data) {
       if (item && typeof item === 'object' && Array.isArray(pick(item, ['ayahs', 'verses']))) {
         if (trySurahBucket(item)) { asSurah = true; continue; }
+      }
+    }
+    if (!asSurah) {
+      const isAyahList = data.some(item => item && typeof item === 'object' && Array.isArray(pick(item, ['words', 'tokens', 'segments'])));
+      if (isAyahList) {
+        const bucket: RawAyah[] = [];
+        let locSurah: number | undefined;
+        for (const a of data) {
+          if (!a || typeof a !== 'object') continue;
+          const aNum = num(pick(a, ['ayah', 'ayah_number', 'verse', 'n', 'i']));
+          locSurah = num(pick(a, ['surah', 'surah_number'])) ?? locSurah;
+          let words: any[] = [];
+          const direct = pick(a, ['words', 'tokens']);
+          const segs = pick(a, ['segments']);
+          if (Array.isArray(direct)) {
+            words = direct;
+          } else if (Array.isArray(segs)) {
+            for (const s of segs) {
+              const sw = pick(s, ['words', 'tokens']);
+              if (Array.isArray(sw)) words.push(...sw);
+            }
+          }
+          if (words.length > 0) {
+            pushWordsInto(bucket, aNum, words);
+          }
+        }
+        if (bucket.length > 0) {
+          rawSurahs.push({ surah: locSurah, ayahs: bucket });
+          asSurah = true;
+        }
       }
     }
     if (!asSurah) {

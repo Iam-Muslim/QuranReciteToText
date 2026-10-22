@@ -30,12 +30,6 @@
         <span>Split Word</span>
       </button>
 
-      <!-- Merge with Next -->
-      <button class="menu-action-item" @click="handleMerge">
-        <GitMerge :size="13" />
-        <span>Merge with Next</span>
-      </button>
-
       <!-- Edit Word -->
       <button class="menu-action-item" @click="handleEdit">
         <Edit3 :size="13" />
@@ -66,7 +60,6 @@ import type { AlignedWord } from '../types/aligner';
 import { projectStore } from '../services/projectStore';
 import { 
   Scissors, 
-  GitMerge,
   Edit3, 
   Trash2
 } from 'lucide-vue-next';
@@ -119,12 +112,7 @@ function handleSplit() {
   }
 }
 
-function handleMerge() {
-  if (targetWord.value) {
-    projectStore.mergeWordWithNext(targetWord.value.location);
-    close();
-  }
-}
+
 
 function handleEdit() {
   if (!targetWord.value) return;

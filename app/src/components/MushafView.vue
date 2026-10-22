@@ -1,64 +1,6 @@
 <template>
   <div class="mushaf-container">
-    <!-- Pinned View Mode Switcher & Typography Sizing Bar -->
-    <div class="view-switcher-bar" v-if="projectStore.activeSurah.value">
-      <div class="switcher-left">
-        <div class="view-toggle-pill">
-          <button 
-            class="toggle-btn" 
-            :class="{ 'active': projectStore.viewMode.value === 'mushaf_page' }"
-            @click="projectStore.viewMode.value = 'mushaf_page'"
-            title="Medina Mushaf Sacred Page"
-          >
-            <BookOpen :size="12" />
-            <span>Mushaf</span>
-          </button>
 
-          <button 
-            class="toggle-btn" 
-            :class="{ 'active': projectStore.viewMode.value === 'ayah_studio' }"
-            @click="projectStore.viewMode.value = 'ayah_studio'"
-            title="Verses Studio Cards"
-          >
-            <ListTree :size="12" />
-            <span>Verses</span>
-          </button>
-
-          <button 
-            class="toggle-btn" 
-            :class="{ 'active': projectStore.viewMode.value === 'phoneme_inspector' }"
-            @click="projectStore.viewMode.value = 'phoneme_inspector'"
-            title="Phoneme Atoms Inspector"
-          >
-            <Layers :size="12" />
-            <span>Phonemes</span>
-          </button>
-        </div>
-      </div>
-
-      <div class="switcher-right">
-        <!-- Font Size Stepper (Mushaf Page Mode) -->
-        <div class="font-stepper-group" v-if="projectStore.viewMode.value === 'mushaf_page'" title="Adjust Quran Font Size">
-          <button 
-            class="stepper-btn" 
-            @click="projectStore.setMushafFontSize(projectStore.mushafFontSize.value - 0.15)"
-            title="Decrease Font Size"
-            :disabled="projectStore.mushafFontSize.value <= 1.3"
-          >
-            <span>A-</span>
-          </button>
-          <span class="stepper-val">{{ Math.round((projectStore.mushafFontSize.value / 1.95) * 100) }}%</span>
-          <button 
-            class="stepper-btn" 
-            @click="projectStore.setMushafFontSize(projectStore.mushafFontSize.value + 0.15)"
-            title="Increase Font Size"
-            :disabled="projectStore.mushafFontSize.value >= 3.2"
-          >
-            <span>A+</span>
-          </button>
-        </div>
-      </div>
-    </div>
 
     <!-- Empty State -->
     <div v-if="!projectStore.activeSurah.value" class="mushaf-empty-wrapper">
@@ -117,7 +59,7 @@
               </span>
 
               <!-- Medina Ayah End Marker -->
-              <span class="ayah-symbol" @click="handleAyahClick(ayah)" title="Ayah {{ ayah.ayah }}">
+              <span class="ayah-symbol" @click="handleAyahClick(ayah)" :title="`Ayah ${ayah.ayah}`">
                 <span class="ayah-num">{{ ayah.ayah }}</span>
               </span>
             </span>
@@ -235,9 +177,7 @@ import {
 import type { AlignedWord, AyahItem, PhonemeItem } from '../types/aligner';
 import { 
   BookOpen, 
-  Play,
-  ListTree,
-  Layers
+  Play
 } from 'lucide-vue-next';
 
 const emit = defineEmits<{
@@ -380,112 +320,7 @@ watch(() => projectStore.activeAyahNumber.value, (ayahNum) => {
   }
 }
 
-/* Pinned View Mode Switcher & Sizing Bar */
-.view-switcher-bar {
-  position: sticky;
-  top: 0;
-  z-index: 30;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  max-width: 880px;
-  width: 100%;
-  margin: 0 auto 12px;
-  pointer-events: none;
-}
 
-.switcher-left,
-.switcher-right {
-  pointer-events: auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.view-toggle-pill {
-  display: flex;
-  align-items: center;
-  background: var(--glass-bg);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius-pill);
-  padding: 3px;
-  gap: 2px;
-  box-shadow: var(--shadow-e2);
-}
-
-.toggle-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  border-radius: var(--radius-pill);
-  padding: 4px 12px;
-  font-size: var(--text-xs);
-  font-weight: 500;
-  cursor: pointer;
-  transition: all var(--dur-fast) var(--ease-out);
-}
-.toggle-btn:hover {
-  color: var(--text-main);
-}
-.toggle-btn.active {
-  background: var(--bg-surface-elevated);
-  color: var(--text-main);
-  box-shadow: var(--shadow-e1);
-  font-weight: 600;
-}
-
-/* Font Size Stepper Control */
-.font-stepper-group {
-  display: flex;
-  align-items: center;
-  background: var(--glass-bg);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius-pill);
-  padding: 2px 6px;
-  gap: 4px;
-  box-shadow: var(--shadow-e1);
-}
-
-.stepper-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: var(--radius-pill);
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 11px;
-  font-weight: 700;
-  cursor: pointer;
-  transition: all var(--dur-fast) var(--ease-out);
-}
-.stepper-btn:hover:not(:disabled) {
-  background: var(--bg-surface-elevated);
-  color: var(--text-main);
-  box-shadow: var(--shadow-e1);
-}
-.stepper-btn:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
-}
-
-.stepper-val {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--text-muted);
-  min-width: 32px;
-  text-align: center;
-}
 
 /* Empty State */
 .mushaf-empty-wrapper {

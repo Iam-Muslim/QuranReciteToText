@@ -121,31 +121,33 @@
 
       <!-- Export moved to the Recitations sidebar -->
 
-      <!-- Window Controls -->
-      <div class="window-controls-divider"></div>
-      <div class="window-controls">
-        <button class="win-btn win-min" @click="minimizeWindow" title="Minimize" aria-label="Minimize">
-          <Minus :size="12" />
-        </button>
-        <button
-          class="win-btn win-max"
-          @click="toggleMaximizeWindow"
-          :title="isMaximized ? 'Restore' : 'Maximize'"
-          :aria-label="isMaximized ? 'Restore' : 'Maximize'"
-        >
-          <Copy v-if="isMaximized" :size="10" class="restore-icon" />
-          <Square v-else :size="10" />
-        </button>
-        <button
-          class="win-btn win-close"
-          :class="{ 'armed': closeArmed }"
-          @click="closeWindow"
-          :title="closeArmed ? 'Click to confirm close' : 'Close'"
-          aria-label="Close"
-        >
-          <X :size="13" />
-        </button>
-      </div>
+      <!-- Window Controls (Desktop Only) -->
+      <template v-if="isTauri">
+        <div class="window-controls-divider"></div>
+        <div class="window-controls">
+          <button class="win-btn win-min" @click="minimizeWindow" title="Minimize" aria-label="Minimize">
+            <Minus :size="12" />
+          </button>
+          <button
+            class="win-btn win-max"
+            @click="toggleMaximizeWindow"
+            :title="isMaximized ? 'Restore' : 'Maximize'"
+            :aria-label="isMaximized ? 'Restore' : 'Maximize'"
+          >
+            <Copy v-if="isMaximized" :size="10" class="restore-icon" />
+            <Square v-else :size="10" />
+          </button>
+          <button
+            class="win-btn win-close"
+            :class="{ 'armed': closeArmed }"
+            @click="closeWindow"
+            :title="closeArmed ? 'Click to confirm close' : 'Close'"
+            aria-label="Close"
+          >
+            <X :size="13" />
+          </button>
+        </div>
+      </template>
     </div>
   </header>
 </template>
@@ -154,6 +156,7 @@
 import { ref, computed, onMounted } from 'vue';
 import { projectStore } from '../services/projectStore';
 import { versionService } from '../services/VersionService';
+import { isTauriEnvironment } from '../services/api';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import {
   Undo2,
@@ -204,11 +207,13 @@ async function saveProject() {
   await projectStore.saveActiveProject();
 }
 
+const isTauri = isTauriEnvironment();
 const isMaximized = ref(false);
 const closeArmed = ref(false);
 let closeArmTimer: ReturnType<typeof setTimeout> | null = null;
 
 async function minimizeWindow() {
+  if (!isTauri) return;
   try {
     const win = getCurrentWindow();
     await win.minimize();
@@ -218,6 +223,7 @@ async function minimizeWindow() {
 }
 
 async function toggleMaximizeWindow() {
+  if (!isTauri) return;
   try {
     const win = getCurrentWindow();
     if (await win.isMaximized()) {
@@ -233,6 +239,7 @@ async function toggleMaximizeWindow() {
 }
 
 async function closeWindow() {
+  if (!isTauri) return;
   try {
     const win = getCurrentWindow();
     if (await win.isDecorated()) {

@@ -1,4 +1,4 @@
-﻿import type { SurahItem, AlignerProject } from '../types/aligner';
+import type { SurahItem, AlignerProject } from '../types/aligner';
 import JSZip from 'jszip';
 import { getAudioStreamUrl } from './api';
 
@@ -51,7 +51,7 @@ function formatAssTime(seconds: number): string {
  * (directly from QuranCaption WbwHelper.ts).
  */
 export function stripWbwDisplayMarkers(text: string): string {
-  return text.replace(/[ÛŸÛ ]/g, '');
+  return text.replace(/[\u06DF\u06E0]/g, '');
 }
 
 /**
@@ -314,9 +314,9 @@ export function exportQuranCaption(surah: SurahItem): string {
     }));
 
     const introText = surah.intro.text || surah.intro.words.map(w => w.word).join(' ');
-    const specType = (introText.includes('Ø£Ø¹ÙˆØ°') || introText.includes('Ø§Ø¹ÙˆØ°'))
+    const specType = (introText.includes('أعوذ') || introText.includes('اعوذ'))
       ? "Isti'adha"
-      : (introText.includes('Ø£ÙƒØ¨Ø±') || introText.includes('Ø§ÙƒØ¨Ø±'))
+      : (introText.includes('أكبر') || introText.includes('اكبر'))
       ? "Takbeer"
       : "Basmala";
 

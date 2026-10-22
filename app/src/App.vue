@@ -48,12 +48,11 @@
     <AlignmentModal ref="alignmentModalRef" />
     <UpdateModal ref="updateModalRef" />
     <CommandPalette 
-      ref="commandPaletteRef"
       @open-export-modal="exportModalRef?.open()" 
       @open-alignment-modal="alignmentModalRef?.open()" 
       @open-update-modal="updateModalRef?.open('app_update')" 
     />
-    <HotkeyCheatSheet ref="hotkeyCheatSheetRef" />
+    <HotkeyCheatSheet />
   </div>
 </template>
 <script setup lang="ts">
@@ -90,8 +89,6 @@ const editWordModalRef = ref<InstanceType<typeof EditWordModal> | null>(null);
 const exportModalRef = ref<InstanceType<typeof ExportModal> | null>(null);
 const alignmentModalRef = ref<InstanceType<typeof AlignmentModal> | null>(null);
 const updateModalRef = ref<InstanceType<typeof UpdateModal> | null>(null);
-const commandPaletteRef = ref<InstanceType<typeof CommandPalette> | null>(null);
-const hotkeyCheatSheetRef = ref<InstanceType<typeof HotkeyCheatSheet> | null>(null);
 
 /* ---- (Split resizer removed — the timeline now sits at a fixed, full useful height) ---- */
 
@@ -171,13 +168,13 @@ function handleOpenEditWord(word: AlignedWord) {
   position: relative;
 }
 
-/* Master Timeline Pane — fixed at its full useful height (no resizer) */
+/* Master Timeline Pane — tightly fitted to tracks, zero empty space */
 .timeline-pane-wrapper {
   width: 100%;
   overflow: hidden;
   position: relative;
   flex-shrink: 0;
-  height: min(52vh, 560px);
+  height: auto;
   display: flex;
   flex-direction: column;
 }

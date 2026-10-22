@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div v-if="visible" class="modal-backdrop" @click.self="handleBackdropClick">
     <div class="update-modal glass-panel anim-scale" @click.stop>
       <!-- Header — title + close only -->
@@ -204,7 +204,13 @@ function handleKeydown(e: KeyboardEvent) {
 }
 
 onMounted(() => window.addEventListener('keydown', handleKeydown));
-onUnmounted(() => window.removeEventListener('keydown', handleKeydown));
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeydown);
+  if (unlistenFn) {
+    unlistenFn();
+    unlistenFn = null;
+  }
+});
 
 function handleCancel() {
   if (abortController) {

@@ -16,11 +16,7 @@
           <span v-else class="preview-uthmani-text">{{ previewWord || '—' }}</span>
         </div>
 
-        <!-- Transliteration & Word Translation (from QuranCaption) -->
-        <div v-if="wordTransliteration || wordTranslation" class="word-meanings-row">
-          <span v-if="wordTransliteration" class="word-transliteration">{{ wordTransliteration }}</span>
-          <span v-if="wordTranslation" class="word-translation">"{{ wordTranslation }}"</span>
-        </div>
+
 
         <!-- Location & Status Badge -->
         <div class="preview-meta-row">
@@ -121,8 +117,6 @@ const rawLocationInput = ref('1:1:1');
 const previewWord = ref('');
 const ayahTextSnippet = ref('');
 const surahName = ref('');
-const wordTransliteration = ref('');
-const wordTranslation = ref('');
 const totalWords = ref(0);
 const isLoading = ref(false);
 const isValid = ref(true);
@@ -147,8 +141,6 @@ function open(word: AlignedWord) {
   previewWord.value = word.word;
   ayahTextSnippet.value = '';
   surahName.value = '';
-  wordTransliteration.value = '';
-  wordTranslation.value = '';
   errorMessage.value = '';
   isValid.value = true;
   visible.value = true;
@@ -226,8 +218,6 @@ async function fetchQuranWord() {
       previewWord.value = quranData.word;
       ayahTextSnippet.value = quranData.ayah_text || '';
       surahName.value = quranData.surah_name || '';
-      wordTransliteration.value = quranData.transliteration || '';
-      wordTranslation.value = quranData.translation || '';
       totalWords.value = quranData.total_words || 0;
       isValid.value = true;
       errorMessage.value = '';
@@ -378,22 +368,7 @@ defineExpose({
   text-shadow: var(--shadow-e1);
 }
 
-.word-meanings-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: var(--text-xs);
-}
 
-.word-transliteration {
-  color: var(--sky-primary);
-  font-weight: 600;
-}
-
-.word-translation {
-  color: var(--text-secondary);
-  font-style: italic;
-}
 
 .loading-icon {
   color: var(--emerald-primary);

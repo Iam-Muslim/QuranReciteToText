@@ -12,15 +12,9 @@
         <button class="btn-icon add-btn" @click="$emit('add-surah')" title="Align New Recitation Audio (Ctrl+Shift+A)">
           <Plus :size="13" />
         </button>
-        <button class="btn-icon export-btn" @click="$emit('export')" title="Export Subtitles & Audio">
-          <Download :size="13" />
-        </button>
-        <button 
-          class="btn-icon collapse-btn" 
-          @click="projectStore.sidebarCollapsed.value = true" 
-          title="Collapse Sidebar (Ctrl+B)"
-        >
-          <PanelLeftClose :size="13" />
+        <button class="export-labeled-btn" @click="$emit('export')" title="Export Subtitles & Audio">
+          <Download :size="12" />
+          <span>Export</span>
         </button>
       </div>
     </div>
@@ -93,7 +87,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue';
 import { projectStore } from '../services/projectStore';
-import { Plus, Trash2, UploadCloud, Search, PanelLeftClose, CircleCheck, Circle, Download } from 'lucide-vue-next';
+import { Plus, Trash2, UploadCloud, Search, CircleCheck, Circle, Download } from 'lucide-vue-next';
 
 defineEmits<{
   (e: 'add-surah'): void;
@@ -189,17 +183,34 @@ function requestRemove(surahNum: number) {
   align-items: center;
   gap: 2px;
 }
-.add-btn,
-.export-btn,
-.collapse-btn {
+.add-btn {
   padding: 4px;
   color: var(--text-muted);
 }
-.add-btn:hover,
-.export-btn:hover,
-.collapse-btn:hover {
+.add-btn:hover {
   color: var(--text-main);
   background: var(--bg-surface-hover);
+}
+
+.export-labeled-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface-elevated);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+.export-labeled-btn:hover {
+  background: var(--hover-overlay);
+  border-color: var(--accent-border);
+  color: var(--text-main);
 }
 
 /* Sidebar Search */

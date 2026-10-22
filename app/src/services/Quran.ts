@@ -19,36 +19,29 @@ export type RawSurah = {
 export class Word {
   arabic: string;
   indopak: string;
-  transliteration: string;
-  translation: string;
 
-  constructor(arabic: string, transliteration: string, translation: string, indopak?: string) {
+  constructor(arabic: string, indopak?: string) {
     this.arabic = arabic;
     this.indopak = indopak ?? arabic;
-    this.transliteration = transliteration;
-    this.translation = translation;
   }
 
   static fromJson(data: RawWord): Word {
-    return new Word(data.c, data.d, data.e, data.i);
+    return new Word(data.c, data.i);
   }
 }
 
 export class Verse {
   id: number;
   words: Word[];
-  translation?: string;
 
-  constructor(id: number, words: Word[] = [], translation?: string) {
+  constructor(id: number, words: Word[] = []) {
     this.id = id;
     this.words = words;
-    this.translation = translation;
   }
 
   static fromJson(id: string, data: RawVerse): Verse {
     const words = (data.w || []).map((word) => Word.fromJson(word));
-    const translation = data.a?.g;
-    return new Verse(parseInt(id, 10), words, translation);
+    return new Verse(parseInt(id, 10), words);
   }
 
   getArabicTextBetweenTwoIndexes(
@@ -67,16 +60,6 @@ export class Verse {
       .slice(startIndex, endIndex + 1)
       .map((word) => (script === 'indopak' ? word.indopak : word.arabic))
       .join(' ');
-  }
-
-  getWordByWordTranslationBetweenTwoIndexes(startIndex: number, endIndex: number): string[] {
-    if (startIndex < 0 || endIndex >= this.words.length || startIndex > endIndex) {
-      if (endIndex >= this.words.length) {
-        return this.getWordByWordTranslationBetweenTwoIndexes(startIndex, this.words.length - 1);
-      }
-      return [];
-    }
-    return this.words.slice(startIndex, endIndex + 1).map((word) => word.translation);
   }
 }
 
@@ -227,8 +210,6 @@ export interface QuranWordLookupResult {
   surah?: number;
   ayah?: number;
   word_index?: number;
-  transliteration?: string;
-  translation?: string;
   error?: string;
 }
 
@@ -311,8 +292,6 @@ export async function getQuranWordByLocation(
       surah,
       ayah,
       word_index: wordIdx,
-      transliteration: wordItem.transliteration,
-      translation: wordItem.translation,
     };
   } catch (err: any) {
     return {

@@ -110,11 +110,9 @@ function audioKey(fileName: string, surahNumber: number): string {
 
 // ── Projects ──────────────────────────────────────────────────────────────────
 
-export async function vaultSave(file_name: string, project: AlignerProject): Promise<string> {
+export async function vaultSave(file_name: string, project: AlignerProject): Promise<void> {
   const db = await openDb();
   await asPromise(tx(db, PROJECTS, 'readwrite').put({ file_name, data: project }));
-  const json = JSON.stringify(project);
-  return json.length;
 }
 
 /**
