@@ -67,7 +67,63 @@ DETECTOR_MIN_PHONEMES: int = 12             # Minimum phonemes required to trigg
 # 5. PHASE 2 CTC FORCED ALIGNMENT TUNING
 # ==============================================================================
 CTC_BLANK_PENALTY: float = 1.8              # Trellis blank prior regularization
-LOOKAHEAD_OFFSET_FRAMES: float = 0.0        # Pure neural timing (0.0ms offset, matching model author)
+LOOKAHEAD_OFFSET_FRAMES: float = 4.0        # Zipformer causal lookahead compensation (4.0 frames = 160ms)
+
+# Interior word-boundary fusion (Wasl connected speech, voiced transitions).
+# How much each signal contributes to the boundary between two adjacent tokens:
+#   1st = trellis path-switch frame  (model's own acoustic decision point)
+#   2nd = measured 10ms onset from the RMS energy envelope (traced back from the peak)
+#   3rd = legacy heuristic (emission peak - lead time) kept for stability
+# Weights must sum to 1.0. Set all three to e.g. (0.0, 0.0, 1.0) to restore pure legacy behavior.
+# Tuned by A/B benchmark on surah 50 (373 words vs QUD GT): (0.45,0.30,0.25) beat legacy
+# start MAE 86.0->81.8ms, start p95 213->175ms, end median 60->55ms.
+INTERIOR_BOUNDARY_WEIGHTS: tuple = (0.45, 0.30, 0.25)
+
+# Per-position word-timing calibration (seconds ADDED to word start/end after matching).
+# Positive = later, negative = earlier. Measured by calibration sweep on the surah-50
+# benchmark vs QUD GT. Keyed by word position inside the ayah.
+# Applied in Phase 3.5 (pipeline post-match); never inside the matcher itself.
+# Set {"ayah_initial": {"start":0,"end":0}, "interior": {"start":0,"end":0}, "ayah_final": {"start":0,"end":0}}
+# to disable.
+WORD_TIMING_CALIBRATION_S: dict = {
+    "ayah_initial": {"start": 0.070, "end": 0.030},
+    "interior":     {"start": 0.030, "end": 0.010},
+    "ayah_final":   {"start": 0.030, "end": 0.100},
+}
+
+# Duration prior in the CTC trellis (Phase 2 only; does not affect matching).
+# While a token state "stays" the path pays LAMBDA*(age - MU) per stay frame, where MU is
+# the expected occupancy in 40ms frames for that Tajweed class. Blank/waqf states exempt.
+# Order of MU tuple: (SUSTAINED_HOLD, GEMINATE_CLOSURE, BURST_RELEASE, STANDARD_CV).
+# Set LAMBDA = 0.0 (or ENABLED = False) to restore the legacy no-prior trellis.
+CTC_DURATION_PRIOR_ENABLED: bool = True
+CTC_DURATION_PRIOR_LAMBDA: float = 0.0   # 0.15-0.40 tested: neutral on surah-50 bench; raise to activate
+CTC_DURATION_PRIOR_MU_FRAMES: tuple = (15.0, 2.0, 2.0, 3.0)
+
+# Sub-frame emission-crossing refinement (Phase 2): interpolate the logprob crossing
+# between adjacent phonemes inside their shared 40ms switch frame, when both tokens
+# differ. Bypassing raw_starts frame-quantization; the fuser still blends with the
+# energy onset trace and the legacy anchor, so a poor crossing cannot dominate.
+EMISSION_CROSSING_REFINEMENT: bool = True
+
+# Minimum raw-boundary gap (seconds) treated as an acoustic micro-pause (Sakt/breath)
+# inside connected phrases. Legacy behavior: 0.28. Lowering to the Sakt threshold
+# (0.16) lets the energy-traced split handle shorter dips inside phrases instead of
+# falling back to the fused heuristic boundary.
+MICRO_PAUSE_MIN_GAP_S: float = 0.28   # 0.16 tested: neutral (no raw gaps land in this band)
+
+# Final-token (ayah-end) decay trace: stop when envelope falls REL_DROP_DB below the
+# word's own peak energy instead of riding absolute silence (fixes +400-750ms end tails),
+# and hard-cap the trace window (was a fixed 0.800s).
+FINAL_DECAY_REL_DROP_DB: float = 14.0
+FINAL_DECAY_TRACE_MAX_S: float = 0.40
+
+# Where a word's end is clamped when it straddles a VAD Waqf pause
+# (aligner-side only). "cut" = legacy pause midpoint; "start" = physical silence onset,
+# recommended: stops ayah-final words riding deep into the pause.
+PAUSE_END_CLAMP_MODE: str = "start"
+CTC_BLANK_PENALTY: float = 1.8              # Trellis blank prior regularization (1.0 tested, regressed end MAE)
+LOOKAHEAD_OFFSET_FRAMES: float = 4.0        # Zipformer causal lookahead compensation (4.0 = 160ms; 2.0 tested, worse)
 
 
 # ==============================================================================

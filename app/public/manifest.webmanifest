@@ -1,0 +1,20 @@
+{
+  "name": "Quran Recite2Text",
+  "short_name": "Recite2Text",
+  "description": "Offline Quran recitation studio — align recitations, import timings, craft word-timed Quran text. Works in the browser, no install needed.",
+  "id": "quran-recite2text",
+  "start_url": "/",
+  "scope": "/",
+  "display": "minimal-ui",
+  "background_color": "#0e0f11",
+  "theme_color": "#0e0f11",
+  "lang": "en",
+  "icons": [
+    {
+      "src": "/logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -1,45 +1,37 @@
-<template>
-  <div v-if="visible" class="modal-backdrop" @click="handleBackdropClick">
-    <div class="update-modal glass-panel" @click.stop>
-      <!-- Header -->
+﻿<template>
+  <div v-if="visible" class="modal-backdrop" @click.self="handleBackdropClick">
+    <div class="update-modal glass-panel anim-scale" @click.stop>
+      <!-- Header — title + close only -->
       <div class="modal-header">
-        <div class="header-titles">
-          <div class="title-with-icon">
-            <Sparkles v-if="dialogMode === 'app_update'" :size="18" class="text-accent" />
-            <Layers v-else :size="18" class="text-accent" />
-            <h3 class="modal-title">{{ modalTitle }}</h3>
-          </div>
-          <span class="modal-subtitle">{{ modalSubtitle }}</span>
-        </div>
+        <span v-if="!isBusy || isDone" class="update-badge">
+          <Layers :size="13" />
+          {{ dialogMode === 'app_update' ? 'Update' : 'Setup' }}
+        </span>
+        <span v-else class="update-badge badge-busy">{{ modalTitle }}</span>
         <button 
           v-if="!isBusy || isDone" 
           class="btn-icon close-btn" 
           @click="close" 
           title="Close"
         >
-          <X :size="16" />
+          <X :size="15" />
         </button>
       </div>
 
-      <!-- App Update Version Diff Badge Row -->
+      <!-- Big title -->
+      <h3 class="modal-title">{{ modalTitle }}</h3>
+      <span class="modal-subtitle">{{ modalSubtitle }}</span>
+
+      <!-- App Update Version Row -->
       <div v-if="dialogMode === 'app_update'" class="version-banner">
-        <div class="version-pill current-pill">
-          <span class="ver-label">Current:</span>
-          <span class="ver-val">v{{ versionService.currentVersion.value }}</span>
-        </div>
+        <span class="ver-val">{{ versionService.currentVersion.value }}</span>
         <ArrowRight :size="14" class="arrow-icon" />
-        <div class="version-pill latest-pill">
-          <span class="ver-label">New:</span>
-          <span class="ver-val">v{{ versionService.latestVersion.value }}</span>
-        </div>
+        <span class="ver-val ver-new">v{{ versionService.latestVersion.value }}</span>
       </div>
 
       <!-- Release Notes / Changelog for App Update -->
-      <div v-if="dialogMode === 'app_update'" class="changelog-container">
-        <span class="changelog-label">What's New in this Release:</span>
-        <div class="changelog-content">
-          <pre class="changelog-text">{{ versionService.changelog.value || 'Bug fixes, performance optimizations, and stability improvements.' }}</pre>
-        </div>
+      <div v-if="dialogMode === 'app_update'" class="changelog-content">
+        <pre class="changelog-text">{{ versionService.changelog.value || 'Bug fixes, performance optimizations, and stability improvements.' }}</pre>
       </div>
 
       <!-- Component Checklist for Setup Modes -->
@@ -133,11 +125,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { versionService } from '../services/VersionService';
 import { 
   X, 
-  Sparkles, 
   ArrowRight, 
   DownloadCloud, 
   Loader2, 
@@ -204,6 +195,16 @@ function handleBackdropClick() {
     close();
   }
 }
+
+function handleKeydown(e: KeyboardEvent) {
+  if (!visible.value) return;
+  if (e.key === 'Escape' && (!isBusy.value || isDone.value)) {
+    close();
+  }
+}
+
+onMounted(() => window.addEventListener('keydown', handleKeydown));
+onUnmounted(() => window.removeEventListener('keydown', handleKeydown));
 
 function handleCancel() {
   if (abortController) {
@@ -305,22 +306,23 @@ defineExpose({
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.78);
-  backdrop-filter: blur(10px);
+  background: rgba(4, 5, 9, 0.64);
+  backdrop-filter: blur(12px);
   z-index: 10000;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 16px;
+  animation: fade-in var(--dur-base) var(--ease-out) both;
 }
 
 .update-modal {
   width: 100%;
-  max-width: 500px;
-  background: rgba(15, 23, 42, 0.98);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 14px;
-  box-shadow: 0 24px 56px rgba(0, 0, 0, 0.75);
+  max-width: 460px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-e4);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -328,108 +330,92 @@ defineExpose({
 
 .modal-header {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  padding: 20px 24px 16px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-.header-titles {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.title-with-icon {
-  display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: space-between;
+  padding: 14px 18px 0;
+}
+
+.update-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--accent-primary);
+  background: var(--accent-subtle);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-pill);
+  padding: 3px 10px;
+}
+.update-badge.badge-busy {
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.04);
+  border-color: var(--border-subtle);
 }
 
 .modal-title {
-  margin: 0;
-  font-size: 1.05rem;
+  margin: 10px 18px 0;
+  font-size: 1.1rem;
   font-weight: 700;
-  color: #f8fafc;
+  letter-spacing: -0.01em;
+  color: var(--text-main);
 }
 
 .modal-subtitle {
-  font-size: 0.8rem;
-  color: #94a3b8;
+  display: block;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  padding: 3px 18px 0;
 }
 
 .close-btn {
   background: transparent;
   border: none;
-  color: #94a3b8;
+  color: var(--text-muted);
   cursor: pointer;
   padding: 4px;
-  border-radius: 6px;
+  border-radius: var(--radius-xs);
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.15s ease;
+  transition: color var(--dur-fast) var(--ease-out),
+              background var(--dur-fast) var(--ease-out);
 }
 
 .close-btn:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: #ffffff;
+  background: var(--bg-surface-hover);
+  color: var(--text-main);
 }
 
+/* Version row — single quiet mono line */
 .version-banner {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 12px;
-  padding: 16px 24px;
-  background: rgba(255, 255, 255, 0.02);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  gap: 10px;
+  padding: 14px 18px 4px;
+  font-family: var(--font-mono);
 }
-
-.version-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border-radius: 9999px;
-  font-size: 0.8rem;
+.ver-val {
+  font-size: 0.88rem;
   font-weight: 600;
+  color: var(--text-muted);
 }
-
-.current-pill {
-  background: rgba(148, 163, 184, 0.12);
-  color: #cbd5e1;
+.ver-val.ver-new {
+  color: var(--accent-primary);
+  text-shadow: var(--shadow-e1);
 }
-
-.latest-pill {
-  background: rgba(56, 189, 248, 0.15);
-  color: #38bdf8;
-  border: 1px solid rgba(56, 189, 248, 0.3);
-}
-
 .arrow-icon {
-  color: #64748b;
-}
-
-.changelog-container {
-  padding: 16px 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.changelog-label {
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: #94a3b8;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  color: var(--text-dim);
 }
 
 .changelog-content {
-  background: rgba(0, 0, 0, 0.35);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 8px;
+  margin: 12px 18px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
   padding: 12px;
   max-height: 140px;
   overflow-y: auto;
@@ -439,35 +425,35 @@ defineExpose({
   margin: 0;
   font-family: inherit;
   font-size: 0.8rem;
-  color: #cbd5e1;
+  color: var(--text-secondary);
   white-space: pre-wrap;
   word-break: break-word;
   line-height: 1.5;
 }
 
 .setup-checklist {
-  padding: 18px 24px;
+  padding: 16px 18px 4px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
 }
 
 .checklist-item {
   display: flex;
   align-items: center;
-  gap: 12px;
-  font-size: 0.85rem;
-  color: #64748b;
-  transition: color 0.2s ease;
+  gap: 11px;
+  font-size: 0.82rem;
+  color: var(--text-dim);
+  transition: color var(--dur-base) var(--ease-out);
 }
 
 .checklist-item.active {
-  color: #f1f5f9;
+  color: var(--text-main);
   font-weight: 500;
 }
 
 .checklist-item.done {
-  color: #38bdf8;
+  color: var(--accent-primary);
 }
 
 .check-bullet {
@@ -482,21 +468,19 @@ defineExpose({
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #475569;
+  background: var(--text-dim);
 }
 
 .checklist-item.active .bullet-dot {
-  background: #38bdf8;
-  box-shadow: 0 0 8px #38bdf8;
+  background: var(--accent-primary);
+  box-shadow: var(--shadow-e1);
 }
 
 .progress-section {
-  padding: 16px 24px;
+  padding: 14px 18px;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  background: rgba(0, 0, 0, 0.25);
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .progress-info-row {
@@ -507,7 +491,7 @@ defineExpose({
 }
 
 .progress-status-text {
-  color: #cbd5e1;
+  color: var(--text-secondary);
   font-weight: 500;
   max-width: 80%;
   overflow: hidden;
@@ -516,39 +500,42 @@ defineExpose({
 }
 
 .progress-percent-text {
-  color: #38bdf8;
+  color: var(--accent-primary);
   font-weight: 700;
+  font-family: var(--font-mono);
 }
 
 .progress-bar-track {
-  height: 6px;
-  background: rgba(255, 255, 255, 0.08);
-  border-radius: 9999px;
+  height: 5px;
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: var(--radius-pill);
   overflow: hidden;
 }
 
 .progress-bar-fill {
   height: 100%;
-  background: linear-gradient(90deg, #0284c7, #38bdf8);
-  transition: width 0.2s ease;
-  border-radius: 9999px;
+  background: var(--accent-primary);
+  transition: width var(--dur-base) var(--ease-out);
+  border-radius: var(--radius-pill);
 }
 
 .progress-bar-fill.done-bar {
-  background: #10b981;
+  background: var(--emerald-primary);
+  box-shadow: var(--shadow-e1);
 }
 
 .error-box {
-  margin: 12px 24px 0;
+  margin: 10px 18px 0;
   padding: 10px 14px;
-  background: rgba(239, 68, 68, 0.15);
-  border: 1px solid rgba(239, 68, 68, 0.3);
-  border-radius: 8px;
-  color: #fca5a5;
-  font-size: 0.8rem;
+  background: var(--ruby-bg);
+  border: 1px solid var(--ruby-border);
+  border-radius: var(--radius-md);
+  color: #fda4af;
+  font-size: var(--text-xs);
   display: flex;
   align-items: center;
   gap: 8px;
+  animation: rise-in var(--dur-rise) var(--ease-spring) both;
 }
 
 .modal-footer {
@@ -556,7 +543,7 @@ defineExpose({
   align-items: center;
   justify-content: flex-end;
   gap: 10px;
-  padding: 16px 24px 20px;
+  padding: 16px 18px 18px;
 }
 
 .btn {
@@ -564,39 +551,45 @@ defineExpose({
   align-items: center;
   gap: 6px;
   padding: 8px 16px;
-  font-size: 0.82rem;
+  font-size: var(--text-xs);
   font-weight: 600;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: filter var(--dur-fast) var(--ease-out),
+              box-shadow var(--dur-fast) var(--ease-out);
   border: none;
 }
 
 .btn-secondary {
-  background: rgba(255, 255, 255, 0.08);
-  color: #cbd5e1;
+  background: var(--bg-surface-elevated);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
 }
 
 .btn-secondary:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.14);
-  color: #ffffff;
+  background: var(--bg-surface-hover);
+  color: var(--text-main);
+  border-color: var(--border-medium);
 }
 
 .btn-primary {
-  background: #0284c7;
+  background: var(--accent-primary);
   color: #ffffff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18),
+              var(--shadow-e2);
 }
 
 .btn-primary:hover:not(:disabled) {
-  background: #0369a1;
+  filter: brightness(1.1);
+  box-shadow: var(--shadow-e2);
 }
 
 .btn-done {
-  background: #10b981;
+  background: var(--emerald-primary);
 }
 
-.btn-done:hover {
-  background: #059669;
+.btn-done:hover:not(:disabled) {
+  filter: brightness(1.1);
 }
 
 .btn:disabled {
@@ -604,11 +597,7 @@ defineExpose({
   cursor: not-allowed;
 }
 
-.text-accent {
-  color: #38bdf8;
-}
-
 .text-success {
-  color: #10b981;
+  color: var(--emerald-primary);
 }
 </style>

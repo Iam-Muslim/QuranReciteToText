@@ -24,42 +24,9 @@ async function getInvoke() {
   return invoke;
 }
 
-// ── Engine Status ─────────────────────────────────────────────────────────────
-
-export async function getEngineStatus(): Promise<{ ready: boolean; python: string; message: string }> {
-  if (isTauriEnvironment()) {
-    try {
-      const invoke = await getInvoke();
-      return await invoke('get_engine_status');
-    } catch (err: any) {
-      console.warn('Tauri get_engine_status failed:', err);
-    }
-  }
-  return { ready: false, python: '', message: 'Engine available in desktop mode' };
-}
-
-export async function isEngineInstalled(): Promise<boolean> {
-  if (isTauriEnvironment()) {
-    try {
-      const invoke = await getInvoke();
-      return await invoke('is_engine_installed');
-    } catch {
-      return false;
-    }
-  }
-  return true;
-}
-
-export async function ensureEngine(): Promise<void> {
-  if (isTauriEnvironment()) {
-    const invoke = await getInvoke();
-    await invoke('ensure_engine');
-  }
-}
-
 // ── Alignment ─────────────────────────────────────────────────────────────────
 
-export interface AlignRequest {
+interface AlignRequest {
   audio_path?: string;
   dir_path?: string;
   fast?: boolean;
@@ -78,6 +45,15 @@ export async function runAlign(request: AlignRequest): Promise<void> {
 export async function stopAlign(): Promise<void> {
   const invoke = await getInvoke();
   await invoke('stop_align');
+}
+
+/**
+ * True when the local alignment engine (Python + models) is installed.
+ * Import-Timing workflows work fully without it.
+ */
+export async function isEngineInstalled(): Promise<boolean> {
+  const invoke = await getInvoke();
+  return invoke('is_engine_installed');
 }
 
 // ── Projects ──────────────────────────────────────────────────────────────────
@@ -180,8 +156,7 @@ export async function getDuration(filePath: string): Promise<number> {
 /**
  * Fast lossless audio cut via FFmpeg stream copy (matches QuranCaption commands::media::cut_audio).
  */
-export async function cutAudio(
-  sourcePath: string,
+export async function cutAudio(  sourcePath: string,
   startMs: number,
   endMs: number,
   outputPath: string
@@ -215,6 +190,29 @@ export async function diagnoseMediaBinaries(): Promise<BinaryDiagnosticResult[]>
     console.warn('diagnoseMediaBinaries IPC failed:', err);
     return [];
   }
+}
+
+/**
+ * Picks the best playable audio source for a surah-like record.
+ * - Session URLs (blob:/data:/https:) win — they already resolve this session.
+ * - Real filesystem paths go through the native asset protocol.
+ * - A bare "name.ext" is NOT a filesystem path (browser-imported sessions)
+ *   and must not shadow a working URL.
+ */
+export function resolveAudioSourceUrl(source: {
+  audio_file?: string | null;
+  audio_url?: string | null;
+}): string {
+  const fileRef = source.audio_file || '';
+  const urlRef = source.audio_url || '';
+  const sessionUrl = /^(blob|data|https?):/.test(urlRef) ? urlRef : '';
+  const isRealPath = !!(fileRef && /[\\/:]/.test(fileRef));
+  return (
+    sessionUrl
+    || (isRealPath ? getAudioStreamUrl(fileRef) : '')
+    || (urlRef ? getAudioStreamUrl(urlRef) : '')
+    || ''
+  );
 }
 
 /**

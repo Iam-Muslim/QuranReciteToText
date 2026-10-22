@@ -102,6 +102,7 @@ def _trace_speech_decay_forward(
     latest_sec: float,
     speech_th_db: float,
     default_sec: float,
+    rel_drop_db: float = 0.0,
 ) -> float:
     """Traces forwards in high-resolution 10ms steps to detect sound decay into pause.
 
@@ -109,6 +110,12 @@ def _trace_speech_decay_forward(
     Verse-final vowels, Tanween, and aspiration decay over 200ms to 450ms into silence.
     Tracing forwards in 10ms steps until energy drops below the speech floor captures the
     full acoustic release without cutting the word, bounded strictly by the pause cut barrier (T_cut).
+
+    rel_drop_db > 0 switches on an additional RELATIVE stop condition: the trace stops as
+    soon as the envelope falls rel_drop_db below the phoneme's own emission-peak energy
+    (floored at speech_th_db). This matters for ayah-final words where an absolute
+    silence floor keeps riding the trailing vowel + room reverb for several hundred ms
+    after the legal word end (the dominant source of the +400-750ms end overshoot tail).
     """
     if frame_db_10ms is None:
         return default_sec
@@ -118,10 +125,15 @@ def _trace_speech_decay_forward(
     if pk_idx >= latest_idx:
         return default_sec
 
+    decay_th_db = speech_th_db
+    if rel_drop_db > 0.0 and 0 <= pk_idx < len(frame_db_10ms):
+        peak_db = float(frame_db_10ms[pk_idx])
+        decay_th_db = max(speech_th_db, peak_db - rel_drop_db)
+
     decay_idx = pk_idx
     dip_count = 0
     for t in range(pk_idx + 1, latest_idx):
-        if frame_db_10ms[t] >= speech_th_db:
+        if frame_db_10ms[t] >= decay_th_db:
             decay_idx = t + 1
             dip_count = 0
         else:
@@ -145,20 +157,38 @@ def _ctc_viterbi_forward(
     s_array: np.ndarray,
     skip_mask: np.ndarray,
     s_base: np.ndarray,
+    dur_mu: np.ndarray,
     total_frames: int,
     l: int,
     band_width: int,
     b_id: int,
     blank_penalty: float,
+    dur_lambda: float,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Unified exact/banded CTC Viterbi Trellis forward pass."""
+    """Unified exact/banded CTC Viterbi Trellis forward pass with duration prior.
+
+    Duration prior (trellis-local only, does not affect matching):
+    Each token state tracks its occupancy age along the surviving path. While a
+    token state STAYS (step 0) it accumulates the deviation cost
+        dur_lambda * (age - dur_mu[state]),
+    where dur_mu is the expected duration in frames for that phoneme class
+    (Madd/Ghunnah receive long expected durations; plosives/geminates short).
+    Total over a stay of A frames is  dur_lambda * (A(A+1)/2 - mu*A), which is
+    convex in A: negligible up to ~mu frames, then increasingly expensive.
+    Blank/waqf states are exempt (silence length is unconstrained by design).
+    """
     backtrack = np.zeros((total_frames, band_width), dtype=np.uint8)
+    age_prev = np.zeros(l, dtype=np.int32)
+    age_curr = np.zeros(l, dtype=np.int32)
     v_prev = np.full(l, -1e30, dtype=np.float32)
     v_curr = np.full(l, -1e30, dtype=np.float32)
 
     v_prev[0] = lp[0, s_array[0]]
     if l > 1:
         v_prev[1] = lp[0, s_array[1]]
+    age_prev[0] = 1
+    if l > 1:
+        age_prev[1] = 1
 
     for t in range(1, total_frames):
         base = s_base[t]
@@ -168,6 +198,7 @@ def _ctc_viterbi_forward(
         s_end = min(min(l, base + band_width), reach_max)
 
         v_curr[max(0, base - 2):min(l, base + band_width + 2)].fill(-1e30)
+        age_curr[max(0, base - 2):min(l, base + band_width + 2)].fill(0)
 
         for s in range(s_start, s_end):
             c0 = v_prev[s]
@@ -192,9 +223,19 @@ def _ctc_viterbi_forward(
                 emit = lp[t, tok_class]
                 if tok_class == b_id:
                     emit -= blank_penalty
+                elif best_step == 0 and s % 2 == 1 and dur_lambda > 0.0:
+                    # Staying frame in a token state: apply duration deviation cost
+                    k = s // 2
+                    emit -= dur_lambda * (age_prev[s] + 1 - dur_mu[k])
                 v_curr[s] = max_v + emit
 
+                if best_step == 0:
+                    age_curr[s] = age_prev[s] + 1
+                else:
+                    age_curr[s] = 1
+
         v_prev, v_curr = v_curr, v_prev
+        age_prev, age_curr = age_curr, age_prev
 
     return backtrack, v_prev
 
@@ -290,7 +331,8 @@ def warmup_aligner_jit() -> None:
         s_arr = np.zeros(3, dtype=np.int32)
         sk_m = np.zeros(3, dtype=np.uint8)
         s_b = np.zeros(2, dtype=np.int32)
-        bt, vp = _ctc_viterbi_forward(lp, s_arr, sk_m, s_b, 2, 3, 3, 250, 0.5)
+        d_mu = np.zeros(3, dtype=np.float32)
+        bt, vp = _ctc_viterbi_forward(lp, s_arr, sk_m, s_b, d_mu, 2, 3, 3, 250, 0.5, 0.0)
         _fast_backtrack_and_extract(bt, s_b, vp, lp, np.array([1], dtype=np.int32), 2, 3, 3, 1)
     except Exception:
         pass
@@ -413,17 +455,42 @@ class CtcViterbiAligner:
             band_width = l
             s_base = np.zeros(total_frames, dtype=np.int32)
 
+        # 3.5 Token classification (computed once, before the trellis: the
+        #     duration prior needs the class, and step 6 reuses it later).
+        classifier = token_classifier or default_quran_token_classifier
+        token_classes = [classifier(target_phonemes[k].phoneme) for k in range(n)]
+
+        # 3.6 Duration prior: expected occupancy (frames) per token state.
+        # Zero lambda (or SIGNAL disabled in config) = legacy behavior (no prior).
+        if getattr(config, "CTC_DURATION_PRIOR_ENABLED", True):
+            dur_lambda = float(getattr(config, "CTC_DURATION_PRIOR_LAMBDA", 0.0))
+        else:
+            dur_lambda = 0.0
+        mu_defaults = getattr(config, "CTC_DURATION_PRIOR_MU_FRAMES", (10.0, 2.0, 2.0, 3.0))
+        _class_to_mu_idx = {
+            AcousticAnchorType.SUSTAINED_HOLD: 0,
+            AcousticAnchorType.GEMINATE_CLOSURE: 1,
+            AcousticAnchorType.BURST_RELEASE: 2,
+            AcousticAnchorType.STANDARD_CV: 3,
+        }
+        dur_mu = np.zeros(l, dtype=np.float32)
+        if dur_lambda > 0.0:
+            for i in range(n):
+                dur_mu[2 * i + 1] = float(mu_defaults[_class_to_mu_idx[token_classes[i]]])
+
         # Forward Trellis
         backtrack, v_prev = _ctc_viterbi_forward(
             lp=lp,
             s_array=s_array,
             skip_mask=skip_mask,
             s_base=s_base,
+            dur_mu=dur_mu,
             total_frames=total_frames,
             l=l,
             band_width=band_width,
             b_id=b_id,
             blank_penalty=float(getattr(config, "CTC_BLANK_PENALTY", CTC_BLANK_PENALTY)),
+            dur_lambda=dur_lambda,
         )
 
         # 5. Fast Backtracking & Boundary Extraction in Numba (Sub-millisecond)
@@ -468,9 +535,37 @@ class CtcViterbiAligner:
                         delta = (y0 - y2) / denom
                         cont_peak_frames[k] = pk + float(np.clip(delta, -0.5, 0.5))
 
-        # 6. Token Classification & High-Resolution Acoustic Energy Contour from audio_pcm
-        classifier = token_classifier or default_quran_token_classifier
-        token_classes = [classifier(target_phonemes[k].phoneme) for k in range(n)]
+        # 5.2 Sub-Frame Emission-Crossing Refinement (interior boundaries)
+        # The Viterbi path switch between phonemes is quantized to the 40ms emission
+        # lattice, but the REAL mass handoff between the two phonemes' emission curves
+        # happens INSIDE those frames. Linear interpolation of the logprob crossing
+        # lp[t,tok_k-1] -> lp[t,tok_k] recovers a sub-frame transition time:
+        # timing fitted to the model's own CTC peaking rather than the lattice.
+        refined_switch_s = None
+        if lp is not None and lp.ndim == 2 and getattr(config, "EMISSION_CROSSING_REFINEMENT", True):
+            refined_switch_s = np.full(n, np.nan, dtype=np.float64)
+            for k in range(1, n):
+                tk = int(token_ids[k])
+                tp = int(token_ids[k - 1])
+                if tk == tp or tk >= lp.shape[1] or tp >= lp.shape[1]:
+                    continue
+                t0 = int(raw_starts[k])
+                if t0 < 0:
+                    continue
+                lo = max(0, t0 - 2)
+                hi = min(total_frames - 1, t0 + 1)
+                d = lp[lo:hi + 1, tk] - lp[lo:hi + 1, tp]
+                for i in range(len(d) - 1):
+                    a, b = float(d[i]), float(d[i + 1])
+                    if a < 0.0 <= b:  # phoneme k overtakes phoneme k-1 between frames
+                        frac = (-a / (b - a)) if (b - a) > 1e-9 else 0.5
+                        t_star = float(lo + i) + float(np.clip(frac, 0.0, 1.0))
+                        _la = float(getattr(config, "LOOKAHEAD_OFFSET_FRAMES", LOOKAHEAD_OFFSET_FRAMES))
+                        refined_switch_s[k] = (t_star - _la) * actual_frame_step
+                        break
+
+        # 6. High-Resolution Acoustic Energy Contour from audio_pcm
+        # (Token classification already done at step 3.5 for the duration prior)
 
         frame_db_10ms = None
         speech_th_db = -38.0
@@ -505,6 +600,10 @@ class CtcViterbiAligner:
             default_sec=s_secs[0],
         ))
 
+        # Pre-pause end clamp mode (computed once; used by the per-token loop below and step 9)
+        # "cut" = legacy pause midpoint; "start" = word ends at the physical onset of silence.
+        _clamp_mode = str(getattr(config, "PAUSE_END_CLAMP_MODE", "cut"))
+
         # 2. Token-Class-Aware Boundaries across Tokens
         for k in range(1, n):
             gap_s_sec = e_secs[k - 1]
@@ -533,7 +632,7 @@ class CtcViterbiAligner:
             is_micro_pause = False
             if (
                 matched_pause is None
-                and gap_dur >= 0.28
+                and gap_dur >= float(getattr(config, "MICRO_PAUSE_MIN_GAP_S", 0.28))
                 and c_curr not in (
                     AcousticAnchorType.SUSTAINED_HOLD,
                     AcousticAnchorType.GEMINATE_CLOSURE,
@@ -558,14 +657,19 @@ class CtcViterbiAligner:
                         p_cut = (p_s + p_e) / 2.0
                 else:
                     p_cut = (gap_s_sec + gap_e_sec) / 2.0
+                # In "start" clamp mode the pre-pause word end is traced only up to the
+                # physical onset of silence (never into the pause itself).
+                _p_end_lim = p_cut
+                if _clamp_mode != "cut" and matched_pause is not None:
+                    _p_end_lim = getattr(matched_pause, "start_sec", getattr(matched_pause, "start", p_cut))
 
-                # End token k-1: trace forward acoustic energy decay into pause (bounded by p_cut)
+                # End token k-1: trace forward acoustic energy decay into pause (bounded by end limit)
                 e_secs[k - 1] = _trace_speech_decay_forward(
                     frame_db_10ms=frame_db_10ms,
                     pk_sec=pk_secs[k - 1],
-                    latest_sec=p_cut,
+                    latest_sec=_p_end_lim,
                     speech_th_db=speech_th_db,
-                    default_sec=min(p_cut, e_secs[k - 1] + 2 * actual_frame_step),
+                    default_sec=min(_p_end_lim, e_secs[k - 1] + 2 * actual_frame_step),
                 )
 
                 # Start token k: trace backward acoustic speech onset from peak (bounded by p_cut)
@@ -609,13 +713,47 @@ class CtcViterbiAligner:
                     # Token k is a stop/closure: boundary sits at the start of closure
                     boundary = max(min_boundary, min(e_secs[k - 1], target_boundary))
                 else:
-                    # Standard continuous transition: fair split between token k-1 offset and token k onset
+                    # ─── Data-driven interior boundary fusion (voiced→voiced transition) ───
+                    # Previously a pure heuristic (peak - 80ms lead, or a midpoint split).
+                    # Now fuses three independent boundary estimates:
+                    #   (a) switch_sec : the frame where the Viterbi trellis path itself
+                    #                    transitioned token k-1 -> token k (the model's own
+                    #                    acoustic decision point, lookahead-compensated).
+                    #   (b) onset_sec  : high-resolution measured onset from the 10ms RMS-dB
+                    #                    envelope, traced back from token k's emission peak
+                    #                    (captures quiet consonant onsets the model under-detects).
+                    #   (c) prior_sec  : legacy heuristic anchor (peak - lead) kept for
+                    #                    stability when the new signals are degenerate.
+                    # Weights default to 0.55 / 0.25 / 0.20 (config: INTERIOR_BOUNDARY_WEIGHTS).
                     gap = s_secs[k] - e_secs[k - 1]
                     if gap > 0:
                         mid_s = (e_secs[k - 1] + s_secs[k]) / 2.0
-                        boundary = max(min_boundary, min(mid_s, target_boundary))
+                        prior_sec = max(min_boundary, min(mid_s, target_boundary))
                     else:
-                        boundary = max(min_boundary, min(e_secs[k - 1], target_boundary))
+                        prior_sec = max(min_boundary, min(e_secs[k - 1], target_boundary))
+
+                    # (a) Sub-frame refined emission crossing when available, else the
+                    #     40ms-quantized path-switch estimate.
+                    switch_sec = s_secs[k]
+                    if refined_switch_s is not None:
+                        _rs = float(refined_switch_s[k])
+                        if not math.isnan(_rs):
+                            switch_sec = _rs
+                    onset_sec = _trace_speech_onset_backward(
+                        frame_db_10ms=frame_db_10ms,
+                        pk_sec=pk_secs[k],
+                        earliest_sec=max(s_secs[k] - 0.300, min_boundary),
+                        speech_th_db=speech_th_db,
+                        default_sec=switch_sec,
+                    )
+                    w_switch, w_onset, w_prior = getattr(
+                        config, "INTERIOR_BOUNDARY_WEIGHTS", (0.55, 0.25, 0.20)
+                    )
+                    boundary = w_switch * switch_sec + w_onset * onset_sec + w_prior * prior_sec
+                    if frame_db_10ms is None:
+                        # No audio available: trust the trellis switch and legacy heuristic only
+                        boundary = w_switch * switch_sec + w_prior * prior_sec
+                    boundary = max(min_boundary, min(boundary, target_boundary))
 
                 # Hard invariant: Token k always retains at least 0.5 frame before its emission peak
                 boundary = min(boundary, max(min_boundary, pk_secs[k] - actual_frame_step * 0.5))
@@ -623,18 +761,25 @@ class CtcViterbiAligner:
                 s_secs[k] = boundary
 
         # 3. Final Token Offset: trace forward acoustic energy decay to sound completion
+        #    The RELATIVE drop threshold (FINAL_DECAY_REL_DROP_DB) stops the trace when the
+        #    envelope falls below (peak - X dB) instead of riding absolute silence for 800ms —
+        #    the ayah-final overshoot diagnosis showed +400-750ms tails on 38/47 severe errors.
+        _final_trace_max_s = float(getattr(config, "FINAL_DECAY_TRACE_MAX_S", 0.800))
+        _final_rel_drop = float(getattr(config, "FINAL_DECAY_REL_DROP_DB", 14.0))
         e_secs[n - 1] = max(
             s_secs[n - 1] + min_dur_s,
             _trace_speech_decay_forward(
                 frame_db_10ms=frame_db_10ms,
                 pk_sec=pk_secs[n - 1],
-                latest_sec=min(audio_duration, pk_secs[n - 1] + 0.800),
+                latest_sec=min(audio_duration, pk_secs[n - 1] + _final_trace_max_s),
                 speech_th_db=speech_th_db,
                 default_sec=min(audio_duration, e_secs[n - 1] + 2 * actual_frame_step),
+                rel_drop_db=_final_rel_drop,
             ),
         )
 
         # 9. Pause protection: enforce click-free cut point boundary between phrases
+        #    (uses _clamp_mode computed before the per-token loop above)
         if pause_intervals:
             for p in pause_intervals:
                 p_s = getattr(p, "start_sec", getattr(p, "start", 0.0))
@@ -645,7 +790,7 @@ class CtcViterbiAligner:
                 for k in range(n):
                     # Pre-pause token cannot cross past cut point into next phrase
                     if s_secs[k] < p_cut and e_secs[k] > p_cut:
-                        e_secs[k] = max(s_secs[k] + min_dur_s, p_cut)
+                        e_secs[k] = max(s_secs[k] + min_dur_s, p_s if _clamp_mode == "start" else p_cut)
                     # Post-pause token cannot start before cut point
                     elif p_s <= s_secs[k] < p_cut:
                         s_secs[k] = p_cut

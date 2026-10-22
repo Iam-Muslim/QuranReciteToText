@@ -1,85 +1,284 @@
+/* ============================================================
+   Self-hosted fonts — 100% offline (no Google Fonts requests)
+   UI: Cairo (variable) · Numbers/timecodes: JetBrains Mono ·
+   Quran text: KFGQPC Hafs
+   ============================================================ */
+@font-face {
+  font-family: 'Cairo';
+  src: url('/fonts/Cairo-arabic.woff2') format('woff2');
+  font-weight: 200 900;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0600-06FF, U+0750-077F, U+0870-0891, U+0897-08E1, U+08E3-08FF, U+200C-200E, U+2010-2011, U+204F, U+2E41, U+FB50-FDFF, U+FE70-FE74, U+FE76-FEFC, U+102E0-102FB, U+10E60-10E7E, U+10EC2-10EC7, U+10EC9-10EEE, U+10EF0-10EFF, U+1EE00-1EE03, U+1EE05-1EE1F, U+1EE21-1EE22, U+1EE24, U+1EE27, U+1EE29-1EE32, U+1EE34-1EE37, U+1EE39, U+1EE3B, U+1EE42, U+1EE47, U+1EE49, U+1EE4B, U+1EE4D-1EE4F, U+1EE51-1EE52, U+1EE54, U+1EE57, U+1EE59, U+1EE5B, U+1EE5D, U+1EE5F, U+1EE61-1EE62, U+1EE64, U+1EE67-1EE6A, U+1EE6C-1EE72, U+1EE74-1EE77, U+1EE79-1EE7C, U+1EE7E, U+1EE80-1EE89, U+1EE8B-1EE9B, U+1EEA1-1EEA3, U+1EEA5-1EEA9, U+1EEAB-1EEBB, U+1EEF0-1EEF1;
+}
+@font-face {
+  font-family: 'Cairo';
+  src: url('/fonts/Cairo-latin.woff2') format('woff2');
+  font-weight: 200 900;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/JetBrainsMono-400.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/JetBrainsMono-500.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/JetBrainsMono-600.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
 @font-face {
   font-family: 'KFGQPC Hafs';
   src: url('/fonts/Hafs.ttf') format('truetype');
   font-display: swap;
 }
 
-@font-face {
-  font-family: 'KFGQPC IndoPak';
-  src: url('/fonts/IndoPak.ttf') format('truetype');
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'Surahs Calligraphy';
-  src: url('/fonts/Surahs.ttf') format('truetype');
-  font-display: swap;
-}
-
 :root {
-  /* Developer-Grade Engineering Workstation Palette (Linear / VS Code / JetBrains) */
-  --bg-base: #090a0f;
-  --bg-surface: #111318;
-  --bg-surface-elevated: #181b22;
-  --bg-surface-hover: #212530;
-  --bg-input: #0c0e12;
+  /* ============================================================
+     Design system — calm studio neutrals, one accent, flat surfaces
+     ============================================================ */
 
-  --border-subtle: #1e222c;
-  --border-medium: #2a303d;
+  /* --- Foundation --- */
+  --bg-base: #0e0f11;              /* App canvas background */
+  --bg-surface: #131416;           /* Panels & main work areas */
+  --bg-surface-elevated: #17181b;  /* Elevated cards & floating bars */
+  --bg-surface-hover: #1d1e22;     /* Micro-hover state */
+  --bg-input: #101113;             /* Form controls & search inputs */
+
+  /* --- Borders --- */
+  --border-subtle: rgba(255, 255, 255, 0.07);
+  --border-medium: rgba(255, 255, 255, 0.13);
   --border-focus: #5e6ad2;
 
-  /* Restrained Engineering Accent (Linear Indigo) */
+  /* --- Accent (indigo, used sparingly) --- */
   --accent-primary: #5e6ad2;
-  --accent-hover: #6d7ae0;
-  --accent-subtle: rgba(94, 106, 210, 0.12);
+  --accent-hover: #6f7ade;
+  --accent-deep: #4c56b8;
+  --accent-subtle: rgba(94, 106, 210, 0.14);
   --accent-border: rgba(94, 106, 210, 0.35);
+  --accent-rgb: 94, 106, 210;
 
-  /* Functional Status Colors */
-  --emerald-primary: #22c55e;
-  --emerald-bg: rgba(34, 197, 94, 0.10);
-  --emerald-border: rgba(34, 197, 94, 0.25);
+  /* --- Warm accent (Quranic text highlights) --- */
+  --gold-primary: #c29632;
+  --gold-hover: #d4a641;
+  --gold-deep: #a67c20;
+  --gold-subtle: rgba(194, 150, 50, 0.12);
+  --gold-border: rgba(194, 150, 50, 0.30);
+  --gold-rgb: 194, 150, 50;
 
-  --amber-primary: #f59e0b;
-  --amber-bg: rgba(245, 158, 11, 0.10);
-  --amber-border: rgba(245, 158, 11, 0.25);
+  /* --- Status colors (desaturated, functional) --- */
+  --emerald-primary: #3a9e6f;
+  --emerald-bg: rgba(58, 158, 111, 0.12);
+  --emerald-border: rgba(58, 158, 111, 0.28);
 
-  --ruby-primary: #ef4444;
-  --ruby-bg: rgba(239, 68, 68, 0.10);
-  --ruby-border: rgba(239, 68, 68, 0.25);
+  --amber-primary: #c9952e;
+  --amber-bg: rgba(201, 149, 46, 0.12);
+  --amber-border: rgba(201, 149, 46, 0.28);
 
-  --sky-primary: #38bdf8;
-  --sky-bg: rgba(56, 189, 248, 0.10);
+  --ruby-primary: #cf5450;
+  --ruby-bg: rgba(207, 84, 80, 0.12);
+  --ruby-border: rgba(207, 84, 80, 0.28);
 
-  /* QuranCaption Signature Palette Tokens */
-  --qc-bg-primary: #0d1117;
-  --qc-bg-secondary: #161b22;
-  --qc-bg-accent: #21262d;
-  --qc-border: #30363d;
-  --qc-blue: #58a6ff;
-  --qc-blue-hover: #79b8ff;
-  --qc-emerald: #3fb950;
-  --qc-amber: #f0883e;
-  --qc-purple: #a371f7;
-  --qc-danger: #f85149;
+  --sky-primary: #58a0c9;
+  --sky-bg: rgba(88, 160, 201, 0.12);
+  --sky-rgb: 88, 160, 201;
 
-  /* Typography Colors */
-  --text-main: #f3f4f6;
-  --text-secondary: #9ca3af;
-  --text-muted: #6b7280;
-  --text-dim: #4b5563;
+  /* --- Timeline & wave surfaces --- */
+  --minimap-bg: #0b0c0e;
+  --lane-bg: #101114;
+  --lane-bg-soft: #131417;
+  --lanesheet-bg: #0d0e10;
+  --hover-overlay: rgba(255, 255, 255, 0.04);
+  --playhead-color: #cf5450;
+  --playhead-glow: rgba(207, 84, 80, 0.45);
+  --contrast-line: rgba(255, 255, 255, 0.20);
+  --on-contrast: #ffffff;
+  --wave-base: #454a56;
+  --wave-base-dim: #2c2f36;
+  --wave-rest: #2c2f36;
 
-  /* Typography Fonts */
-  --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  --font-arabic: 'KFGQPC Hafs', 'Amiri Quran', 'Amiri', serif;
-  --font-arabic-indopak: 'KFGQPC IndoPak', 'Amiri Quran', serif;
-  --font-surah-title: 'Surahs Calligraphy', 'KFGQPC Hafs', 'Amiri Quran', serif;
+  /* --- Legacy aliases --- */
+  --qc-bg-primary: #0e0f11;
+  --qc-bg-secondary: #131416;
+  --qc-bg-accent: #17181b;
+  --qc-border: rgba(255, 255, 255, 0.07);
+  --qc-blue: #5e6ad2;
+  --qc-blue-hover: #6f7ade;
+  --qc-emerald: #3a9e6f;
+  --qc-amber: #c9952e;
+  --qc-purple: #8b5cf6;
+  --qc-danger: #cf5450;
+
+  /* --- Typography colors --- */
+  --text-main: #e9eaec;
+  --text-secondary: #8b8e96;
+  --text-muted: #62656d;
+  --text-dim: #45484f;
+
+  /* --- Fonts --- */
+  --font-ui: 'Cairo', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-quran: 'KFGQPC Hafs', serif;
+  --font-arabic: 'KFGQPC Hafs', serif;
   --font-mono: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
 
+  /* --- Type scale --- */
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-md: 0.875rem;
+  --text-lg: 1rem;
+
+  /* --- Radii (measured, not bubbly) --- */
+  --radius-xs: 3px;
+  --radius-sm: 5px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 12px;
+  --radius-pill: 9999px;
+
+  /* --- Shadows (quiet depth only) --- */
+  --shadow-e1: 0 1px 2px rgba(0, 0, 0, 0.30);
+  --shadow-e2: 0 3px 10px rgba(0, 0, 0, 0.28);
+  --shadow-e3: 0 8px 24px rgba(0, 0, 0, 0.40);
+  --shadow-e4: 0 16px 48px rgba(0, 0, 0, 0.50);
+
+  /* --- Motion (fast, calm — no bounce) --- */
+  --dur-fast: 100ms;
+  --dur-base: 160ms;
+  --dur-rise: 220ms;
+  --dur-over: 280ms;
+
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+  --ease-spring: cubic-bezier(0.2, 0, 0, 1);   /* springs retired */
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* --- Overlays --- */
+  --glass-bg: rgba(19, 20, 22, 0.88);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --backdrop-bg: rgba(8, 9, 10, 0.55);
+  --scroll-thumb: rgba(255, 255, 255, 0.14);
+  --scroll-thumb-hover: rgba(255, 255, 255, 0.26);
+
+  /* --- Layout metrics --- */
   --sidebar-width: 260px;
-  --header-height: 48px;
-  --drawer-width: 290px;
+  --header-height: 44px;
+  --drawer-width: 320px;
+
+  /* --- Focus --- */
+  --focus-ring: 0 0 0 1px var(--bg-base), 0 0 0 3px rgba(94, 106, 210, 0.55);
+
+  /* Backward token compatibility */
+  --bg-card: var(--bg-surface-elevated);
+  --bg-hover: var(--bg-surface-hover);
+  --border-color: var(--border-subtle);
+  --shadow-2xl: var(--shadow-e4);
+  --shadow-modal: var(--shadow-e4);
+  --accent: var(--accent-primary);
 }
 
+/* ============================================================
+   LIGHT THEME
+   ============================================================ */
+html[data-theme='light'] {
+  --bg-base: #f3f4f6;
+  --bg-surface: #ffffff;
+  --bg-surface-elevated: #ffffff;
+  --bg-surface-hover: #ebeef1;
+  --bg-input: #ffffff;
+
+  --border-subtle: rgba(0, 0, 0, 0.09);
+  --border-medium: rgba(0, 0, 0, 0.15);
+  --border-focus: #5e6ad2;
+
+  --text-main: #181a1f;
+  --text-secondary: #4d5058;
+  --text-muted: #6d707a;
+  --text-dim: #9ca0a8;
+
+  --accent-primary: #5e6ad2;
+  --accent-hover: #4c56b8;
+  --accent-deep: #3f48a2;
+  --accent-subtle: rgba(94, 106, 210, 0.10);
+  --accent-border: rgba(94, 106, 210, 0.40);
+  --accent-rgb: 94, 106, 210;
+
+  --gold-primary: #a67c20;
+  --gold-hover: #8a671a;
+  --gold-deep: #745412;
+  --gold-subtle: rgba(166, 124, 32, 0.10);
+  --gold-border: rgba(166, 124, 32, 0.35);
+  --gold-rgb: 166, 124, 32;
+
+  --emerald-primary: #2e7d54;
+  --emerald-bg: rgba(46, 125, 84, 0.10);
+  --emerald-border: rgba(46, 125, 84, 0.30);
+
+  --amber-primary: #9a7320;
+  --amber-bg: rgba(154, 115, 32, 0.10);
+  --amber-border: rgba(154, 115, 32, 0.30);
+
+  --ruby-primary: #c0413d;
+  --ruby-bg: rgba(192, 65, 61, 0.10);
+  --ruby-border: rgba(192, 65, 61, 0.30);
+
+  --sky-primary: #36739a;
+  --sky-bg: rgba(54, 115, 154, 0.10);
+  --sky-rgb: 54, 115, 154;
+
+  /* Timeline & wave (daylight) */
+  --minimap-bg: #eef0f3;
+  --lane-bg: #f5f6f8;
+  --lane-bg-soft: #f0f2f4;
+  --lanesheet-bg: #e8eaee;
+  --hover-overlay: rgba(0, 0, 0, 0.04);
+  --playhead-color: #c0382f;
+  --playhead-glow: rgba(192, 56, 47, 0.35);
+  --contrast-line: rgba(0, 0, 0, 0.18);
+  --on-contrast: #ffffff;
+  --scroll-thumb: rgba(0, 0, 0, 0.16);
+  --scroll-thumb-hover: rgba(0, 0, 0, 0.30);
+  --wave-base: #7c828e;
+  --wave-base-dim: #aab0b9;
+  --wave-rest: #aab0b9;
+
+  /* Elevation */
+  --shadow-e1: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow-e2: 0 3px 10px rgba(0, 0, 0, 0.07);
+  --shadow-e3: 0 8px 24px rgba(0, 0, 0, 0.10);
+  --shadow-e4: 0 16px 40px rgba(0, 0, 0, 0.14);
+
+  --glass-bg: rgba(255, 255, 255, 0.95);
+  --glass-border: rgba(0, 0, 0, 0.09);
+  --backdrop-bg: rgba(24, 26, 31, 0.35);
+
+  /* Legacy aliases */
+  --qc-bg-primary: #ffffff;
+  --qc-bg-secondary: #f5f6f8;
+  --qc-bg-accent: #eef0f3;
+  --qc-border: rgba(0, 0, 0, 0.09);
+  --qc-blue: #5e6ad2;
+  --qc-blue-hover: #4c56b8;
+  --qc-emerald: #2e7d54;
+  --qc-amber: #9a7320;
+  --qc-purple: #7e22ce;
+  --qc-danger: #c0413d;
+}
+
+/* ============================================================
+   Global Reset & Chrome
+   ============================================================ */
 *, *::before, *::after {
   box-sizing: border-box;
 }
@@ -87,60 +286,141 @@
 body {
   margin: 0;
   padding: 0;
-  background-color: var(--bg-base);
+  background: var(--bg-base);
   color: var(--text-main);
   font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  line-height: 1.5;
   user-select: none;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow: hidden;
 }
 
-/* Crisp Engineering Scrollbars */
+/* Engineering Micro Scrollbars */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #252a36;
-  border-radius: 3px;
+  background: var(--scroll-thumb);
+  border-radius: var(--radius-pill);
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #373e4f;
+  background: var(--scroll-thumb-hover);
 }
 
-/* Solid Panel Utility (Zero fuzzy glassmorphism blur) */
+::selection, .arabic-quran-text::selection {
+  background: var(--accent-subtle);
+  color: var(--accent-hover);
+}
+html[data-theme='light'] ::selection,
+html[data-theme='light'] .arabic-quran-text::selection {
+  background: #bfdbfe;
+  color: #1e3a8a;
+}
+
+/* ============================================================
+   Keyboard Focus
+   ============================================================ */
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.modal-backdrop:focus-visible,
+:focus-visible.blur-none {
+  box-shadow: none;
+}
+
+/* ============================================================
+   Shared Panel Surfaces
+   ============================================================ */
 .glass-panel {
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
 }
 
-/* Button & Interactive Styles */
+.glass-float {
+  background: var(--glass-bg);
+  backdrop-filter: blur(16px) saturate(1.6);
+  -webkit-backdrop-filter: blur(16px) saturate(1.6);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--shadow-e3);
+}
+
+/* ============================================================
+   Animations (Springy, Confirmatory)
+   ============================================================ */
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes scale-in {
+  from { opacity: 0; transform: scale(0.985); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes slide-in-left {
+  from { opacity: 0; transform: translateX(-10px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes slide-in-right {
+  from { opacity: 0; transform: translateX(10px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.anim-rise   { animation: rise-in var(--dur-rise) var(--ease-out) both; }
+.anim-scale  { animation: scale-in var(--dur-rise) var(--ease-out) both; }
+.anim-fade   { animation: fade-in var(--dur-base) var(--ease-out) both; }
+.anim-left   { animation: slide-in-left var(--dur-rise) var(--ease-out) both; }
+.anim-right  { animation: slide-in-right var(--dur-rise) var(--ease-out) both; }
+
+.stagger > * { animation: rise-in var(--dur-rise) var(--ease-out) both; }
+.stagger > *:nth-child(2)  { animation-delay: 30ms; }
+.stagger > *:nth-child(3)  { animation-delay: 60ms; }
+.stagger > *:nth-child(n+4) { animation-delay: 90ms; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ============================================================
+   Buttons — flat, quiet, consistent
+   ============================================================ */
 .btn-icon {
   background: transparent;
-  border: 1px solid transparent;
-  color: var(--text-muted);
-  border-radius: 5px;
-  padding: 5px;
+  border: none;
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  padding: 6px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: all 0.1s ease;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 .btn-icon:hover:not(:disabled) {
-  background: var(--bg-surface-elevated);
+  background: var(--bg-surface-hover);
   color: var(--text-main);
-  border-color: var(--border-subtle);
 }
 .btn-icon:active:not(:disabled) {
-  background: var(--bg-surface-hover);
+  background: var(--hover-overlay);
 }
 .btn-icon:disabled {
-  opacity: 0.3;
+  opacity: 0.35;
   cursor: not-allowed;
 }
 
@@ -148,45 +428,91 @@ body {
   background: var(--accent-primary);
   color: #ffffff;
   font-weight: 500;
-  font-size: 0.78rem;
-  border: 1px solid var(--accent-hover);
-  border-radius: 5px;
-  padding: 5px 12px;
+  font-size: var(--text-sm);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 7px 14px;
   display: inline-flex;
   align-items: center;
   gap: 6px;
   cursor: pointer;
-  transition: background 0.1s ease, border-color 0.1s ease;
+  transition: background var(--dur-fast) var(--ease-out);
 }
 .btn-primary:hover:not(:disabled) {
   background: var(--accent-hover);
-  border-color: #7b88e8;
+}
+.btn-primary:active:not(:disabled) {
+  background: var(--accent-deep);
 }
 .btn-primary:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: not-allowed;
 }
 
 .btn-secondary {
   background: var(--bg-surface-elevated);
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--border-medium);
   color: var(--text-main);
-  font-size: 0.78rem;
+  font-size: var(--text-sm);
   font-weight: 500;
-  border-radius: 5px;
-  padding: 5px 11px;
+  border-radius: var(--radius-sm);
+  padding: 7px 13px;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   cursor: pointer;
-  transition: all 0.1s ease;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
-.btn-secondary:hover {
+.btn-secondary:hover:not(:disabled) {
   background: var(--bg-surface-hover);
-  border-color: var(--border-medium);
+}
+.btn-secondary:active:not(:disabled) {
+  background: var(--hover-overlay);
+}
+.btn-secondary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
-/* Sacred Quranic Typography */
+.btn-danger {
+  background: var(--ruby-primary);
+  color: #ffffff;
+  border: none;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  padding: 7px 13px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+.btn-danger:hover:not(:disabled) {
+  background: #b8433f;
+}
+
+/* ============================================================
+   Modals — calm dim, quiet entrance
+   ============================================================ */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: var(--backdrop-bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: fade-in var(--dur-base) var(--ease-out) both;
+}
+.modal-backdrop > * {
+  animation: scale-in var(--dur-over) var(--ease-out) both;
+  box-shadow: var(--shadow-e4);
+}
+
+/* ============================================================
+   Sacred Quranic Typography
+   ============================================================ */
 .arabic-quran-text {
   font-family: var(--font-arabic);
   direction: rtl;
@@ -194,34 +520,55 @@ body {
   line-height: 2.3;
 }
 
-/* Crisp, Box-Border Quran Word Highlighting (Harmonized with Phonemes & Timeline Boxes) */
+/* ============================================================
+   Sacred Word Illumination (Smooth Organic Karaoke)
+   ============================================================ */
 .quran-word-item {
   display: inline-block;
-  padding: 2px 6px;
+  padding: 2px 5px;
   margin: 1px 2px;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   border: 1px solid transparent;
   cursor: pointer;
-  transition: all 0.08s ease;
   position: relative;
+  transition: all var(--dur-fast) var(--ease-out);
 }
 .quran-word-item:hover {
   background: var(--bg-surface-hover);
   border-color: var(--border-subtle);
 }
 
-.quran-word-item.active-karaoke {
-  border: 1px solid #10b981 !important;
-  background: rgba(16, 185, 129, 0.18) !important;
-  border-radius: 4px;
-  box-shadow: none !important;
-  font-weight: normal !important;
+/* Subtle karaoke highlight */
+.quran-word-item.active-karaoke,
+.quran-word-item.is-selected {
+  background: var(--accent-subtle) !important;
+  border-color: transparent !important;
+  color: var(--text-main) !important;
+  border-radius: var(--radius-xs);
 }
 
-.quran-word-item.is-selected {
-  border: 1px solid #10b981 !important;
-  background: rgba(16, 185, 129, 0.18) !important;
-  border-radius: 4px;
-  box-shadow: none !important;
-  font-weight: normal !important;
+/* Light mode word highlight */
+html[data-theme='light'] .quran-word-item.active-karaoke,
+html[data-theme='light'] .quran-word-item.is-selected {
+  background: #dfe5f4 !important;
+  color: #1a1c1f !important;
+  font-weight: 600;
+}
+
+html[data-theme='light'] .quran-word-item:hover:not(.active-karaoke):not(.is-selected) {
+  background: #e2e8f0;
+  border-color: rgba(0, 0, 0, 0.14);
+  color: var(--text-main);
+}
+
+/* Keyboard hint chips */
+.kbd-hint {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: var(--radius-xs);
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  line-height: 1.4;
 }

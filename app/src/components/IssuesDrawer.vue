@@ -14,39 +14,36 @@
       </button>
     </div>
 
-    <!-- Review Progress & Quick Jump (QuranCaption Pattern) -->
+    <!-- Review Progress & Quick Jump — slim single row -->
     <div class="review-status-box" v-if="projectStore.activeSurah.value">
-      <div class="progress-info-row">
-        <span class="progress-label">Surah Health</span>
-        <span class="progress-val" :class="{ 'val-perfect': cleanPercent === 100 }">{{ cleanPercent }}% Clean</span>
+      <div class="health-row">
+        <div class="health-bar">
+          <div
+            class="health-bar-fill"
+            :class="{ 'is-perfect': cleanPercent === 100 }"
+            :style="{ width: `${cleanPercent}%` }"
+          ></div>
+        </div>
+        <span class="health-value" :class="{ 'is-perfect': cleanPercent === 100 }">
+          {{ cleanPercent }}%
+        </span>
+        <button 
+          class="jump-next-btn" 
+          @click="projectStore.jumpToNextIssue()" 
+          :disabled="totalCount === 0"
+          :title="pendingCount > 0 ? 'Jump to next unverified issue (Tab key)' : 'Loop through issues (Tab key)'"
+        >
+          <span>{{ pendingCount > 0 ? pendingCount : '✓' }}</span>
+          <ChevronRight :size="12" />
+        </button>
       </div>
-      <div class="progress-track">
-        <div class="progress-fill" :style="{ width: `${cleanPercent}%` }" :class="{ 'fill-perfect': cleanPercent === 100 }"></div>
-      </div>
-      <div class="progress-sub-row">
-        <span>{{ cleanAndVerifiedCount }} / {{ projectStore.surahStats.value.totalWords }} verified & clean</span>
-        <span v-if="pendingCount > 0" class="text-pending-stat">{{ pendingCount }} pending</span>
-        <span v-else class="text-done-stat">All reviewed ✓</span>
-      </div>
-
-      <!-- Quick Jump Button -->
-      <button 
-        class="jump-next-btn" 
-        @click="projectStore.jumpToNextIssue()" 
-        :disabled="totalCount === 0"
-        :title="pendingCount > 0 ? 'Jump to next unverified issue (Tab key)' : 'Loop through issues (Tab key)'"
-      >
-        <Sparkles :size="12" />
-        <span>{{ pendingCount > 0 ? 'Next Issue (Tab)' : 'Review Next (Tab)' }}</span>
-        <ChevronRight :size="13" />
-      </button>
     </div>
 
     <!-- Filter Pills -->
     <div class="filter-row" v-if="totalCount > 0">
       <button 
         class="filter-pill" 
-        :class="{ 'active': activeFilter === 'pending' }"
+        :class="{ 'active': activeFilter === 'pending', 'pill-warn': pendingCount > 0 }"
         @click="activeFilter = 'pending'"
       >
         Pending ({{ pendingCount }})
@@ -56,7 +53,7 @@
         :class="{ 'active': activeFilter === 'tajweed' }"
         @click="activeFilter = 'tajweed'"
         v-if="tajweedCount > 0"
-        title="Tajweed merged boundaries (Iqlab, Idgham Mutamathilayn, Idgham Ghunnah)"
+        title="Tajweed boundary merges"
       >
         Tajweed ({{ tajweedCount }})
       </button>
@@ -65,25 +62,25 @@
         :class="{ 'active': activeFilter === 'twin' }"
         @click="activeFilter = 'twin'"
         v-if="twinCount > 0"
-        title="Al-Buruj style leaps and sequence inversions"
+        title="Leaps / Inversions"
       >
-        Twins/Leap ({{ twinCount }})
+        Leap ({{ twinCount }})
       </button>
       <button 
         class="filter-pill" 
         :class="{ 'active': activeFilter === 'short' }"
         @click="activeFilter = 'short'"
         v-if="shortCount > 0"
-        title="Abnormally short words, truncated phonemes, or VAD cuts"
+        title="Short words"
       >
-        Short/Cut ({{ shortCount }})
+        Short ({{ shortCount }})
       </button>
       <button 
         class="filter-pill" 
         :class="{ 'active': activeFilter === 'gap' }"
         @click="activeFilter = 'gap'"
         v-if="gapCount > 0"
-        title="Coverage gaps and absorbed silence"
+        title="Gaps & silence"
       >
         Gaps ({{ gapCount }})
       </button>
@@ -99,13 +96,14 @@
         class="filter-pill" 
         :class="{ 'active': activeFilter === 'all' }"
         @click="activeFilter = 'all'"
+        title="All issues"
       >
         All ({{ totalCount }})
       </button>
     </div>
 
     <!-- Issues List -->
-    <div class="issues-list">
+    <div class="issues-list stagger">
       <div 
         v-for="issue in filteredIssues" 
         :key="issue.id"
@@ -198,7 +196,6 @@ import {
   X, 
   CheckCircle2, 
   ChevronRight, 
-  Sparkles, 
   Check, 
   CheckCheck 
 } from 'lucide-vue-next';
@@ -340,23 +337,31 @@ function getIssueBadgeClass(type: IssueType): string {
 
 <style scoped>
 .issues-drawer {
-  width: 290px;
+  width: var(--drawer-width);
   height: calc(100vh - var(--header-height));
   position: fixed;
   right: 0;
   top: var(--header-height);
-  background: var(--bg-surface);
-  border-left: 1px solid var(--border-subtle);
+  background: var(--glass-bg);
+  backdrop-filter: blur(12px) saturate(1.4);
+  -webkit-backdrop-filter: blur(12px) saturate(1.4);
+  border-left: 1px solid var(--glass-border);
   display: flex;
   flex-direction: column;
   z-index: 40;
   transform: translateX(100%);
-  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-  box-shadow: -8px 0 25px rgba(0, 0, 0, 0.5);
+  transition: transform var(--dur-over) var(--ease-spring);
+  box-shadow: -8px 0 32px rgba(0, 0, 0, 0.55);
 }
 
 .issues-drawer.drawer-open {
   transform: translateX(0);
+}
+
+@media (max-width: 760px) {
+  .issues-drawer {
+    width: min(92vw, var(--drawer-width));
+  }
 }
 
 .drawer-header {
@@ -365,7 +370,6 @@ function getIssueBadgeClass(type: IssueType): string {
   justify-content: space-between;
   padding: 10px 14px;
   border-bottom: 1px solid var(--border-subtle);
-  background: rgba(15, 23, 42, 0.4);
 }
 
 .header-left {
@@ -377,104 +381,89 @@ function getIssueBadgeClass(type: IssueType): string {
 .drawer-title {
   font-size: 0.82rem;
   font-weight: 600;
-  color: #fff;
+  color: var(--text-main);
 }
 
 .issue-count {
-  background: #ef4444;
+  background: var(--ruby-primary);
   color: white;
   font-size: 0.65rem;
   font-weight: 700;
-  padding: 1px 6px;
-  border-radius: 8px;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-e1);
 }
 
 .issue-count.all-resolved {
-  background: #10b981;
+  background: var(--emerald-primary);
+  box-shadow: var(--shadow-e1);
 }
 
-/* QuranCaption Review Status Box */
+/* Review Status Box - slim single row */
 .review-status-box {
-  padding: 10px 12px;
-  background: rgba(10, 15, 26, 0.6);
+  padding: 8px 12px;
+  background: var(--bg-surface);
   border-bottom: 1px solid var(--border-subtle);
+}
+
+.health-row {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  align-items: center;
+  gap: 8px;
 }
 
-.progress-info-row {
-  display: flex;
-  justify-content: space-between;
-  font-size: 11px;
-}
-
-.progress-label {
-  color: var(--text-muted);
-}
-
-.progress-val {
-  color: #10b981;
-  font-weight: 600;
-}
-
-.progress-val.val-perfect {
-  color: #34d399;
-}
-
-.progress-track {
-  width: 100%;
-  height: 5px;
-  background: rgba(255, 255, 255, 0.08);
-  border-radius: 3px;
+.health-bar {
+  flex: 1;
+  height: 4px;
+  background: var(--border-medium);
+  border-radius: var(--radius-pill);
   overflow: hidden;
 }
 
-.progress-fill {
+.health-bar-fill {
   height: 100%;
-  background: linear-gradient(90deg, #10b981, #34d399);
-  transition: width 0.3s ease;
+  background: var(--accent-primary);
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-e1);
+  transition: width var(--dur-rise) var(--ease-spring),
+              background var(--dur-base) var(--ease-out);
+}
+.health-bar-fill.is-perfect {
+  background: var(--emerald-primary);
+  box-shadow: var(--shadow-e1);
 }
 
-.progress-fill.fill-perfect {
-  background: linear-gradient(90deg, #10b981, #6ee7b7);
+.health-value {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  min-width: 30px;
+  text-align: right;
 }
-
-.progress-sub-row {
-  display: flex;
-  justify-content: space-between;
-  font-size: 10px;
-  color: var(--text-muted);
-}
-
-.text-pending-stat {
-  color: #f87171;
-  font-weight: 600;
-}
-
-.text-done-stat {
-  color: #34d399;
-  font-weight: 600;
+.health-value.is-perfect {
+  color: var(--emerald-primary);
 }
 
 .jump-next-btn {
-  margin-top: 4px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  background: rgba(94, 106, 210, 0.15);
-  border: 1px solid rgba(94, 106, 210, 0.35);
-  color: var(--accent-primary);
-  border-radius: 6px;
-  padding: 6px 10px;
-  font-size: 11px;
+  gap: 3px;
+  background: var(--accent-subtle);
+  border: 1px solid var(--accent-border);
+  color: var(--accent-hover);
+  border-radius: var(--radius-pill);
+  padding: 3px 8px;
+  font-size: 0.68rem;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.12s ease;
+  transition: background var(--dur-fast) var(--ease-out),
+              border-color var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out);
 }
 
 .jump-next-btn:hover:not(:disabled) {
-  background: rgba(94, 106, 210, 0.28);
+  background: var(--accent-primary);
   border-color: var(--accent-primary);
   color: #fff;
 }
@@ -490,29 +479,36 @@ function getIssueBadgeClass(type: IssueType): string {
   gap: 4px;
   padding: 6px 10px;
   border-bottom: 1px solid var(--border-subtle);
-  background: rgba(15, 23, 42, 0.2);
 }
 
 .filter-pill {
   background: transparent;
   border: 1px solid var(--border-subtle);
   color: var(--text-muted);
-  border-radius: 12px;
-  padding: 2px 7px;
+  border-radius: var(--radius-pill);
+  padding: 2px 8px;
   font-size: 0.65rem;
   cursor: pointer;
-  transition: all 0.1s ease;
+  transition: border-color var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out),
+              background var(--dur-fast) var(--ease-out);
 }
 
 .filter-pill:hover {
-  border-color: rgba(255, 255, 255, 0.2);
-  color: #e2e8f0;
+  border-color: var(--border-medium);
+  color: var(--text-main);
 }
 
 .filter-pill.active {
-  background: rgba(94, 106, 210, 0.2);
+  background: var(--accent-primary);
   border-color: var(--accent-primary);
-  color: #fff;
+  color: #ffffff;
+}
+
+.filter-pill.pill-warn:not(.active) {
+  color: var(--amber-primary);
+  border-color: var(--amber-border);
+  font-weight: 700;
 }
 
 .issues-list {
@@ -525,49 +521,51 @@ function getIssueBadgeClass(type: IssueType): string {
 }
 
 .issue-card {
-  background: rgba(15, 23, 42, 0.45);
-  border-radius: 6px;
+  background: var(--bg-surface);
+  border-radius: var(--radius-sm);
   padding: 8px 10px;
   border: 1px solid var(--border-subtle);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: all var(--dur-fast) var(--ease-out);
   position: relative;
 }
 
 .issue-card:hover {
-  background: rgba(15, 23, 42, 0.75);
-  border-color: rgba(255, 255, 255, 0.22);
+  background: var(--bg-surface-elevated);
+  border-color: var(--border-medium);
+  transform: translateY(-1px);
 }
 
 .card-selected {
-  border-color: #38bdf8 !important;
-  background: rgba(56, 189, 248, 0.12) !important;
+  border-color: var(--accent-primary) !important;
+  background: var(--accent-subtle) !important;
+  box-shadow: 0 0 0 1px var(--accent-border);
 }
 
 .card-critical {
-  border-left: 3px solid #ef4444;
+  border-left: 3px solid var(--ruby-primary);
 }
 
 .card-warning {
-  border-left: 3px solid #f59e0b;
+  border-left: 3px solid var(--amber-primary);
 }
 
 /* User-Verified State (Turns Green & Marked As Done) */
 .card-verified {
-  background: rgba(16, 185, 129, 0.08) !important;
-  border-color: rgba(16, 185, 129, 0.35) !important;
-  border-left: 3px solid #10b981 !important;
-  opacity: 0.88;
+  background: rgba(16, 185, 129, 0.05) !important;
+  border-color: rgba(16, 185, 129, 0.25) !important;
+  border-left: 3px solid var(--emerald-primary) !important;
+  opacity: 0.85;
 }
 
 .card-verified:hover {
   opacity: 1;
-  background: rgba(16, 185, 129, 0.15) !important;
-  border-color: rgba(16, 185, 129, 0.5) !important;
+  background: rgba(16, 185, 129, 0.1) !important;
+  border-color: rgba(16, 185, 129, 0.4) !important;
 }
 
 .text-verified-word {
-  color: #6ee7b7 !important;
+  color: var(--emerald-primary) !important;
 }
 
 .issue-card-top {
@@ -586,7 +584,7 @@ function getIssueBadgeClass(type: IssueType): string {
 .word-arabic {
   font-family: var(--font-arabic);
   font-size: 1.25rem;
-  color: #fff;
+  color: var(--text-main);
   line-height: 1.2;
 }
 
@@ -604,53 +602,53 @@ function getIssueBadgeClass(type: IssueType): string {
 .issue-type-badge {
   font-size: 0.62rem;
   font-weight: 600;
-  padding: 1px 5px;
-  border-radius: 4px;
+  padding: 1px 6px;
+  border-radius: var(--radius-xs);
   font-family: var(--font-mono);
   letter-spacing: -0.2px;
 }
 
 .badge-danger {
-  background: rgba(239, 68, 68, 0.18);
-  color: #f87171;
-  border: 1px solid rgba(239, 68, 68, 0.35);
+  background: var(--ruby-bg);
+  color: var(--ruby-primary);
+  border: 1px solid var(--ruby-border);
 }
 
 .badge-warn {
-  background: rgba(245, 158, 11, 0.18);
-  color: #fbbf24;
-  border: 1px solid rgba(245, 158, 11, 0.35);
+  background: var(--amber-bg);
+  color: var(--amber-primary);
+  border: 1px solid var(--amber-border);
 }
 
 .badge-purple {
-  background: rgba(168, 85, 247, 0.18);
-  color: #c084fc;
-  border: 1px solid rgba(168, 85, 247, 0.35);
+  background: rgba(139, 92, 246, 0.14);
+  color: #b79af8;
+  border: 1px solid rgba(139, 92, 246, 0.30);
 }
 
 .badge-indigo {
-  background: rgba(99, 102, 241, 0.18);
-  color: #818cf8;
-  border: 1px solid rgba(99, 102, 241, 0.35);
+  background: var(--accent-subtle);
+  color: #a5abeb;
+  border: 1px solid var(--accent-border);
 }
 
 .badge-blue {
-  background: rgba(59, 130, 246, 0.18);
-  color: #60a5fa;
-  border: 1px solid rgba(59, 130, 246, 0.35);
+  background: var(--sky-bg);
+  color: var(--sky-primary);
+  border: 1px solid var(--sky-border, rgba(88, 160, 201, 0.30));
 }
 
 .badge-muted {
-  background: rgba(148, 163, 184, 0.15);
-  color: #94a3b8;
-  border: 1px solid rgba(148, 163, 184, 0.3);
+  background: var(--bg-surface-hover);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
 }
 
 .issue-msg {
-  font-size: 10px;
-  color: #cbd5e1;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
   margin-bottom: 5px;
-  line-height: 1.35;
+  line-height: 1.4;
 }
 
 .msg-verified {
@@ -667,30 +665,30 @@ function getIssueBadgeClass(type: IssueType): string {
 
 .metric-chip {
   font-family: var(--font-mono);
-  font-size: 0.6rem;
-  padding: 1px 4px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 3px;
-  color: #94a3b8;
+  font-size: 0.62rem;
+  padding: 1px 6px;
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs);
+  color: var(--text-muted);
 }
 
 .metric-bad {
-  color: #f87171;
+  color: var(--ruby-primary);
   border-color: rgba(239, 68, 68, 0.25);
-  background: rgba(239, 68, 68, 0.1);
+  background: rgba(239, 68, 68, 0.08);
 }
 
 .metric-warn {
-  color: #fbbf24;
+  color: var(--amber-primary);
   border-color: rgba(245, 158, 11, 0.25);
-  background: rgba(245, 158, 11, 0.1);
+  background: rgba(245, 158, 11, 0.08);
 }
 
 .metric-ref {
   direction: rtl;
   font-family: var(--font-arabic);
-  color: #cbd5e1;
+  color: var(--text-secondary);
 }
 
 /* Footer & Verify Action Button */
@@ -700,7 +698,7 @@ function getIssueBadgeClass(type: IssueType): string {
   align-items: center;
   margin-top: 2px;
   padding-top: 4px;
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  border-top: 1px solid var(--border-subtle);
 }
 
 .timestamp-label {
@@ -713,33 +711,33 @@ function getIssueBadgeClass(type: IssueType): string {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 0.66rem;
+  font-size: 0.65rem;
   font-weight: 600;
   padding: 2px 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-pill);
   cursor: pointer;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  color: #cbd5e1;
-  transition: all 0.12s ease;
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  transition: all var(--dur-fast) var(--ease-out);
 }
 
 .verify-btn:hover {
-  background: rgba(16, 185, 129, 0.18);
+  background: rgba(16, 185, 129, 0.15);
   border-color: rgba(16, 185, 129, 0.4);
-  color: #34d399;
+  color: var(--emerald-primary);
 }
 
 .verify-btn.btn-is-verified {
-  background: rgba(16, 185, 129, 0.22);
-  border-color: #10b981;
-  color: #34d399;
+  background: rgba(16, 185, 129, 0.18);
+  border-color: var(--emerald-primary);
+  color: var(--emerald-primary);
 }
 
 .verify-btn.btn-is-verified:hover {
-  background: rgba(239, 68, 68, 0.18);
+  background: rgba(239, 68, 68, 0.15);
   border-color: rgba(239, 68, 68, 0.4);
-  color: #f87171;
+  color: var(--ruby-primary);
 }
 
 .empty-state {
@@ -749,9 +747,60 @@ function getIssueBadgeClass(type: IssueType): string {
   flex-direction: column;
   align-items: center;
   gap: 6px;
+  animation: fade-in var(--dur-base) var(--ease-out) both;
 }
 
-.text-green { color: #10b981; }
-.empty-title { font-size: 0.85rem; font-weight: 600; color: #fff; }
-.empty-desc { font-size: 0.72rem; color: var(--text-muted); line-height: 1.35; }
+.text-green { color: var(--emerald-primary); }
+.empty-title { font-size: 0.85rem; font-weight: 600; color: var(--text-main); }
+.empty-desc { font-size: var(--text-xs); color: var(--text-muted); line-height: 1.4; }
+
+/* Light Theme High-Contrast Badge Colors */
+html[data-theme='light'] .badge-danger {
+  background: #fee2e2;
+  color: #b91c1c;
+  border-color: var(--ruby-primary);
+}
+html[data-theme='light'] .badge-warn {
+  background: #fef3c7;
+  color: #b45309;
+  border-color: #fcd34d;
+}
+html[data-theme='light'] .badge-purple {
+  background: #f3e8ff;
+  color: var(--qc-purple);
+  border-color: #d8b4fe;
+}
+html[data-theme='light'] .badge-indigo {
+  background: #e0e7ff;
+  color: #4338ca;
+  border-color: #c7d2fe;
+}
+html[data-theme='light'] .badge-blue {
+  background: #dbeafe;
+  color: var(--accent-deep);
+  border-color: #93c5fd;
+}
+html[data-theme='light'] .badge-muted {
+  background: #f1f5f9;
+  color: #475569;
+  border-color: #cbd5e1;
+}
+html[data-theme='light'] .text-verified-word {
+  color: var(--emerald-primary) !important;
+}
+html[data-theme='light'] .card-verified {
+  background: #f0fdf4 !important;
+  border-color: #86efac !important;
+  border-left: 3px solid var(--emerald-primary) !important;
+}
+html[data-theme='light'] .verify-btn {
+  background: #f0fdf4;
+  border-color: #86efac;
+  color: var(--emerald-primary);
+}
+html[data-theme='light'] .verify-btn.btn-is-verified {
+  background: #ecfdf5;
+  border-color: var(--emerald-primary);
+  color: #047857;
+}
 </style>

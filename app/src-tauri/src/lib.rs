@@ -26,7 +26,8 @@ fn is_engine_installed(app_handle: AppHandle) -> bool {
 
 #[tauri::command]
 async fn ensure_engine(app_handle: AppHandle) -> Result<engine_manager::EngineStatus, String> {
-    engine_manager::start_engine(app_handle.clone()).await?;
+    // Repair/verification flow: always run the full engine audit.
+    engine_manager::start_engine(app_handle.clone(), true).await?;
     Ok(engine_manager::get_engine_status())
 }
 
@@ -40,17 +41,23 @@ struct AlignRequest {
     qiraat: Option<String>,
 }
 
-/// Starts alignment by spawning run.py directly.
+/// Starts alignment by spawning the Python segmenter directly.
 /// Progress is streamed via the `align-event` Tauri event, NOT HTTP.
+/// Runs on a blocking worker thread so the UI never freezes while the
+/// engine is being stopped/started.
 #[tauri::command]
-fn run_align(app_handle: AppHandle, request: AlignRequest) -> Result<(), String> {
-    engine_manager::run_alignment(
-        app_handle,
-        request.audio_path,
-        request.dir_path,
-        request.fast.unwrap_or(false),
-        request.qiraat,
-    )
+async fn run_align(app_handle: AppHandle, request: AlignRequest) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        engine_manager::run_alignment(
+            app_handle,
+            request.audio_path,
+            request.dir_path,
+            request.fast.unwrap_or(false),
+            request.qiraat,
+        )
+    })
+    .await
+    .map_err(|e| format!("Alignment task failed: {}", e))?
 }
 
 /// Direct execution matching QuranCaption command `segment_quran_audio_local_word_timing`.
@@ -108,7 +115,8 @@ async fn install_local_segmentation_deps(
     _engine: String,
     _hf_token: Option<String>,
 ) -> Result<String, String> {
-    engine_manager::start_engine(app_handle).await?;
+    // Explicit install/repair request: force the full dependency audit.
+    engine_manager::start_engine(app_handle, true).await?;
     Ok("Installation completed successfully".to_string())
 }
 
@@ -439,7 +447,7 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                if let Err(err) = engine_manager::start_engine(handle.clone()).await {
+                if let Err(err) = engine_manager::start_engine(handle.clone(), false).await {
                     eprintln!("[QuranReciteToText] Engine initialization error: {}", err);
                     engine_manager::set_status_error(&handle, &err);
                 }

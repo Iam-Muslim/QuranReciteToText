@@ -1,125 +1,5 @@
 <template>
   <div class="waveform-editor glass-panel">
-    <!-- Top Toolbar Controls -->
-    <div class="editor-toolbar">
-      <!-- Left: Transport Controls -->
-      <div class="transport-controls">
-        <button 
-          class="btn-icon play-btn" 
-          @click="togglePlay" 
-          :title="isPlaying ? 'Pause (Space)' : 'Play (Space)'"
-          :disabled="!hasAudioLoaded && timelineSegments.length === 0"
-        >
-          <Pause v-if="isPlaying" :size="16" />
-          <Play v-else :size="16" />
-        </button>
-
-        <button 
-          class="btn-icon" 
-          @click="projectStore.jumpToPrevAyah()" 
-          title="Previous Ayah ([)"
-          :disabled="!hasAudioLoaded && timelineSegments.length === 0"
-        >
-          <ChevronLeft :size="15" />
-        </button>
-
-        <button 
-          class="btn-icon" 
-          @click="skipBackward(2)" 
-          title="Rewind 2s"
-          :disabled="!hasAudioLoaded && timelineSegments.length === 0"
-        >
-          <RotateCcw :size="13" />
-        </button>
-
-        <button 
-          class="btn-icon" 
-          @click="skipForward(2)" 
-          title="Forward 2s"
-          :disabled="!hasAudioLoaded && timelineSegments.length === 0"
-        >
-          <RotateCw :size="13" />
-        </button>
-
-        <button 
-          class="btn-icon" 
-          @click="projectStore.jumpToNextAyah()" 
-          title="Next Ayah (])"
-          :disabled="!hasAudioLoaded && timelineSegments.length === 0"
-        >
-          <ChevronRight :size="15" />
-        </button>
-
-        <!-- Time Readout (MM:SS / MM:SS) -->
-        <div class="time-readout">
-          <span class="current-time">{{ formatAccurateTime(currentTime) }}</span>
-          <span class="time-sep">/</span>
-          <span class="total-time">{{ formatAccurateTime(duration) }}</span>
-        </div>
-
-        <!-- Loop Mode Toggle -->
-        <button 
-          class="btn-icon loop-btn" 
-          :class="{ 'loop-active': projectStore.loopMode.value !== 'none' }"
-          @click="cycleLoopMode"
-          :title="`Loop: ${projectStore.loopMode.value.toUpperCase()}`"
-        >
-          <Repeat :size="13" />
-          <span v-if="projectStore.loopMode.value !== 'none'" class="loop-indicator">
-            {{ projectStore.loopMode.value === 'word' ? '1w' : '1v' }}
-          </span>
-        </button>
-
-        <!-- Active Ayah Badge -->
-        <div class="active-verse-badge" v-if="projectStore.activeAyahNumber.value">
-          <span>آية {{ projectStore.activeAyahNumber.value }}</span>
-        </div>
-      </div>
-
-      <!-- Right: Speed, Zoom, Audio Loading -->
-      <div class="timeline-tools">
-        <!-- Speed Dropdown -->
-        <select v-model="playbackRate" @change="changePlaybackRate" class="speed-select" title="Playback Speed">
-          <option :value="0.75">0.75x</option>
-          <option :value="1.0">1.0x</option>
-          <option :value="1.25">1.25x</option>
-          <option :value="1.5">1.5x</option>
-        </select>
-
-        <div class="divider"></div>
-
-        <!-- Zoom Slider -->
-        <div class="tool-group">
-          <ZoomOut :size="13" class="zoom-icon" @click="adjustZoom(-25)" />
-          <input 
-            type="range" 
-            min="40" 
-            max="320" 
-            step="10" 
-            v-model.number="zoomLevel" 
-            @input="updateZoom"
-            class="zoom-slider"
-            title="Zoom (or Ctrl + Mouse Wheel)"
-          />
-          <ZoomIn :size="13" class="zoom-icon" @click="adjustZoom(25)" />
-        </div>
-
-        <div class="divider"></div>
-
-        <!-- Load Audio File Button -->
-        <input 
-          type="file" 
-          ref="fileInput" 
-          accept="audio/*,video/*" 
-          style="display: none" 
-          @change="handleFileUpload" 
-        />
-        <button class="btn-icon load-btn" @click="triggerFileInput" title="Load Audio File">
-          <UploadCloud :size="15" />
-        </button>
-      </div>
-    </div>
-
     <!-- Overview Minimap Track -->
     <div class="minimap-container" v-show="hasAudioLoaded || timelineSegments.length > 0">
       <div id="waveform-minimap" ref="minimapMount"></div>
@@ -141,6 +21,14 @@
         <span class="drop-text">Drop recitation audio here</span>
       </div>
 
+      <input
+        type="file"
+        ref="fileInput"
+        accept="audio/*,video/*"
+        style="display: none"
+        @change="handleFileUpload"
+      />
+
       <!-- No Audio Empty State -->
       <div v-if="!hasAudioLoaded && timelineSegments.length === 0" class="empty-audio-dropzone" @click="triggerFileInput">
         <Loader2 v-if="isUploadingAudio" :size="28" class="drop-icon animate-spin" />
@@ -151,9 +39,6 @@
         <span class="empty-formats">Supports MP3, WAV, M4A, FLAC, OGG, AAC, OPUS</span>
       </div>
 
-      <!-- Timeline Ruler -->
-      <div id="timeline-ruler" ref="timelineContainer" v-show="hasAudioLoaded || timelineSegments.length > 0"></div>
-      
       <!-- WaveSurfer Waveform Mount (Peaks Layer Only, Zero Memory Allocation) -->
       <div id="waveform-mount" ref="waveformMount" v-show="hasAudioLoaded || timelineSegments.length > 0"></div>
 
@@ -164,6 +49,7 @@
         v-show="hasAudioLoaded || timelineSegments.length > 0"
         @scroll.passive="onTrackViewportScroll"
       >
+        <span class="lane-header-pill">VERSES</span>
         <div 
           class="track-canvas" 
           :style="{ width: `${totalTimelineWidth}px` }"
@@ -242,6 +128,7 @@
         v-show="hasAudioLoaded || timelineSegments.length > 0"
         @scroll.passive="onTrackViewportScroll"
       >
+        <span class="lane-header-pill">WORDS</span>
         <div 
           class="track-canvas" 
           :style="{ width: `${totalTimelineWidth}px` }"
@@ -367,26 +254,100 @@
         ></div>
       </div>
     </div>
+
+    <!-- Unified Static Control Bar (Fixed below timeline, zero floating overlap, zero empty gap) -->
+    <div class="timeline-control-bar" v-show="hasAudioLoaded || timelineSegments.length > 0">
+      <!-- Left: Playback Transport & Timecode -->
+      <div class="control-bar-left">
+        <button
+          class="bar-btn"
+          @click="projectStore.jumpToPrevAyah()"
+          title="Previous Ayah ([)"
+          :disabled="!hasAudioLoaded && timelineSegments.length === 0"
+        >
+          <ChevronLeft :size="15" />
+        </button>
+
+        <button
+          class="bar-play-btn"
+          @click="togglePlay"
+          :title="isPlaying ? 'Pause (Space)' : 'Play (Space)'"
+          :disabled="!hasAudioLoaded && timelineSegments.length === 0"
+        >
+          <Pause v-if="isPlaying" :size="14" />
+          <Play v-else :size="14" />
+        </button>
+
+        <button
+          class="bar-btn"
+          @click="projectStore.jumpToNextAyah()"
+          title="Next Ayah (])"
+          :disabled="!hasAudioLoaded && timelineSegments.length === 0"
+        >
+          <ChevronRight :size="15" />
+        </button>
+
+        <div class="bar-divider"></div>
+
+        <button
+          class="bar-btn loop-btn"
+          :class="{ 'loop-active': projectStore.loopMode.value !== 'none' }"
+          @click="cycleLoopMode"
+          :title="`Loop: ${projectStore.loopMode.value.toUpperCase()}`"
+        >
+          <Repeat :size="13" />
+          <span v-if="projectStore.loopMode.value !== 'none'" class="loop-indicator">
+            {{ projectStore.loopMode.value === 'word' ? '1w' : '1v' }}
+          </span>
+        </button>
+
+        <div class="time-readout">
+          <span class="current-time">{{ formatAccurateTime(currentTime) }}</span>
+          <span class="time-sep">/</span>
+          <span class="total-time">{{ formatAccurateTime(duration) }}</span>
+        </div>
+      </div>
+
+      <!-- Right: Zoom, Speed & Audio File Load -->
+      <div class="control-bar-right">
+        <div class="zoom-cluster">
+          <input
+            type="range"
+            min="40"
+            max="320"
+            step="10"
+            v-model.number="zoomLevel"
+            @input="updateZoom"
+            class="zoom-slider"
+            title="Timeline Zoom (Ctrl + Wheel)"
+          />
+        </div>
+
+        <div class="bar-divider"></div>
+
+        <select v-model="playbackRate" @change="changePlaybackRate" class="speed-select" title="Playback Speed">
+          <option :value="0.75">0.75×</option>
+          <option :value="1.0">1.0×</option>
+          <option :value="1.25">1.25×</option>
+          <option :value="1.5">1.5×</option>
+        </select>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch, computed, nextTick } from 'vue';
 import WaveSurfer from 'wavesurfer.js';
-import TimelinePlugin from 'wavesurfer.js/dist/plugins/timeline.esm.js';
 import MinimapPlugin from 'wavesurfer.js/dist/plugins/minimap.esm.js';
 import { projectStore } from '../services/projectStore';
-import { isTauriEnvironment, getAudioStreamUrl, getAudioWaveform, getDuration } from '../services/api';
+import { isTauriEnvironment, getAudioStreamUrl, resolveAudioSourceUrl, getAudioWaveform, getDuration } from '../services/api';
 import type { AlignedWord, TimelineSegmentItem } from '../types/aligner';
 import { 
   Play, 
   Pause, 
   ChevronLeft, 
   ChevronRight, 
-  RotateCcw, 
-  RotateCw, 
-  ZoomIn, 
-  ZoomOut, 
   UploadCloud, 
   Repeat, 
   FileAudio, 
@@ -398,7 +359,6 @@ const emit = defineEmits<{
 }>();
 
 const waveformMount = ref<HTMLElement | null>(null);
-const timelineContainer = ref<HTMLElement | null>(null);
 const minimapMount = ref<HTMLElement | null>(null);
 const ayahTrackViewport = ref<HTMLElement | null>(null);
 const wordTrackViewport = ref<HTMLElement | null>(null);
@@ -517,12 +477,21 @@ function formatAccurateTime(secs: number): string {
   if (isNaN(secs) || secs < 0) secs = 0;
   const m = Math.floor(secs / 60);
   const s = Math.floor(secs % 60);
-  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  const ms = Math.floor((secs % 1) * 100);
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(ms).padStart(2, '0')}`;
+}
+
+/**
+ * Resolves the playable URL for a surah's audio (shared logic in api.ts).
+ */
+function resolveSurahAudioUrl(s: { audio_file?: string | null; audio_url?: string | null }): string | null {
+  return resolveAudioSourceUrl(s) || null;
 }
 
 onMounted(() => {
   initWaveSurfer();
   window.addEventListener('keydown', handleKeydown);
+  window.addEventListener('quran-theme-changed', handleThemeChanged);
 
   if (waveformMount.value) {
     resizeObserver = new ResizeObserver(() => {
@@ -546,7 +515,7 @@ onMounted(() => {
     () => projectStore.activeSurah.value,
     (s) => {
       if (s) {
-        const url = (s.audio_file ? getAudioStreamUrl(s.audio_file) : null) || (s.audio_url ? getAudioStreamUrl(s.audio_url) : null);
+        const url = resolveSurahAudioUrl(s);
         if (url) {
           loadAudioUrl(url, s.audio_file);
         }
@@ -569,7 +538,7 @@ onMounted(() => {
           }
           if (projectStore.activeSurah.value) {
             const s = projectStore.activeSurah.value;
-            const url = (s.audio_file ? getAudioStreamUrl(s.audio_file) : null) || (s.audio_url ? getAudioStreamUrl(s.audio_url) : null);
+            const url = resolveSurahAudioUrl(s);
             if (url) {
               loadAudioUrl(url, s.audio_file);
             }
@@ -583,6 +552,7 @@ onMounted(() => {
 onUnmounted(() => {
   stopPlaybackClock();
   window.removeEventListener('keydown', handleKeydown);
+  window.removeEventListener('quran-theme-changed', handleThemeChanged);
   if (resizeObserver) {
     resizeObserver.disconnect();
   }
@@ -618,22 +588,49 @@ function stopPlaybackClock() {
   }
 }
 
-function initWaveSurfer() {
-  if (!waveformMount.value) return;
+/* Re-tint wavesurfer colors when the user switches theme/accent live */
+function handleThemeChanged() {
+  if (!wavesurfer) return;
+  const cs = getComputedStyle(document.documentElement);
+  const read = (name: string, fallback: string) => cs.getPropertyValue(name).trim() || fallback;
+  const next = {
+    accent: read('--accent-primary', '#2e7ce4'),
+    wave: read('--wave-base', '#4a4a50'),
+    waveDim: read('--wave-base-dim', '#333338'),
+    cursor: read('--playhead-color', '#ffffff'),
+  };
+  try { wavesurfer.setOptions({ waveColor: next.wave, progressColor: next.accent, cursorColor: next.cursor }); } catch {}
+  try { (minimapPlugin as unknown as { setOptions: (o: object) => void } | null)?.setOptions?.({ waveColor: next.waveDim, progressColor: next.accent, cursorColor: next.cursor }); } catch {}
+}
+
+function initWaveSurfer() {  if (!waveformMount.value) return;
+
+  // Theme-aware colors (read from live CSS tokens; react to live theme swaps)
+  const themeTokens = () => {
+    const cs = getComputedStyle(document.documentElement);
+    const read = (name: string, fallback: string) => cs.getPropertyValue(name).trim() || fallback;
+    return {
+      accent: read('--accent-primary', '#2e7ce4'),
+      wave: read('--wave-base', '#4a4a50'),
+      waveDim: read('--wave-base-dim', '#333338'),
+      cursor: read('--playhead-color', '#ffffff'),
+    };
+  };
+  const tokens = themeTokens();
 
   minimapPlugin = MinimapPlugin.create({
     container: minimapMount.value || undefined,
     height: 22,
-    waveColor: '#1e2533',
-    progressColor: '#5e6ad2',
-    cursorColor: '#f3f4f6',
+    waveColor: tokens.waveDim,
+    progressColor: tokens.accent,
+    cursorColor: tokens.cursor,
   });
 
   wavesurfer = WaveSurfer.create({
     container: waveformMount.value,
-    waveColor: '#2b3345',
-    progressColor: '#5e6ad2',
-    cursorColor: '#ffffff',
+    waveColor: tokens.wave,
+    progressColor: tokens.accent,
+    cursorColor: tokens.cursor,
     cursorWidth: 1.5,
     height: 105,
     minPxPerSec: zoomLevel.value,
@@ -642,11 +639,6 @@ function initWaveSurfer() {
     hideScrollbar: true, // We provide the DAW custom interactive scrollbar
     plugins: [
       minimapPlugin,
-      TimelinePlugin.create({
-        container: timelineContainer.value || undefined,
-        primaryLabelInterval: 5,
-        secondaryLabelInterval: 1,
-      }),
     ],
   });
 
@@ -840,7 +832,10 @@ async function loadAudioUrl(url: string, filePath?: string | null) {
   
   // Resolve streamUrl using environment-aware bridge
   let streamUrl = url;
-  if (isTauriEnvironment()) {
+  // Session-only sources (blob:/data: — e.g. embedded portable audio) resolve everywhere
+  if (/^(blob:|data:)/.test(url)) {
+    streamUrl = url;
+  } else if (isTauriEnvironment()) {
     streamUrl = getAudioStreamUrl(effectivePath || url);
   } else {
     // In Browser: ALWAYS use HTTP stream URL or Blob URL! NEVER asset://!
@@ -1561,43 +1556,140 @@ function handleKeydown(e: KeyboardEvent) {
 .waveform-editor {
   display: flex;
   flex-direction: column;
+  height: 100%;
+  width: 100%;
   background: var(--bg-surface);
-  border-bottom: 1px solid var(--border-subtle);
   user-select: none;
+  overflow: hidden;
 }
 
-.editor-toolbar {
-  height: 40px;
+/* ============================================================
+   Unified Static Timeline Control Bar
+   Fixed directly below the multi-track canvas, zero floating, zero dead gap
+   ============================================================ */
+.timeline-control-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 14px;
-  background: rgba(15, 23, 42, 0.4);
+  padding: 4px 12px;
+  height: 38px;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border-subtle);
   border-bottom: 1px solid var(--border-subtle);
+  user-select: none;
+  flex-shrink: 0;
+  z-index: 20;
 }
 
-.transport-controls, .timeline-tools {
+.control-bar-left,
+.control-bar-right {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
 }
 
-.play-btn {
-  background: var(--accent-primary) !important;
-  color: #ffffff !important;
-  border-radius: 6px;
+.zoom-cluster {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.zoom-slider {
+  width: 64px;
+  height: 3px;
+  accent-color: var(--accent-primary);
+  cursor: pointer;
+}
+
+/* Small screens: keep the bar readable, drop the zoom slider */
+@media (max-width: 700px) {
+  .timeline-control-bar {
+    height: 34px;
+    padding: 3px 8px;
+    gap: 4px;
+  }
+
+  .control-bar-left,
+  .control-bar-right {
+    gap: 3px;
+  }
+
+  .zoom-slider {
+    display: none;
+  }
+}
+
+.bar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 500;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+.bar-btn:hover:not(:disabled) {
+  background: var(--bg-surface-elevated);
+  border-color: var(--border-subtle);
+  color: var(--text-main);
+}
+.bar-btn:active:not(:disabled) {
+  background: var(--hover-overlay);
+}
+.bar-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.bar-play-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 28px;
   height: 28px;
+  background: var(--accent-primary);
+  color: #ffffff;
+  border: none;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
+  margin: 0 2px;
+}
+.bar-play-btn:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+.bar-play-btn:active:not(:disabled) {
+  background: var(--accent-deep);
+}
+.bar-play-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 
-.active-verse-badge {
-  padding: 2px 8px;
-  background: rgba(94, 106, 210, 0.15);
-  border: 1px solid rgba(94, 106, 210, 0.3);
-  border-radius: 4px;
-  font-size: 11px;
-  color: var(--accent-primary);
-  font-weight: 600;
+.bar-divider {
+  width: 1px;
+  height: 14px;
+  background: var(--border-subtle);
+  margin: 0 4px;
+}
+
+.loop-btn.loop-active {
+  color: var(--sky-primary);
+  background: var(--sky-bg);
+  border-color: rgba(56, 189, 248, 0.3);
+}
+.loop-indicator {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .time-readout {
@@ -1605,37 +1697,40 @@ function handleKeydown(e: KeyboardEvent) {
   align-items: center;
   gap: 4px;
   font-family: var(--font-mono);
-  font-size: 12px;
-  padding: 0 6px;
-  color: var(--text-secondary);
+  font-size: 11px;
+  padding: 0 6px 0 2px;
+  color: var(--text-muted);
+  white-space: nowrap;
 }
 
 .current-time {
-  color: var(--text-primary);
+  color: var(--text-main);
   font-weight: 600;
 }
 
 .speed-select {
-  background: transparent;
+  background: var(--bg-surface-elevated);
   border: 1px solid var(--border-subtle);
   color: var(--text-secondary);
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   padding: 2px 6px;
   font-size: 11px;
+  font-family: var(--font-mono);
   outline: none;
   cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-out);
 }
-
-.zoom-slider {
-  width: 80px;
-  height: 4px;
-  accent-color: var(--accent-primary);
-  cursor: pointer;
+.speed-select:focus {
+  border-color: var(--border-focus);
+}
+.speed-select option {
+  background: var(--bg-surface-elevated);
+  color: var(--text-main);
 }
 
 .minimap-container {
   height: 24px;
-  background: rgba(10, 15, 26, 0.9);
+  background: var(--minimap-bg);
   border-bottom: 1px solid var(--border-subtle);
   overflow: hidden;
 }
@@ -1645,19 +1740,15 @@ function handleKeydown(e: KeyboardEvent) {
   position: relative;
   display: flex;
   flex-direction: column;
-  background: #0b0f19;
-  min-height: 220px;
+  background: var(--bg-base);
+  flex: 1;
+  min-height: 0;
   cursor: default;
+  overflow: hidden;
 }
 
 .waveform-container.is-panning {
   cursor: grab;
-}
-
-#timeline-ruler {
-  height: 24px;
-  background: rgba(15, 23, 42, 0.75);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 #waveform-mount {
@@ -1682,11 +1773,33 @@ function handleKeydown(e: KeyboardEvent) {
   contain: layout style;
 }
 
+/* Track Headers & DAW Timeline Viewports */
+.lane-header-pill {
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 28;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs);
+  padding: 2px 6px;
+  pointer-events: none;
+  opacity: 0.85;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
 /* Track 1: Ayah / Verse Lane (QuranCaption Style) */
 .ayah-track-viewport {
-  height: 32px;
-  background: rgba(13, 20, 36, 0.95);
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  height: 34px;
+  background: var(--lane-bg);
+  border-top: 1px solid var(--border-subtle);
+  position: relative;
 }
 
 .timeline-ayah-block {
@@ -1699,10 +1812,10 @@ function handleKeydown(e: KeyboardEvent) {
   padding: 0 8px;
   background: rgba(56, 189, 248, 0.08);
   border: 1px solid rgba(56, 189, 248, 0.22);
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   cursor: pointer;
   overflow: hidden;
-  transition: all 0.12s ease;
+  transition: all var(--dur-fast) var(--ease-out);
   user-select: none;
 }
 
@@ -1713,8 +1826,7 @@ function handleKeydown(e: KeyboardEvent) {
 
 .timeline-ayah-block.ayah-active {
   background: rgba(56, 189, 248, 0.22);
-  border-color: #38bdf8;
-  box-shadow: 0 0 10px rgba(56, 189, 248, 0.3);
+  border-color: var(--sky-primary);
 }
 
 .timeline-ayah-block.ayah-selected {
@@ -1729,17 +1841,17 @@ function handleKeydown(e: KeyboardEvent) {
   justify-content: center;
   gap: 8px;
   padding: 32px 16px;
-  border: 1.5px dashed rgba(255, 255, 255, 0.12);
-  border-radius: 8px;
+  border: 1.5px dashed var(--border-medium);
+  border-radius: var(--radius-md);
   margin: 20px;
   cursor: pointer;
-  background: rgba(15, 23, 42, 0.4);
-  transition: all 0.2s ease;
+  background: var(--hover-overlay);
+  animation: rise-in var(--dur-rise) var(--ease-spring) both;
 }
 
 .empty-audio-dropzone:hover {
   border-color: var(--accent-primary);
-  background: rgba(94, 106, 210, 0.08);
+  background: rgba(59, 130, 246, 0.08);
 }
 
 .empty-audio-dropzone .drop-icon {
@@ -1749,7 +1861,7 @@ function handleKeydown(e: KeyboardEvent) {
 .empty-title {
   font-size: 13px;
   font-weight: 500;
-  color: var(--text-primary);
+  color: var(--text-main);
 }
 
 .empty-formats {
@@ -1767,7 +1879,7 @@ function handleKeydown(e: KeyboardEvent) {
 .ayah-label-badge {
   font-size: 11px;
   font-weight: 700;
-  color: #38bdf8;
+  color: var(--sky-primary);
   white-space: nowrap;
 }
 
@@ -1777,7 +1889,7 @@ function handleKeydown(e: KeyboardEvent) {
   padding: 1px 5px;
   background: rgba(168, 85, 247, 0.25);
   border: 1px solid rgba(168, 85, 247, 0.5);
-  color: #c084fc;
+  color: #b79af8;
   border-radius: 3px;
   white-space: nowrap;
 }
@@ -1797,13 +1909,13 @@ function handleKeydown(e: KeyboardEvent) {
 .badge-issue.warning {
   background: rgba(245, 158, 11, 0.22);
   border: 1px solid rgba(245, 158, 11, 0.6);
-  color: #fbbf24;
+  color: var(--amber-primary);
 }
 
 .badge-issue.critical {
   background: rgba(239, 68, 68, 0.25);
   border: 1px solid rgba(239, 68, 68, 0.65);
-  color: #f87171;
+  color: var(--ruby-primary);
 }
 
 .word-low-conf-dot {
@@ -1813,8 +1925,7 @@ function handleKeydown(e: KeyboardEvent) {
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background-color: #f59e0b;
-  box-shadow: 0 0 4px #f59e0b;
+  background-color: var(--amber-primary);
   pointer-events: auto;
 }
 
@@ -1838,9 +1949,10 @@ function handleKeydown(e: KeyboardEvent) {
 
 /* Track 2: Word Alignment Track */
 .word-track-viewport {
-  height: 52px;
-  background: rgba(15, 23, 42, 0.88);
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  height: 54px;
+  background: var(--lane-bg-soft);
+  border-top: 1px solid var(--border-subtle);
+  position: relative;
 }
 
 .timeline-word-block {
@@ -1851,26 +1963,27 @@ function handleKeydown(e: KeyboardEvent) {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  background: rgba(94, 106, 210, 0.12);
-  border: 1px solid rgba(94, 106, 210, 0.28);
-  border-radius: 4px;
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs);
   padding: 0 4px;
   cursor: pointer;
   overflow: hidden;
-  transition: background 0.08s ease, border-color 0.08s ease;
+  transition: all 0.08s ease;
   user-select: none;
 }
 
 .timeline-word-block:hover {
-  background: rgba(94, 106, 210, 0.22);
-  border-color: rgba(94, 106, 210, 0.5);
+  background: var(--bg-surface-hover);
+  border-color: var(--accent-border);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.4);
 }
 
 .word-uthmani-text {
   font-family: var(--font-arabic);
   font-size: 16px;
   line-height: 1.2;
-  color: var(--text-primary);
+  color: var(--text-main);
   white-space: nowrap;
   pointer-events: none;
 }
@@ -1890,24 +2003,43 @@ function handleKeydown(e: KeyboardEvent) {
 }
 
 .word-karaoke-active {
-  background: rgba(16, 185, 129, 0.22) !important;
-  border-color: #10b981 !important;
-  box-shadow: none !important;
+  background: var(--accent-subtle) !important;
+  border-color: var(--accent-primary) !important;
 }
 
 .word-karaoke-active .word-uthmani-text {
-  color: #ffffff !important;
-  font-weight: 500;
+  color: var(--text-main) !important;
+  font-weight: 600;
 }
 
 .word-selected {
-  border-color: #10b981 !important;
-  background: rgba(16, 185, 129, 0.18) !important;
-  box-shadow: none !important;
+  border-color: var(--accent-primary) !important;
+  background: var(--accent-subtle) !important;
+}
+
+/* Light Mode Word Highlighting */
+html[data-theme='light'] .word-karaoke-active {
+  background: #dfe5f4 !important;
+  border-color: var(--accent-primary) !important;
+}
+
+html[data-theme='light'] .word-karaoke-active .word-uthmani-text {
+  color: #181a1f !important;
+  font-weight: 600;
+}
+
+html[data-theme='light'] .word-selected {
+  border-color: var(--accent-primary) !important;
+  background: #eaedf6 !important;
+}
+
+html[data-theme='light'] .word-selected .word-uthmani-text {
+  color: #181a1f !important;
+  font-weight: 600;
 }
 
 .word-edited {
-  border-bottom: 2px solid #10b981;
+  border-bottom: 2px solid var(--accent-primary);
 }
 
 .word-phonemes-layer {
@@ -1916,8 +2048,8 @@ function handleKeydown(e: KeyboardEvent) {
   left: 0;
   right: 0;
   height: 13px;
-  background: rgba(0, 0, 0, 0.45);
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--hover-overlay);
+  border-top: 1px solid var(--border-subtle);
   pointer-events: none;
   overflow: hidden;
 }
@@ -1929,8 +2061,8 @@ function handleKeydown(e: KeyboardEvent) {
   display: flex;
   align-items: center;
   justify-content: center;
-  border-right: 1px solid rgba(94, 106, 210, 0.45);
-  background: rgba(94, 106, 210, 0.1);
+  border-right: 1px solid rgba(var(--accent-rgb), 0.45);
+  background: rgba(var(--accent-rgb), 0.1);
   box-sizing: border-box;
 }
 
@@ -1942,18 +2074,21 @@ function handleKeydown(e: KeyboardEvent) {
   transform: scale(0.9);
 }
 
-/* Vertical Playhead Cursor across tracks */
+/* Vertical Playhead Cursor across tracks (Pro DAW Laser Needle) */
 .track-playhead-line {
   position: absolute;
   top: 0;
   bottom: 0;
   left: 0;
-  width: 1.5px;
-  background: #ffffff;
-  box-shadow: 0 0 6px rgba(255, 255, 255, 0.8);
+  width: 1px;
+  background: var(--playhead-color, var(--ruby-primary));
   pointer-events: none;
-  z-index: 25;
+  z-index: 45;
   will-change: transform;
+}
+
+.track-playhead-line::before {
+  content: none;
 }
 
 /* Shared-Vertex Magnetic Vertical Dividers */
@@ -1972,7 +2107,7 @@ function handleKeydown(e: KeyboardEvent) {
 .divider-line {
   width: 2px;
   height: 100%;
-  background: rgba(255, 255, 255, 0.35);
+  background: var(--contrast-line);
   transition: background 0.1s ease, width 0.1s ease;
 }
 
@@ -1982,7 +2117,7 @@ function handleKeydown(e: KeyboardEvent) {
   width: 10px;
   height: 8px;
   border-radius: 2px;
-  background: rgba(255, 255, 255, 0.4);
+  background: var(--contrast-line);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1992,20 +2127,20 @@ function handleKeydown(e: KeyboardEvent) {
 .divider-grip-dot {
   width: 4px;
   height: 2px;
-  background: #000;
+  background: var(--on-contrast);
   border-radius: 1px;
 }
 
 .shared-divider-handle:hover .divider-line,
 .shared-divider-handle.is-dragging .divider-line {
-  background: #38bdf8;
+  background: var(--sky-primary);
   width: 2.5px;
-  box-shadow: 0 0 8px rgba(56, 189, 248, 0.6);
+  box-shadow: var(--shadow-e1);
 }
 
 .shared-divider-handle:hover .divider-grabber,
 .shared-divider-handle.is-dragging .divider-grabber {
-  background: #38bdf8;
+  background: var(--sky-primary);
 }
 
 .divider-time-tooltip {
@@ -2013,25 +2148,26 @@ function handleKeydown(e: KeyboardEvent) {
   bottom: 100%;
   left: 50%;
   transform: translateX(-50%);
-  background: #0f172a;
-  color: #38bdf8;
+  background: var(--bg-surface-elevated);
+  color: var(--sky-primary);
   font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 700;
-  padding: 2px 6px;
-  border-radius: 4px;
-  border: 1px solid rgba(56, 189, 248, 0.4);
+  padding: 2px 7px;
+  border-radius: var(--radius-xs);
+  border: 1px solid rgba(var(--sky-rgb), 0.4);
   white-space: nowrap;
   pointer-events: none;
   z-index: 30;
-  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-e2);
+  animation: fade-in var(--dur-fast) var(--ease-out) both;
 }
 
 /* Custom Interactive Timeline Scrollbar (QuranCaption & DAW pattern) */
 .timeline-scrollbar-track {
   height: 12px;
-  background: rgba(10, 15, 26, 0.95);
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  background: var(--lanesheet-bg);
+  border-top: 1px solid var(--border-subtle);
   position: relative;
   cursor: pointer;
 }
@@ -2040,15 +2176,17 @@ function handleKeydown(e: KeyboardEvent) {
   position: absolute;
   top: 2px;
   bottom: 2px;
-  background: rgba(255, 255, 255, 0.2);
-  border-radius: 4px;
+  background: var(--scroll-thumb-hover);
+  border-radius: var(--radius-pill);
   cursor: grab;
-  transition: background 0.1s ease;
+  transition: background var(--dur-fast) var(--ease-out),
+              box-shadow var(--dur-fast) var(--ease-out);
 }
 
 .timeline-scrollbar-thumb:hover,
 .timeline-scrollbar-thumb:active {
-  background: rgba(56, 189, 248, 0.55);
+  background: rgba(var(--sky-rgb), 0.55);
+  box-shadow: var(--shadow-e1);
 }
 
 .empty-audio-dropzone {
@@ -2060,6 +2198,9 @@ function handleKeydown(e: KeyboardEvent) {
   gap: 8px;
   color: var(--text-muted);
   cursor: pointer;
+  transition: color var(--dur-base) var(--ease-out),
+              background var(--dur-base) var(--ease-out),
+              border-color var(--dur-base) var(--ease-out);
 }
 
 .empty-audio-dropzone:hover {
@@ -2069,7 +2210,7 @@ function handleKeydown(e: KeyboardEvent) {
 .drag-drop-overlay {
   position: absolute;
   inset: 0;
-  background: rgba(94, 106, 210, 0.35);
+  background: rgba(var(--accent-rgb), 0.35);
   backdrop-filter: blur(4px);
   z-index: 50;
   display: flex;
@@ -2105,8 +2246,8 @@ function handleKeydown(e: KeyboardEvent) {
 .boundary-line {
   width: 2.5px;
   height: 100%;
-  background: #10b981; /* Emerald green for outer boundaries */
-  box-shadow: 0 0 6px rgba(16, 185, 129, 0.4);
+  background: var(--emerald-primary); /* Emerald green for outer boundaries */
+  box-shadow: var(--shadow-e1);
   transition: all 0.1s ease;
 }
 
@@ -2114,22 +2255,22 @@ function handleKeydown(e: KeyboardEvent) {
   font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 800;
-  color: #10b981;
+  color: var(--emerald-primary);
   line-height: 1;
-  text-shadow: 0 0 6px rgba(16, 185, 129, 0.6);
+  text-shadow: var(--shadow-e1);
   pointer-events: none;
 }
 
 .word-boundary-handle:hover .boundary-line,
 .word-boundary-handle.is-dragging .boundary-line {
-  background: #34d399;
+  background: var(--emerald-primary);
   width: 3.5px;
-  box-shadow: 0 0 10px rgba(52, 211, 153, 0.8);
+  box-shadow: var(--shadow-e1);
 }
 
 .word-boundary-handle:hover .boundary-bracket,
 .word-boundary-handle.is-dragging .boundary-bracket {
-  color: #34d399;
+  color: var(--emerald-primary);
   transform: scale(1.15);
 }
 
@@ -2157,16 +2298,16 @@ function handleKeydown(e: KeyboardEvent) {
 .edge-grip-bar {
   width: 2.5px;
   height: 60%;
-  background: rgba(56, 189, 248, 0.5);
+  background: rgba(var(--sky-rgb), 0.5);
   border-radius: 1px;
   transition: all 0.1s ease;
 }
 
 .ayah-edge-handle:hover .edge-grip-bar,
 .ayah-edge-handle.is-dragging .edge-grip-bar {
-  background: #38bdf8;
+  background: var(--sky-primary);
   height: 90%;
-  box-shadow: 0 0 8px rgba(56, 189, 248, 0.8);
+  box-shadow: var(--shadow-e1);
 }
 
 /* Boundary Drag Time Tooltip */
@@ -2175,18 +2316,69 @@ function handleKeydown(e: KeyboardEvent) {
   bottom: 100%;
   left: 50%;
   transform: translateX(-50%);
-  background: #064e3b;
+  background: var(--bg-surface-elevated);
   color: #a7f3d0;
   font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 700;
-  padding: 2px 6px;
-  border-radius: 4px;
+  padding: 2px 7px;
+  border-radius: var(--radius-xs);
   border: 1px solid rgba(52, 211, 153, 0.4);
   white-space: nowrap;
   pointer-events: none;
   z-index: 35;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
+  box-shadow: var(--shadow-e2);
   margin-bottom: 2px;
+  animation: fade-in var(--dur-fast) var(--ease-out) both;
+}
+
+/* Light Theme High-Contrast Overrides */
+html[data-theme='light'] .timeline-ayah-block {
+  background: rgba(2, 132, 199, 0.08);
+  border-color: rgba(2, 132, 199, 0.30);
+}
+html[data-theme='light'] .timeline-ayah-block:hover {
+  background: rgba(2, 132, 199, 0.16);
+  border-color: rgba(2, 132, 199, 0.55);
+}
+html[data-theme='light'] .timeline-ayah-block.ayah-active {
+  background: #e6edf9;
+  border-color: var(--sky-primary);
+}
+html[data-theme='light'] .timeline-ayah-block.ayah-selected {
+  background: #f1e9fb;
+  border-color: var(--qc-purple);
+}
+html[data-theme='light'] .timeline-ayah-block.ayah-selected .ayah-label-badge {
+  color: var(--qc-purple);
+}
+html[data-theme='light'] .ayah-snippet-text {
+  color: #334155;
+  opacity: 0.95;
+}
+html[data-theme='light'] .badge-repetition {
+  background: #f3e8ff;
+  border-color: #d8b4fe;
+  color: var(--qc-purple);
+}
+html[data-theme='light'] .badge-issue.warning {
+  background: #fef3c7;
+  border-color: #fcd34d;
+  color: #b45309;
+}
+html[data-theme='light'] .badge-issue.critical {
+  background: #fee2e2;
+  border-color: var(--ruby-primary);
+  color: #b91c1c;
+}
+html[data-theme='light'] .boundary-time-tooltip {
+  background: #ffffff;
+  color: #047857;
+  border-color: var(--emerald-primary);
+}
+html[data-theme='light'] .divider-time-tooltip {
+  background: #ffffff;
+  color: #0369a1;
+  border-color: #0284c7;
 }
 </style>

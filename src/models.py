@@ -396,6 +396,8 @@ class PipelineResult:
                         "location": str(w_d.get("location", "1:1:1")),
                         "start": max(0.0, round(ws - g_abs_s, 3)),
                         "end": min(g_dur, max(0.0, round(we - g_abs_s, 3))),
+                        "_abs_start": ws,
+                        "_abs_end": we,
                     }
                     if w_d.get("phonemes"):
                         w_dict["phonemes"] = w_d["phonemes"]
@@ -508,8 +510,9 @@ class PipelineResult:
         for s in raw_segments:
             words = s.get("words", [])
             if words:
-                seg_s = words[0]["_abs_start"]
-                seg_e = words[-1]["_abs_end"]
+                # Defensive fallback: intro segments historically lacked these keys.
+                seg_s = words[0].get("_abs_start", s["time_from"])
+                seg_e = words[-1].get("_abs_end", s["time_to"])
                 s["time_from"] = seg_s
                 s["time_to"] = max(seg_s + 0.010, seg_e)
                 seg_dur = max(0.0, round(s["time_to"] - seg_s, 3))

@@ -6,12 +6,11 @@
         <div class="header-left">
           <Download :size="18" class="text-accent" />
           <div class="header-titles">
-            <h3 class="modal-title">Export Subtitles & Production Data</h3>
-            <span class="modal-subtitle">Export synchronized recitation timings in industry-standard formats</span>
+            <h3 class="modal-title">Export</h3>
           </div>
         </div>
         <button class="btn-icon" @click="close" title="Close">
-          <X :size="16" />
+          <X :size="15" />
         </button>
       </div>
 
@@ -22,8 +21,8 @@
           :class="{ 'active': exportScope === 'current' }"
           @click="setExportScope('current')"
         >
-          <FileText :size="14" />
-          <span>Current Surah ({{ projectStore.activeSurah.value?.surah_name_english || 'Active' }})</span>
+          <FileText :size="13" />
+          <span>Current ({{ projectStore.activeSurah.value?.surah_name_english || 'Active' }})</span>
         </button>
         <button 
           class="scope-tab-btn" 
@@ -32,8 +31,8 @@
           :disabled="totalSurahsCount <= 1"
           :title="totalSurahsCount <= 1 ? 'Add more surahs to export in batch' : 'Export all project surahs'"
         >
-          <Layers :size="14" />
-          <span>All Surahs in Project ({{ totalSurahsCount }} {{ totalSurahsCount === 1 ? 'Surah' : 'Surahs' }})</span>
+          <Layers :size="13" />
+          <span>All Surahs ({{ totalSurahsCount }})</span>
         </button>
       </div>
 
@@ -131,7 +130,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { projectStore } from '../services/projectStore';
 import { 
   exportCanonicalJson, 
@@ -150,6 +149,7 @@ import {
   exportAllWordTimingsCsv,
   exportAllPremiereMarkers,
   exportSurahsAsZip,
+  buildPortableProject,
   downloadFile,
   downloadBlob,
   sanitizeBatchExportFileName,
@@ -196,57 +196,57 @@ const availableFormats = computed(() => {
       id: 'json' as ExportFormatId,
       ext: '.JSON',
       badge: 'Canonical',
-      title: 'Canonical output.json',
-      description: 'Canonical Medina Mushaf hierarchy matching pipeline output specification.',
+      title: 'Canonical Medina JSON',
+      description: 'Full Mushaf word hierarchy & boundary timings.',
     },
     {
       id: 'srt' as ExportFormatId,
       ext: '.SRT',
       badge: 'Universal',
       title: 'Universal Subtitles',
-      description: 'SubRip format for YouTube, VLC, Premiere Pro, and DaVinci Resolve.',
+      description: 'Standard SubRip for Premiere, DaVinci, VLC & YouTube.',
     },
     {
       id: 'vtt' as ExportFormatId,
       ext: '.VTT',
       badge: 'Web Standard',
       title: 'WebVTT Subtitles',
-      description: 'HTML5 video subtitle track format with high web browser compatibility.',
+      description: 'HTML5 video subtitle track for modern browsers.',
     },
     {
       id: 'ass' as ExportFormatId,
       ext: '.ASS',
-      badge: 'Karaoke Timings',
+      badge: 'Karaoke',
       title: 'Word Karaoke Subtitles',
-      description: 'SubStation Alpha with \\k centisecond tags for animated video titles.',
+      description: 'Advanced SubStation Alpha with \\k centisecond tags.',
     },
     {
       id: 'qurancaption' as ExportFormatId,
       ext: '.JSON',
       badge: 'Video Tool',
       title: 'QuranCaption Format',
-      description: 'Direct 1-click import into QuranCaption video creator timeline.',
+      description: 'Direct 1-click import into QuranCaption video timeline.',
     },
     {
       id: 'csv' as ExportFormatId,
       ext: '.CSV',
-      badge: 'Data & Excel',
+      badge: 'Spreadsheet',
       title: 'Word Timings CSV',
-      description: 'Structured spreadsheet table with millisecond durations and confidence scores.',
+      description: 'Data table with millisecond durations & confidence.',
     },
     {
       id: 'premiere' as ExportFormatId,
       ext: '.CSV',
       badge: 'NLE Markers',
       title: 'Premiere / DaVinci Markers',
-      description: 'Timeline markers CSV ready to drag directly into video editing sequences.',
+      description: 'Sequence markers ready to drag onto your video timeline.',
     },
     {
       id: 'qproj' as ExportFormatId,
       ext: '.QPROJ',
-      badge: 'Studio Project',
+      badge: 'Portable',
       title: 'Quran Studio Project',
-      description: 'Complete project specification with all boundary edits, history, and metadata.',
+      description: 'Complete project with audio embedded — one file, works on any device or cloud.',
     },
   ];
 });
@@ -435,6 +435,21 @@ async function handleDownload() {
     mime = 'text/csv';
   }
 
+  // Portable .qproj: embed reachable audio so the file is self-contained
+  if (selectedFormat.value === 'qproj') {
+    isExporting.value = true;
+    try {
+      const portable = await buildPortableProject(projectStore.project);
+      downloadFile(exportProjectFile(portable), currentFilename.value, mime);
+      close();
+    } catch (err) {
+      console.error('Failed to create portable project export:', err);
+    } finally {
+      isExporting.value = false;
+    }
+    return;
+  }
+
   downloadFile(previewContent.value, currentFilename.value, mime);
   close();
 }
@@ -449,18 +464,26 @@ defineExpose({
   open,
   close,
 });
+
+function handleKeydown(e: KeyboardEvent) {
+  if (visible.value && e.key === 'Escape') close();
+}
+onMounted(() => window.addEventListener('keydown', handleKeydown));
+onUnmounted(() => window.removeEventListener('keydown', handleKeydown));
 </script>
 
 <style scoped>
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.72);
+  background: rgba(5, 6, 10, 0.68);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 1000;
-  animation: fade-in 0.15s ease-out;
+  animation: fade-in var(--dur-fast) var(--ease-out);
 }
 
 .export-modal {
@@ -470,43 +493,43 @@ defineExpose({
   display: flex;
   flex-direction: column;
   background: var(--bg-surface);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-2xl);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-e3);
   overflow: hidden;
-  animation: scale-up 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  animation: scale-up var(--dur-rise) var(--ease-spring);
 }
 
 .modal-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 1rem 1.25rem;
-  border-bottom: 1px solid var(--border-color);
-  background: var(--bg-card);
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-surface-elevated);
 }
 
 .header-left {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: 10px;
 }
 
 .header-titles {
   display: flex;
   flex-direction: column;
-  gap: 0.15rem;
+  gap: 2px;
 }
 
 .modal-title {
   margin: 0;
-  font-size: 0.95rem;
+  font-size: 14px;
   font-weight: 700;
   color: var(--text-main);
 }
 
 .modal-subtitle {
-  font-size: 0.75rem;
+  font-size: 11px;
   color: var(--text-muted);
 }
 
@@ -514,38 +537,37 @@ defineExpose({
 .scope-tabs-bar {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.65rem 1.25rem;
-  background: var(--bg-hover);
-  border-bottom: 1px solid var(--border-color);
+  gap: 6px;
+  padding: 8px 18px;
+  background: var(--bg-input);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .scope-tab-btn {
   display: flex;
   align-items: center;
-  gap: 0.45rem;
-  padding: 0.4rem 0.85rem;
-  border-radius: var(--radius-md);
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: var(--radius-pill);
   border: 1px solid transparent;
   background: transparent;
   color: var(--text-muted);
-  font-size: 0.78rem;
+  font-size: 11.5px;
   font-weight: 500;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: all var(--dur-fast) var(--ease-out);
 }
 
 .scope-tab-btn:hover:not(:disabled) {
   color: var(--text-main);
-  background: var(--bg-surface);
+  background: var(--bg-surface-elevated);
 }
 
 .scope-tab-btn.active {
-  background: var(--bg-card);
-  color: var(--accent);
-  border-color: var(--border-color);
+  background: var(--bg-surface-elevated);
+  color: var(--accent-hover);
+  border-color: var(--accent-border);
   font-weight: 600;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
 }
 
 .scope-tab-btn:disabled {
@@ -558,21 +580,21 @@ defineExpose({
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.55rem 1.25rem;
-  background: rgba(94, 106, 210, 0.08);
-  border-bottom: 1px solid rgba(94, 106, 210, 0.15);
+  padding: 8px 18px;
+  background: var(--accent-subtle);
+  border-bottom: 1px solid var(--accent-border);
 }
 
 .project-stats-pill {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  font-size: 0.76rem;
+  gap: 8px;
+  font-size: 12px;
   color: var(--text-main);
 }
 
 .stat-item strong {
-  color: var(--accent);
+  color: var(--accent-hover);
 }
 
 .stat-dot {
@@ -582,25 +604,25 @@ defineExpose({
 .batch-mode-toggle {
   display: flex;
   align-items: center;
-  gap: 0.35rem;
-  background: var(--bg-card);
-  padding: 0.2rem;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border-color);
+  gap: 4px;
+  background: var(--bg-surface);
+  padding: 3px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-subtle);
 }
 
 .mode-pill-btn {
   display: flex;
   align-items: center;
-  gap: 0.35rem;
-  padding: 0.25rem 0.6rem;
-  border-radius: var(--radius-sm);
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
   border: none;
   background: transparent;
   color: var(--text-muted);
-  font-size: 0.72rem;
+  font-size: 11px;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all var(--dur-fast) var(--ease-out);
 }
 
 .mode-pill-btn:hover {
@@ -608,17 +630,17 @@ defineExpose({
 }
 
 .mode-pill-btn.active {
-  background: var(--accent);
+  background: var(--accent-primary);
   color: #ffffff;
   font-weight: 600;
 }
 
 .modal-body {
-  padding: 1rem 1.25rem;
+  padding: 16px 18px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 0.85rem;
+  gap: 12px;
   flex: 1;
 }
 
@@ -626,7 +648,7 @@ defineExpose({
 .format-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 0.55rem;
+  gap: 8px;
 }
 
 @media (max-width: 800px) {
@@ -639,24 +661,24 @@ defineExpose({
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  padding: 0.65rem 0.75rem;
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   text-align: left;
-  transition: all 0.15s ease;
+  transition: all var(--dur-fast) var(--ease-out);
 }
 
 .format-card:hover {
-  border-color: var(--border-focus);
-  background: var(--bg-hover);
+  border-color: var(--border-medium);
+  background: var(--bg-surface-elevated);
 }
 
 .format-card.selected {
-  border-color: var(--accent);
-  background: rgba(94, 106, 210, 0.08);
-  box-shadow: 0 0 0 1px var(--accent);
+  border-color: var(--accent-primary);
+  background: var(--accent-subtle);
+  box-shadow: 0 0 0 1px var(--accent-border);
 }
 
 .format-card-top {
@@ -664,51 +686,51 @@ defineExpose({
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 0.35rem;
+  margin-bottom: 4px;
 }
 
 .fmt-ext {
-  font-family: monospace;
+  font-family: var(--font-mono);
   font-weight: 700;
-  font-size: 0.78rem;
-  color: var(--accent);
+  font-size: 11px;
+  color: var(--accent-hover);
 }
 
 .fmt-badge {
-  font-size: 0.62rem;
-  padding: 0.12rem 0.35rem;
-  background: var(--bg-surface);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
+  font-size: 9px;
+  padding: 1px 5px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs);
   color: var(--text-muted);
 }
 
 .fmt-title {
-  font-size: 0.76rem;
+  font-size: 11.5px;
   font-weight: 600;
   color: var(--text-main);
-  margin-bottom: 0.2rem;
+  margin-bottom: 2px;
 }
 
 .fmt-desc {
   margin: 0;
-  font-size: 0.68rem;
+  font-size: 10.5px;
   color: var(--text-muted);
-  line-height: 1.3;
+  line-height: 1.35;
 }
 
 .format-options {
-  padding: 0.55rem 0.85rem;
-  background: var(--bg-hover);
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border-color);
+  padding: 8px 12px;
+  background: var(--bg-surface-elevated);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
 }
 
 .toggle-label {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  font-size: 0.75rem;
+  gap: 8px;
+  font-size: 12px;
   color: var(--text-main);
   cursor: pointer;
 }
@@ -717,61 +739,64 @@ defineExpose({
 .preview-section {
   display: flex;
   flex-direction: column;
-  background: #090c10;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
   overflow: hidden;
-  height: 220px;
+  height: 200px;
 }
 
 .preview-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.4rem 0.75rem;
-  background: #161b22;
-  border-bottom: 1px solid var(--border-color);
+  padding: 6px 12px;
+  background: var(--bg-surface-elevated);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .preview-title {
-  font-size: 0.68rem;
-  font-family: monospace;
+  font-size: 10px;
+  font-family: var(--font-mono);
   font-weight: 600;
   color: var(--text-muted);
+  letter-spacing: 0.05em;
   text-transform: uppercase;
 }
 
 .preview-zip-badge {
-  font-size: 0.68rem;
-  color: var(--accent);
+  font-size: 10px;
+  color: var(--accent-hover);
   font-weight: 500;
 }
 
 .copy-btn {
   display: flex;
   align-items: center;
-  gap: 0.35rem;
+  gap: 4px;
   background: transparent;
-  border: none;
+  border: 1px solid var(--border-subtle);
   color: var(--text-muted);
-  font-size: 0.68rem;
+  font-size: 10px;
   cursor: pointer;
-  padding: 0.15rem 0.4rem;
-  border-radius: var(--radius-sm);
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  transition: all var(--dur-fast) var(--ease-out);
 }
 
 .copy-btn:hover {
   color: var(--text-main);
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--bg-surface);
+  border-color: var(--border-medium);
 }
 
 .preview-content {
   margin: 0;
-  padding: 0.75rem;
-  font-family: 'Consolas', 'Monaco', monospace;
-  font-size: 0.72rem;
-  line-height: 1.4;
-  color: #e6edf3;
+  padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-main);
   overflow: auto;
   white-space: pre;
   flex: 1;
@@ -782,10 +807,10 @@ defineExpose({
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 0.75rem;
-  padding: 0.85rem 1.25rem;
-  border-top: 1px solid var(--border-color);
-  background: var(--bg-card);
+  gap: 10px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-surface-elevated);
 }
 
 @keyframes fade-in {
@@ -794,7 +819,7 @@ defineExpose({
 }
 
 @keyframes scale-up {
-  from { transform: scale(0.96); opacity: 0; }
+  from { transform: scale(0.97); opacity: 0; }
   to { transform: scale(1); opacity: 1; }
 }
 </style>

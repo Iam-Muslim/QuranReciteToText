@@ -13,12 +13,12 @@
     <div class="menu-items">
       <!-- Fine Nudging -->
       <div class="menu-submenu">
-        <span class="submenu-label">NUDGE BOUNDARY</span>
+        <span class="submenu-label">Nudge Boundary</span>
         <div class="nudge-buttons-row">
-          <button class="nudge-btn" @click="nudgeStart(-0.01)" title="Shift start earlier 10ms">Start -10ms</button>
-          <button class="nudge-btn" @click="nudgeStart(0.01)" title="Shift start later 10ms">Start +10ms</button>
-          <button class="nudge-btn" @click="nudgeEnd(-0.01)" title="Shift end earlier 10ms">End -10ms</button>
-          <button class="nudge-btn" @click="nudgeEnd(0.01)" title="Shift end later 10ms">End +10ms</button>
+          <button class="nudge-btn" @click="nudgeStart(-0.01)" title="Shift start -10ms">Start −10ms</button>
+          <button class="nudge-btn" @click="nudgeStart(0.01)" title="Shift start +10ms">Start +10ms</button>
+          <button class="nudge-btn" @click="nudgeEnd(-0.01)" title="Shift end -10ms">End −10ms</button>
+          <button class="nudge-btn" @click="nudgeEnd(0.01)" title="Shift end +10ms">End +10ms</button>
         </div>
       </div>
 
@@ -26,35 +26,35 @@
 
       <!-- Split -->
       <button class="menu-action-item" @click="handleSplit">
-        <Scissors :size="14" />
+        <Scissors :size="13" />
         <span>Split Word</span>
       </button>
 
       <!-- Merge with Next -->
       <button class="menu-action-item" @click="handleMerge">
-        <GitMerge :size="14" />
-        <span>Merge with Next Word</span>
+        <GitMerge :size="13" />
+        <span>Merge with Next</span>
       </button>
 
       <!-- Edit Word -->
       <button class="menu-action-item" @click="handleEdit">
-        <Edit3 :size="14" />
-        <span>Edit Word</span>
+        <Edit3 :size="13" />
+        <span>Edit Location</span>
       </button>
 
       <div class="menu-divider"></div>
 
-      <!-- Delete Phantom Word (Standalone in-app confirmation) -->
+      <!-- Delete Word -->
       <div v-if="confirmingDelete" class="delete-confirm-box">
-        <span class="confirm-prompt">Delete word "{{ targetWord?.word }}"?</span>
+        <span class="confirm-prompt">Delete "{{ targetWord?.word }}"?</span>
         <div class="confirm-actions">
           <button class="confirm-btn-danger" @click="confirmDelete">Delete</button>
           <button class="confirm-btn-cancel" @click="confirmingDelete = false">Cancel</button>
         </div>
       </div>
       <button v-else class="menu-action-item danger" @click="confirmingDelete = true">
-        <Trash2 :size="14" />
-        <span>Delete Phantom Word</span>
+        <Trash2 :size="13" />
+        <span>Delete Word</span>
       </button>
     </div>
   </div>
@@ -173,15 +173,17 @@ defineExpose({
   position: fixed;
   z-index: 100;
   width: 250px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border-medium);
-  border-radius: 6px;
+  background: var(--glass-bg);
+  backdrop-filter: blur(12px) saturate(1.4);
+  -webkit-backdrop-filter: blur(12px) saturate(1.4);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
   padding: 4px;
-  box-shadow: var(--shadow-modal);
-  animation: menu-appear 0.1s ease-out;
+  box-shadow: var(--shadow-e4);
+  animation: scale-in var(--dur-fast) var(--ease-spring) both;
 }
 
-@keyframes menu-appear {
+@keyframes scale-in {
   from { opacity: 0; transform: scale(0.95); }
   to { opacity: 1; transform: scale(1); }
 }
@@ -194,7 +196,7 @@ defineExpose({
 .menu-word {
   font-family: var(--font-arabic);
   font-size: 1.25rem;
-  color: #ffffff;
+  color: var(--text-main);
   display: block;
 }
 .menu-loc {
@@ -224,12 +226,13 @@ defineExpose({
   background: var(--bg-surface-elevated);
   border: 1px solid var(--border-subtle);
   color: var(--text-main);
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   padding: 3px 5px;
   font-size: 0.68rem;
   font-family: var(--font-mono);
   cursor: pointer;
-  transition: all 0.12s ease;
+  transition: background var(--dur-fast) var(--ease-out),
+              border-color var(--dur-fast) var(--ease-out);
 }
 .nudge-btn:hover {
   background: var(--bg-surface-hover);
@@ -251,38 +254,40 @@ defineExpose({
   background: transparent;
   border: none;
   color: var(--text-muted);
-  border-radius: 6px;
+  border-radius: var(--radius-xs);
   padding: 7px 10px;
   font-size: 0.78rem;
   font-weight: 500;
   cursor: pointer;
   text-align: left;
-  transition: all 0.12s ease;
+  transition: background var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out);
 }
 .menu-action-item:hover {
   background: var(--bg-surface-elevated);
   color: var(--text-main);
 }
 .menu-action-item.danger:hover {
-  background: rgba(239, 68, 68, 0.15);
-  color: #f87171;
+  background: var(--ruby-bg);
+  color: var(--ruby-primary);
 }
 
 /* Standalone In-Menu Confirmation Box */
 .delete-confirm-box {
   padding: 8px 10px;
-  background: rgba(239, 68, 68, 0.12);
-  border: 1px solid rgba(239, 68, 68, 0.3);
-  border-radius: 6px;
+  background: var(--ruby-bg);
+  border: 1px solid var(--ruby-border);
+  border-radius: var(--radius-sm);
   display: flex;
   flex-direction: column;
   gap: 6px;
   margin: 2px 0;
+  animation: rise-in var(--dur-fast) var(--ease-spring) both;
 }
 
 .confirm-prompt {
   font-size: 0.72rem;
-  color: #fca5a5;
+  color: var(--ruby-primary);
   font-weight: 600;
   text-align: center;
 }
@@ -295,31 +300,34 @@ defineExpose({
 }
 
 .confirm-btn-danger {
-  background: #ef4444;
+  background: var(--ruby-primary);
   border: none;
   color: #fff;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   padding: 3px 10px;
   font-size: 0.7rem;
   font-weight: 700;
   cursor: pointer;
-  transition: background 0.1s ease;
+  transition: background var(--dur-fast) var(--ease-out);
 }
 .confirm-btn-danger:hover {
-  background: #dc2626;
+  background: var(--ruby-primary);
 }
 
 .confirm-btn-cancel {
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  color: #e2e8f0;
-  border-radius: 4px;
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  border-radius: var(--radius-xs);
   padding: 3px 10px;
   font-size: 0.7rem;
   cursor: pointer;
-  transition: all 0.1s ease;
+  transition: background var(--dur-fast) var(--ease-out),
+              border-color var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out);
 }
 .confirm-btn-cancel:hover {
-  background: rgba(255, 255, 255, 0.15);
+  background: var(--bg-surface-hover);
+  color: var(--text-main);
 }
 </style>

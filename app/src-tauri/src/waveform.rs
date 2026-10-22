@@ -1,6 +1,9 @@
-use std::process::Command;
+use std::io::{BufRead, BufReader};
+use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter};
 use crate::process_utils::configure_command_no_window;
 
 /// Resolves ffmpeg executable path from PATH or common bundled locations.
@@ -43,8 +46,15 @@ pub fn resolve_ffprobe() -> Option<String> {
 
 /// Measures container PTS stretch vs decoded packet content duration (ms).
 /// Essential for eliminating timing drift on long MP3/M4A Quran recitations.
+/// Runs off the main thread so the UI stays responsive while ffprobe scans.
 #[tauri::command]
-pub fn audio_timestamp_stretch_ms(file_path: String) -> Result<i64, String> {
+pub async fn audio_timestamp_stretch_ms(file_path: String) -> Result<i64, String> {
+    tauri::async_runtime::spawn_blocking(move || audio_timestamp_stretch_ms_impl(file_path))
+        .await
+        .map_err(|e| format!("Timestamp stretch task failed: {}", e))?
+}
+
+fn audio_timestamp_stretch_ms_impl(file_path: String) -> Result<i64, String> {
     let path = Path::new(&file_path);
     if !path.exists() {
         return Err(format!("File not found: {}", file_path));
@@ -167,10 +177,45 @@ fn probe_audio_for_retime(file_path_str: &str) -> (String, String, u32, u32, u32
     (codec, profile, sample_rate, tb_num, tb_den, bit_rate)
 }
 
+/// Reads total duration in seconds via ffprobe (0.0 when unknown).
+fn probe_stream_duration_seconds(ffprobe_path: &str, file_path: &str) -> f64 {
+    let mut cmd = Command::new(ffprobe_path);
+    cmd.args([
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        file_path,
+    ]);
+    configure_command_no_window(&mut cmd);
+    match cmd.output() {
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .parse::<f64>()
+            .unwrap_or(0.0),
+        _ => 0.0,
+    }
+}
+
 /// Normalizes audio timestamps in-place using FFmpeg asetpts/setts.
 /// Eliminates cumulative audio-text drift on long recitation sessions.
+/// Runs off the main thread and streams progress via the `align-prep` event
+/// so the dialog can show a live percentage during long re-encodes.
 #[tauri::command]
-pub fn normalize_audio_timestamps(file_path: String) -> Result<(), String> {
+pub async fn normalize_audio_timestamps(
+    app_handle: AppHandle,
+    file_path: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        normalize_audio_timestamps_impl(&app_handle, file_path)
+    })
+    .await
+    .map_err(|e| format!("Audio normalization task failed: {}", e))?
+}
+
+fn normalize_audio_timestamps_impl(app_handle: &AppHandle, file_path: String) -> Result<(), String> {
     let path = Path::new(&file_path);
     if !path.exists() {
         return Err(format!("File not found: {}", file_path));
@@ -215,7 +260,16 @@ pub fn normalize_audio_timestamps(file_path: String) -> Result<(), String> {
         && tb_den == sample_rate;
 
     let temp_str = temp_path.to_string_lossy().to_string();
-    let mut args: Vec<String> = vec!["-i".into(), file_path.clone()];
+    let mut args: Vec<String> = vec![
+        "-hide_banner".into(),
+        "-loglevel".into(),
+        "error".into(),
+        "-nostats".into(),
+        "-progress".into(),
+        "pipe:1".into(),
+        "-i".into(),
+        file_path.clone(),
+    ];
 
     if can_lossless {
         let setts = format!("setts=pts=N*{spf}:dts=N*{spf}", spf = samples_per_frame);
@@ -265,33 +319,105 @@ pub fn normalize_audio_timestamps(file_path: String) -> Result<(), String> {
     let mut cmd = Command::new(&ffmpeg_path);
     cmd.args(&args);
     configure_command_no_window(&mut cmd);
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
 
-    match cmd.output() {
-        Ok(result) => {
-            if result.status.success() {
-                let _ = std::fs::remove_file(&backup_path);
-                if std::fs::rename(path, &backup_path).is_ok() {
-                    if std::fs::rename(&temp_path, path).is_ok() {
-                        let _ = std::fs::remove_file(&backup_path);
-                        Ok(())
-                    } else {
-                        let _ = std::fs::rename(&backup_path, path);
-                        Err("Failed to replace original audio file after normalization".to_string())
-                    }
-                } else {
-                    let _ = std::fs::remove_file(&temp_path);
-                    Err("Failed to backup original audio file".to_string())
-                }
-            } else {
-                let _ = std::fs::remove_file(&temp_path);
-                let stderr = String::from_utf8_lossy(&result.stderr);
-                Err(format!("FFmpeg audio normalization failed: {}", stderr))
-            }
-        }
+    let emit_prep = |percent: f64, message: &str| {
+        let _ = app_handle.emit(
+            "align-prep",
+            serde_json::json!({
+                "stage": "normalize",
+                "percent": percent,
+                "message": message,
+            }),
+        );
+    };
+
+    let mut child = match cmd.spawn() {
+        Ok(child) => child,
         Err(e) => {
             let _ = std::fs::remove_file(&temp_path);
-            Err(format!("Failed to execute FFmpeg: {}", e))
+            return Err(format!("Failed to execute FFmpeg: {}", e));
         }
+    };
+
+    let stdout_pipe = child
+        .stdout
+        .take()
+        .ok_or("Failed to capture FFmpeg progress stream")?;
+    let stderr_pipe = child
+        .stderr
+        .take()
+        .ok_or("Failed to capture FFmpeg error stream")?;
+
+    // Keep a rolling tail of stderr for error reporting.
+    let stderr_tail = Arc::new(Mutex::new(String::new()));
+    let stderr_tail_clone = Arc::clone(&stderr_tail);
+    let stderr_handle = std::thread::spawn(move || {
+        for line in BufReader::new(stderr_pipe).lines().flatten() {
+            if let Ok(mut buf) = stderr_tail_clone.lock() {
+                buf.push_str(&line);
+                buf.push('\n');
+                if buf.len() > 8000 {
+                    let cut = buf.len() - 8000;
+                    buf.drain(0..cut);
+                }
+            }
+        }
+    });
+
+    emit_prep(0.0, "Normalizing audio timestamps…");
+
+    let ffprobe_path = resolve_ffprobe().unwrap_or_else(|| "ffprobe".to_string());
+    let total_us = probe_stream_duration_seconds(&ffprobe_path, &file_path) * 1_000_000.0;
+    let mut last_reported: i32 = -1;
+
+    for line in BufReader::new(stdout_pipe).lines() {
+        let Ok(line) = line else { break };
+        if let Some(raw) = line.trim().strip_prefix("out_time_us=") {
+            if total_us > 0.0 {
+                if let Ok(us) = raw.trim().parse::<f64>() {
+                    let percent = (us / total_us * 100.0).clamp(0.0, 100.0);
+                    let rounded = percent.round() as i32;
+                    if rounded != last_reported {
+                        last_reported = rounded;
+                        emit_prep(
+                            percent,
+                            &format!("Normalizing audio timestamps… {}%", rounded),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    let exit_status = child
+        .wait()
+        .map_err(|e| format!("Failed to wait for FFmpeg: {}", e))?;
+    let _ = stderr_handle.join();
+
+    if exit_status.success() {
+        emit_prep(100.0, "Audio timestamps normalized");
+        let _ = std::fs::remove_file(&backup_path);
+        if std::fs::rename(path, &backup_path).is_ok() {
+            if std::fs::rename(&temp_path, path).is_ok() {
+                let _ = std::fs::remove_file(&backup_path);
+                Ok(())
+            } else {
+                let _ = std::fs::rename(&backup_path, path);
+                Err("Failed to replace original audio file after normalization".to_string())
+            }
+        } else {
+            let _ = std::fs::remove_file(&temp_path);
+            Err("Failed to backup original audio file".to_string())
+        }
+    } else {
+        let _ = std::fs::remove_file(&temp_path);
+        let stderr_text = stderr_tail.lock().map(|s| s.clone()).unwrap_or_default();
+        Err(format!(
+            "FFmpeg audio normalization failed: {}",
+            stderr_text.trim()
+        ))
     }
 }
 

@@ -80,6 +80,8 @@ export interface SurahItem {
   audio_file?: string;
   audio_url?: string;
   audio_duration_seconds?: number;
+  /** Audio embedded as base64 inside exported .qproj files (portable/cloud transfer). Not persisted by autosave. */
+  audio_embedded?: { name: string; mime: string; base64: string };
   status: SurahStatus;
   intro?: SurahIntro;
   ayahs: AyahItem[];

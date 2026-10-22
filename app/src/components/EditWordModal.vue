@@ -1,14 +1,11 @@
 <template>
-  <div v-if="visible" class="modal-backdrop" @click="close">
-    <div class="edit-word-modal glass-panel" @click.stop>
+  <div v-if="visible" class="modal-backdrop" @click.self="close">
+    <div class="edit-word-modal glass-panel anim-scale" @click.stop>
       <!-- Header -->
       <div class="modal-header">
-        <div class="header-titles">
-          <h3 class="modal-title">Edit Word</h3>
-          <span class="modal-subtitle">Choose canonical Quranic location for this word</span>
-        </div>
+        <h3 class="modal-title">Edit Word Location</h3>
         <button class="btn-icon close-btn" @click="close" title="Close">
-          <X :size="16" />
+          <X :size="15" />
         </button>
       </div>
 
@@ -28,7 +25,7 @@
         <!-- Location & Status Badge -->
         <div class="preview-meta-row">
           <span v-if="isValid" class="badge-valid">
-            {{ surahName ? surahName + ' • ' : '' }}سورة {{ surahNum }} • آية {{ ayahNum }} • الكلمة {{ wordNum }} من {{ totalWords }}
+            {{ surahName ? surahName + ' · ' : '' }}سورة {{ surahNum }} · آية {{ ayahNum }} · كلمة {{ wordNum }}
           </span>
           <span v-else-if="errorMessage" class="badge-invalid">
             ⚠️ {{ errorMessage }}
@@ -37,14 +34,13 @@
 
         <!-- Full Ayah Context Snippet -->
         <div v-if="ayahTextSnippet" class="ayah-context-box">
-          <span class="ayah-snippet-label">سياق الآية:</span>
           <p class="ayah-snippet-content">{{ ayahTextSnippet }}</p>
         </div>
       </div>
 
       <!-- Location Input Controls -->
       <div class="location-controls-section">
-        <label class="control-label">QURANIC LOCATION (Surah : Ayah : Word)</label>
+        <span class="control-label">Surah · Ayah · Word</span>
         
         <div class="location-inputs-row">
           <div class="stepper-group">
@@ -293,22 +289,23 @@ defineExpose({
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.72);
+  background: rgba(5, 6, 10, 0.62);
   backdrop-filter: blur(8px);
   z-index: 9999;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 16px;
+  animation: fade-in var(--dur-base) var(--ease-out) both;
 }
 
 .edit-word-modal {
   width: 100%;
   max-width: 440px;
-  background: rgba(15, 23, 42, 0.95);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 12px;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-e4);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -319,7 +316,7 @@ defineExpose({
   align-items: flex-start;
   justify-content: space-between;
   padding: 16px 20px 12px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .header-titles {
@@ -331,12 +328,12 @@ defineExpose({
 .modal-title {
   font-size: 15px;
   font-weight: 700;
-  color: #fff;
+  color: var(--text-main);
   margin: 0;
 }
 
 .modal-subtitle {
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--text-dim);
 }
 
@@ -346,19 +343,20 @@ defineExpose({
   color: var(--text-dim);
   cursor: pointer;
   padding: 4px;
-  border-radius: 4px;
-  transition: all 0.1s ease;
+  border-radius: var(--radius-xs);
+  transition: color var(--dur-fast) var(--ease-out),
+              background var(--dur-fast) var(--ease-out);
 }
 .close-btn:hover {
-  color: #fff;
-  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-main);
+  background: var(--bg-surface-hover);
 }
 
 /* Word Preview Card */
 .word-preview-card {
   padding: 20px;
-  background: rgba(0, 0, 0, 0.25);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -375,20 +373,20 @@ defineExpose({
 .preview-uthmani-text {
   font-family: var(--font-arabic);
   font-size: 2.4rem;
-  color: #10b981;
+  color: var(--emerald-primary);
   direction: rtl;
-  text-shadow: 0 0 12px rgba(16, 185, 129, 0.25);
+  text-shadow: var(--shadow-e1);
 }
 
 .word-meanings-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 
 .word-transliteration {
-  color: #38bdf8;
+  color: var(--sky-primary);
   font-weight: 600;
 }
 
@@ -398,7 +396,7 @@ defineExpose({
 }
 
 .loading-icon {
-  color: #10b981;
+  color: var(--emerald-primary);
 }
 
 .preview-meta-row {
@@ -408,38 +406,38 @@ defineExpose({
 }
 
 .badge-valid {
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-weight: 600;
-  color: #a7f3d0;
-  background: rgba(16, 185, 129, 0.15);
-  border: 1px solid rgba(16, 185, 129, 0.3);
-  padding: 2px 10px;
-  border-radius: 12px;
+  color: var(--emerald-primary);
+  background: var(--emerald-bg);
+  border: 1px solid var(--emerald-border);
+  padding: 2px 11px;
+  border-radius: var(--radius-pill);
 }
 
 .badge-invalid {
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-weight: 600;
-  color: #fca5a5;
-  background: rgba(239, 68, 68, 0.15);
-  border: 1px solid rgba(239, 68, 68, 0.3);
-  padding: 2px 10px;
-  border-radius: 12px;
+  color: var(--ruby-primary);
+  background: var(--ruby-bg);
+  border: 1px solid var(--ruby-border);
+  padding: 2px 11px;
+  border-radius: var(--radius-pill);
 }
 
 .ayah-context-box {
   width: 100%;
   padding: 8px 12px;
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: var(--radius-sm);
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
 .ayah-snippet-label {
-  font-size: 10px;
+  font-size: 0.7rem;
   color: var(--text-dim);
   text-align: right;
   direction: rtl;
@@ -464,7 +462,7 @@ defineExpose({
 }
 
 .control-label {
-  font-size: 10px;
+  font-size: 0.7rem;
   font-weight: 700;
   letter-spacing: 0.05em;
   color: var(--text-dim);
@@ -486,18 +484,24 @@ defineExpose({
 }
 
 .stepper-label {
-  font-size: 10px;
+  font-size: 0.7rem;
   color: var(--text-dim);
 }
 
 .stepper-box {
   display: flex;
   align-items: center;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 6px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
   width: 100%;
   overflow: hidden;
+  transition: border-color var(--dur-fast) var(--ease-out),
+              box-shadow var(--dur-fast) var(--ease-out);
+}
+.stepper-box:focus-within {
+  border-color: var(--emerald-border);
+  box-shadow: 0 var(--shadow-e1);
 }
 
 .step-btn {
@@ -508,11 +512,12 @@ defineExpose({
   font-weight: 700;
   padding: 6px 10px;
   cursor: pointer;
-  transition: all 0.1s ease;
+  transition: background var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out);
 }
 .step-btn:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.1);
-  color: #fff;
+  background: var(--bg-surface-hover);
+  color: var(--text-main);
 }
 .step-btn:disabled {
   opacity: 0.3;
@@ -524,7 +529,7 @@ defineExpose({
   text-align: center;
   background: transparent;
   border: none;
-  color: #fff;
+  color: var(--text-main);
   font-size: 13px;
   font-weight: 700;
   padding: 6px 0;
@@ -552,25 +557,28 @@ defineExpose({
 }
 
 .raw-label {
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--text-dim);
   white-space: nowrap;
 }
 
 .raw-input {
   flex: 1;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 6px;
-  color: #fff;
-  font-size: 12px;
-  font-family: monospace;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-main);
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
   font-weight: 600;
   padding: 6px 10px;
   outline: none;
+  transition: border-color var(--dur-fast) var(--ease-out),
+              box-shadow var(--dur-fast) var(--ease-out);
 }
 .raw-input:focus {
-  border-color: #10b981;
+  border-color: var(--emerald-border);
+  box-shadow: 0 var(--shadow-e1);
 }
 
 /* Footer */
@@ -580,35 +588,38 @@ defineExpose({
   justify-content: flex-end;
   gap: 8px;
   padding: 12px 20px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(0, 0, 0, 0.15);
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
 }
 
 .btn {
   padding: 7px 16px;
-  font-size: 12px;
+  font-size: var(--text-xs);
   font-weight: 600;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   border: none;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background var(--dur-fast) var(--ease-out),
+              box-shadow var(--dur-fast) var(--ease-out);
 }
 
 .btn-secondary {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--bg-surface-elevated);
   color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
 }
 .btn-secondary:hover {
-  background: rgba(255, 255, 255, 0.12);
-  color: #fff;
+  background: var(--bg-surface-hover);
+  color: var(--text-main);
+  border-color: var(--border-medium);
 }
 
 .btn-primary {
-  background: #10b981;
+  background: var(--emerald-primary);
   color: #fff;
 }
 .btn-primary:hover:not(:disabled) {
-  background: #059669;
+  background: var(--emerald-primary);
 }
 .btn-primary:disabled {
   opacity: 0.4;

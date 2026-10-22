@@ -29,13 +29,16 @@ const EMPTY_PROJECT: AlignerProject = {
 
 import { 
   getApiBaseUrl, 
-  getAudioStreamUrl, 
+  getAudioStreamUrl,
+  resolveAudioSourceUrl,
+  isTauriEnvironment,
   saveProject, 
   createProject, 
   loadProject, 
   deleteProject, 
   duplicateProject 
 } from './api';
+import { vaultSave, vaultLoad, vaultDelete, vaultDuplicate, persistProjectAudio, safeProjectFileName } from './projectVault';
 import { auditSurah } from './auditorEngine';
 export { getApiBaseUrl, getAudioStreamUrl };
 
@@ -81,8 +84,20 @@ class ProjectStore {
   public loopMode = ref<StudioLoopMode>('none');
   public autoScrollMushaf = ref<boolean>(true);
   public issuesDrawerOpen = ref<boolean>(false);
+  public sidebarCollapsed = ref<boolean>(false);
   public isAuditing = ref<boolean>(true);
   public resolvedIssueIds = ref<Set<string>>(new Set());
+
+  // Typography Sizing
+  public mushafFontSize = ref<number>(
+    typeof localStorage !== 'undefined' ? (Number(localStorage.getItem('quran_mushaf_font_size')) || 1.95) : 1.95
+  );
+
+  public setMushafFontSize(size: number) {
+    const clamped = Math.max(1.3, Math.min(3.2, Number(size.toFixed(2))));
+    this.mushafFontSize.value = clamped;
+    try { localStorage.setItem('quran_mushaf_font_size', String(clamped)); } catch {}
+  }
 
   // Undo / Redo Stack & Auto-Save
   private historyStack: HistoryAction[] = [];
@@ -182,8 +197,18 @@ class ProjectStore {
     this.saveStatus.value = 'saving';
 
     try {
-      const fileName = this.project.file_name || `${this.project.project_name}.qproj`;
-      await saveProject(fileName, this.project);
+      if (isTauriEnvironment()) {
+        const fileName = this.project.file_name || `${this.project.project_name}.qproj`;
+        await saveProject(fileName, this.buildPersistentSnapshot());
+      } else {
+        // Browser vault: same snapshot shape, audio blobs stored beside it
+        if (!this.project.file_name) {
+          this.project.file_name = await this.uniqueWebFileName(safeProjectFileName(this.project.project_name));
+        }
+        const fileName = this.project.file_name;
+        await vaultSave(fileName, this.buildPersistentSnapshot());
+        await persistProjectAudio(fileName, this.project.surahs || []);
+      }
       this.isDirty.value = false;
       this.lastSavedAt.value = new Date();
       this.saveStatus.value = 'saved';
@@ -195,6 +220,45 @@ class ProjectStore {
       this.isSaving.value = false;
     }
     return false;
+  }
+
+  /**
+   * A name in the vault is only taken if a DIFFERENT project (different
+   * created_at) already owns it — so repeat autosaves keep their key while
+   * unrelated projects with identical names never clobber each other.
+   */
+  private async uniqueWebFileName(preferred: string): Promise<string> {
+    try {
+      const existing = await vaultLoad(preferred);
+      if (existing && existing.project.created_at !== this.project.created_at) {
+        const base = preferred.replace(/\.qproj$/i, '');
+        let n = 2;
+        let candidate = `${base} (${n}).qproj`;
+        let clash = await vaultLoad(candidate);
+        while (clash && clash.project.created_at !== this.project.created_at) {
+          candidate = `${base} (${++n}).qproj`;
+          clash = await vaultLoad(candidate);
+        }
+        return candidate;
+      }
+    } catch { /* vault unreadable — fall through to preferred */ }
+    return preferred;
+  }
+
+  /**
+   * Disk-safe copy of the project: strips runtime-only audio sources
+   * (blob:/data: URLs die with the session) and embedded audio payloads
+   * (kept for explicit portable exports, not for autosave).
+   */
+  private buildPersistentSnapshot(): AlignerProject {
+    const clone: AlignerProject = JSON.parse(JSON.stringify(this.project));
+    for (const s of clone.surahs || []) {
+      if (typeof s.audio_url === 'string' && /^(blob|data):/.test(s.audio_url)) {
+        s.audio_url = '';
+      }
+      if (s.audio_embedded) delete (s as any).audio_embedded;
+    }
+    return clone;
   }
 
   // Active Surah getter
@@ -445,7 +509,7 @@ class ProjectStore {
   // Automated Confidence Auditor Issues (Pure-TS Engine)
   public issues = computed<ConfidenceIssue[]>(() => {
     if (!this.activeSurah.value) return [];
-    const threshold = this.project.settings.confidence_warning_threshold || 0.85;
+    const threshold = this.project.settings?.confidence_warning_threshold || 0.85;
     return auditSurah(this.activeSurah.value, this.resolvedIssueIds.value, threshold);
   });
 
@@ -531,7 +595,7 @@ class ProjectStore {
     this.activeSurahNumber.value = surahNum;
     const s = this.project.surahs.find(item => item.surah_number === surahNum);
     if (s) {
-      const effectiveAudioUrl = (s.audio_file ? getAudioStreamUrl(s.audio_file) : null) || (s.audio_url ? getAudioStreamUrl(s.audio_url) : null);
+      const effectiveAudioUrl = resolveAudioSourceUrl(s);
       if (effectiveAudioUrl) {
         s.audio_url = effectiveAudioUrl;
         this.activeAudioUrl.value = effectiveAudioUrl;
@@ -1247,6 +1311,64 @@ class ProjectStore {
     }
   }
 
+  /**
+   * Review toggle for a whole project from the Projects hub — the hub-side
+   * twin of the sidebar's per-surah ✓ button: one click marks every surah
+   * reviewed (or sends everything back to review). Works on both desktop
+   * files and browser-vault projects; returns true when the project ended
+   * up verified.
+   */
+  public async toggleProjectReview(fileName: string): Promise<boolean> {
+    const applyTarget = (surahs: any[]): boolean => {
+      const allDone = surahs.length > 0 && surahs.every(s => s.status === 'verified');
+      const target = allDone ? 'needs_review' : 'verified';
+      surahs.forEach(s => { s.status = target; });
+      return target === 'verified';
+    };
+    try {
+      if (!isTauriEnvironment()) {
+        const vaultData = await vaultLoad(fileName);
+        if (!vaultData?.project) return false;
+        const nowVerified = applyTarget(vaultData.project.surahs || []);
+        vaultData.project.updated_at = new Date().toISOString();
+        await vaultSave(fileName, vaultData.project);
+        return nowVerified;
+      }
+      const data = await loadProject(fileName);
+      if (!data) return false;
+      const nowVerified = applyTarget(data.surahs || []);
+      (data as any).updated_at = new Date().toISOString();
+      await saveProject(fileName, data);
+      return nowVerified;
+    } catch (err) {
+      console.error('Failed to toggle project review state:', err);
+      return false;
+    } finally {
+      // If this project is open in the studio, mirror the change live
+      if (this.project.file_name === fileName && this.project.surahs?.length) {
+        const src = await this.readProjectStatuses(fileName);
+        if (src) this.project.surahs.forEach(s => { s.status = src; });
+        this.isDirty.value = true;
+        this.scheduleAutosave();
+      }
+    }
+  }
+
+  /** Status of every surah in a stored project ('verified' | 'needs_review'). */
+  private async readProjectStatuses(fileName: string): Promise<string | null> {
+    try {
+      if (!isTauriEnvironment()) {
+        const vaultData = await vaultLoad(fileName);
+        if (!vaultData?.project) return null;
+        return vaultData.project.surahs?.[0]?.status ?? null;
+      }
+      const data = await loadProject(fileName);
+      return data?.surahs?.[0]?.status ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   // Ingest Canonical Pipeline Output JSON Directly (Supports Multi-Surah Recitations)
   public loadAlignedSurah(canonicalOutput: any, audioPath?: string, audioUrl?: string) {
     if (!canonicalOutput) return;
@@ -1287,7 +1409,8 @@ class ProjectStore {
         totalDur = Math.ceil(lastAyah.end) + 1.0;
       }
 
-      const effectiveUrl = (audioPath ? getAudioStreamUrl(audioPath) : undefined) || (audioUrl ? getAudioStreamUrl(audioUrl) : undefined);
+      // Best playable source: session URLs win, bare names lose (shared resolver)
+      const effectiveUrl = resolveAudioSourceUrl({ audio_file: audioPath, audio_url: audioUrl }) || undefined;
 
       let effectiveIntro: SurahIntro | undefined = undefined;
       if (sData.intro && sData.intro.words && sData.intro.words.length > 0) {
@@ -1368,7 +1491,7 @@ class ProjectStore {
       this.selectSurah(firstAddedSurahNum);
       const firstSurah = this.project.surahs.find(s => s.surah_number === firstAddedSurahNum);
       if (firstSurah) {
-        const effectiveUrl = (firstSurah.audio_file ? getAudioStreamUrl(firstSurah.audio_file) : null) || (firstSurah.audio_url ? getAudioStreamUrl(firstSurah.audio_url) : null);
+        const effectiveUrl = resolveAudioSourceUrl(firstSurah);
         if (effectiveUrl) {
           firstSurah.audio_url = effectiveUrl;
           this.activeAudioUrl.value = effectiveUrl;
@@ -1569,7 +1692,7 @@ class ProjectStore {
     }
 
     let firstAddedSurahNum: number | null = null;
-    const effectiveUrl = (audioPath ? getAudioStreamUrl(audioPath) : undefined) || (audioUrl ? getAudioStreamUrl(audioUrl) : undefined);
+    const effectiveUrl = resolveAudioSourceUrl({ audio_file: audioPath, audio_url: audioUrl }) || undefined;
 
     for (const [sNum, data] of surahsMap.entries()) {
       if (data.ayahsMap.size === 0 && data.introWords.length === 0) continue;
@@ -1636,7 +1759,7 @@ class ProjectStore {
       this.selectSurah(firstAddedSurahNum);
       const firstSurah = this.project.surahs.find(s => s.surah_number === firstAddedSurahNum);
       if (firstSurah) {
-        const urlToUse = (firstSurah.audio_file ? getAudioStreamUrl(firstSurah.audio_file) : null) || (firstSurah.audio_url ? getAudioStreamUrl(firstSurah.audio_url) : null);
+        const urlToUse = resolveAudioSourceUrl(firstSurah);
         if (urlToUse) {
           firstSurah.audio_url = urlToUse;
           this.activeAudioUrl.value = urlToUse;
@@ -1669,7 +1792,7 @@ class ProjectStore {
     }
   }
 
-  // Create New Project via Tauri IPC and open it
+  // Create New Project — desktop writes via Tauri IPC, browser via the vault
   public async createNewProject(name: string, reciter?: string, riwayah?: string, retries = 2): Promise<boolean> {
     try {
       const projectData: Partial<AlignerProject> = {
@@ -1686,6 +1809,13 @@ class ProjectStore {
         },
         surahs: [],
       };
+      if (!isTauriEnvironment()) {
+        projectData.file_name = safeProjectFileName(name);
+        await vaultSave(projectData.file_name, projectData as AlignerProject);
+        this.loadProject(projectData as AlignerProject);
+        this.currentTab.value = 'studio';
+        return true;
+      }
       const result = await createProject(name, projectData);
       if (result?.file) {
         projectData.file_name = result.file;
@@ -1703,9 +1833,32 @@ class ProjectStore {
     return false;
   }
 
-  // Open Project by file name (.qproj)
+  // Open Project by file name (.qproj) — desktop disk or browser vault
   public async openProjectByFileName(fileName: string): Promise<boolean> {
     try {
+      if (!isTauriEnvironment()) {
+        const vaultData = await vaultLoad(fileName);
+        if (vaultData?.project) {
+          const data = vaultData.project;
+          data.file_name = fileName;
+          this.loadProject(data);
+          // Session audio lives in the vault — rebuild blob URLs for surahs
+          // that have no session/embedded source.
+          for (const s of this.project.surahs || []) {
+            if (!vaultData.audio.has(s.surah_number)) continue;
+            const custom = typeof s.audio_url === 'string' && /^(blob|data):/.test(s.audio_url);
+            if (custom) continue;
+            const blob = vaultData.audio.get(s.surah_number);
+            s.audio_url = URL.createObjectURL(blob);
+            if (this.activeSurah.value === s) {
+              this.activeAudioUrl.value = s.audio_url;
+            }
+          }
+          this.currentTab.value = 'studio';
+          return true;
+        }
+        return false;
+      }
       const data = await loadProject(fileName);
       if (data) {
         data.file_name = fileName;
@@ -1719,10 +1872,11 @@ class ProjectStore {
     return false;
   }
 
-  // Delete project file on disk
+  // Delete project file on disk (desktop) or in the browser vault
   public async deleteProjectFile(fileName: string): Promise<boolean> {
     try {
-      await deleteProject(fileName);
+      if (!isTauriEnvironment()) await vaultDelete(fileName);
+      else await deleteProject(fileName);
       return true;
     } catch (err) {
       console.error('Failed to delete project file:', err);
@@ -1733,6 +1887,10 @@ class ProjectStore {
   // Duplicate project file cleanly (QuranCaption ProjectService.duplicate)
   public async duplicateProjectFile(fileName: string): Promise<boolean> {
     try {
+      if (!isTauriEnvironment()) {
+        const newName = await vaultDuplicate(fileName);
+        return !!newName;
+      }
       await duplicateProject(fileName);
       return true;
     } catch (err) {
@@ -1747,6 +1905,16 @@ class ProjectStore {
     this.historyStack = [];
     this.redoStack = [];
     this.updateHistoryFlags();
+
+    // Hydrate embedded (portable) audio: data URLs are valid everywhere,
+    // and getAudioStreamUrl passes them through untouched.
+    for (const s of this.project.surahs || []) {
+      const emb = (s as any).audio_embedded;
+      if (emb?.base64 && !(typeof s.audio_url === 'string' && /^(blob|data):/.test(s.audio_url))) {
+        s.audio_url = `data:${emb.mime || 'audio/mpeg'};base64,${emb.base64}`;
+      }
+    }
+
     this.clearScheduledAutosave();
     this.isDirty.value = false;
     this.saveStatus.value = 'saved';
@@ -1782,7 +1950,9 @@ class ProjectStore {
 
     if (this.project.surahs && this.project.surahs.length > 0) {
       const firstSurah = this.project.surahs[0];
-      const effUrl = (firstSurah.audio_file ? getAudioStreamUrl(firstSurah.audio_file) : null) || (firstSurah.audio_url ? getAudioStreamUrl(firstSurah.audio_url) : null);
+      // Session-custom sources (data:/blob: — e.g. embedded portable audio) win over paths;
+      // a bare "name.ext" in audio_file is not a real path (browser-imported sessions).
+      const effUrl = resolveAudioSourceUrl(firstSurah);
       if (effUrl) {
         firstSurah.audio_url = effUrl;
         this.activeAudioUrl.value = effUrl;

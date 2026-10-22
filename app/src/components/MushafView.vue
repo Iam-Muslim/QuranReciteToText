@@ -1,66 +1,81 @@
 <template>
   <div class="mushaf-container">
-    <!-- View Switcher & Minimal Controls (Pinned Sticky Header) -->
-    <div class="view-header">
-      <div class="view-toggle">
-        <button 
-          class="toggle-btn" 
-          :class="{ 'active': projectStore.viewMode.value === 'mushaf_page' }"
-          @click="projectStore.viewMode.value = 'mushaf_page'"
-          title="Medina Mushaf View"
-        >
-          <span>Mushaf</span>
-        </button>
+    <!-- Pinned View Mode Switcher & Typography Sizing Bar -->
+    <div class="view-switcher-bar" v-if="projectStore.activeSurah.value">
+      <div class="switcher-left">
+        <div class="view-toggle-pill">
+          <button 
+            class="toggle-btn" 
+            :class="{ 'active': projectStore.viewMode.value === 'mushaf_page' }"
+            @click="projectStore.viewMode.value = 'mushaf_page'"
+            title="Medina Mushaf Sacred Page"
+          >
+            <BookOpen :size="12" />
+            <span>Mushaf</span>
+          </button>
 
-        <button 
-          class="toggle-btn" 
-          :class="{ 'active': projectStore.viewMode.value === 'ayah_studio' }"
-          @click="projectStore.viewMode.value = 'ayah_studio'"
-          title="Ayah-by-Ayah View"
-        >
-          <span>Verses</span>
-        </button>
+          <button 
+            class="toggle-btn" 
+            :class="{ 'active': projectStore.viewMode.value === 'ayah_studio' }"
+            @click="projectStore.viewMode.value = 'ayah_studio'"
+            title="Verses Studio Cards"
+          >
+            <ListTree :size="12" />
+            <span>Verses</span>
+          </button>
 
-        <button 
-          class="toggle-btn" 
-          :class="{ 'active': projectStore.viewMode.value === 'phoneme_inspector' }"
-          @click="projectStore.viewMode.value = 'phoneme_inspector'"
-          title="Phoneme Inspector"
-        >
-          <span>Phonemes</span>
-        </button>
+          <button 
+            class="toggle-btn" 
+            :class="{ 'active': projectStore.viewMode.value === 'phoneme_inspector' }"
+            @click="projectStore.viewMode.value = 'phoneme_inspector'"
+            title="Phoneme Atoms Inspector"
+          >
+            <Layers :size="12" />
+            <span>Phonemes</span>
+          </button>
+        </div>
       </div>
 
-      <!-- Riwayah Tradition Badge -->
-      <div class="riwayah-view-badge" v-if="currentRiwayahMeta" :title="`${currentRiwayahMeta.arabicName} — ${currentRiwayahMeta.readerArabic}`">
-        <span class="riwayah-name-ar">{{ currentRiwayahMeta.arabicName }}</span>
-        <span class="riwayah-pill-en" v-if="isNonHafs">{{ currentRiwayahMeta.id }}</span>
+      <div class="switcher-right">
+        <!-- Font Size Stepper (Mushaf Page Mode) -->
+        <div class="font-stepper-group" v-if="projectStore.viewMode.value === 'mushaf_page'" title="Adjust Quran Font Size">
+          <button 
+            class="stepper-btn" 
+            @click="projectStore.setMushafFontSize(projectStore.mushafFontSize.value - 0.15)"
+            title="Decrease Font Size"
+            :disabled="projectStore.mushafFontSize.value <= 1.3"
+          >
+            <span>A-</span>
+          </button>
+          <span class="stepper-val">{{ Math.round((projectStore.mushafFontSize.value / 1.95) * 100) }}%</span>
+          <button 
+            class="stepper-btn" 
+            @click="projectStore.setMushafFontSize(projectStore.mushafFontSize.value + 0.15)"
+            title="Increase Font Size"
+            :disabled="projectStore.mushafFontSize.value >= 3.2"
+          >
+            <span>A+</span>
+          </button>
+        </div>
       </div>
     </div>
 
-    <!-- Empty State when no recitation is active -->
+    <!-- Empty State -->
     <div v-if="!projectStore.activeSurah.value" class="mushaf-empty-wrapper">
-      <div class="mushaf-empty-card glass-panel">
-        <BookOpen :size="30" class="empty-icon" />
+      <div class="mushaf-empty-card">
+        <BookOpen :size="28" class="empty-icon" />
         <span class="empty-title">No Recitation Active</span>
-        <span class="empty-sub">Add a recitation in the sidebar or open a project in the Projects tab.</span>
+        <span class="empty-sub">Select or align a recitation in the sidebar to view Mushaf.</span>
       </div>
     </div>
 
-    <!-- VIEW 1: Pure Sacred Medina Mushaf -->
+    <!-- VIEW 1: Sacred Medina Mushaf -->
     <div 
       v-else-if="projectStore.viewMode.value === 'mushaf_page'" 
       class="mushaf-page-wrapper"
     >
-      <div class="mushaf-card glass-panel">
-        <!-- Surah Ornate Banner -->
-        <div class="surah-banner">
-          <div class="banner-border">
-            <h2 class="surah-title">سُورَةُ {{ projectStore.activeSurah.value.surah_name_arabic }}</h2>
-          </div>
-        </div>
-
-        <!-- Basmalah: ONLY if present in JSON intro -->
+      <div class="mushaf-card">
+        <!-- Basmalah -->
         <div 
           class="basmalah-row" 
           v-if="projectStore.activeSurah.value.intro && projectStore.activeSurah.value.intro.words && projectStore.activeSurah.value.intro.words.length > 0"
@@ -81,14 +96,14 @@
         </div>
 
         <!-- Sacred Verses Flow -->
-        <div class="verses-flow arabic-quran-text">
+        <div class="verses-flow arabic-quran-text" :style="{ fontSize: `${projectStore.mushafFontSize.value}rem` }">
           <template v-for="ayah in projectStore.activeSurah.value.ayahs" :key="ayah.ayah">
             <span 
               class="ayah-inline-group" 
               :class="{ 'ayah-focused': projectStore.activeAyahNumber.value === ayah.ayah }"
               :id="`ayah_block_${ayah.ayah}`"
             >
-              <!-- Canonical Ayah Words displayed strictly once (No duplicate repeats in sacred text) -->
+              <!-- Canonical Ayah Words -->
               <span 
                 v-for="word in getCanonicalAyahWords(ayah)" 
                 :key="word.location"
@@ -100,9 +115,10 @@
               >
                 {{ word.word }}
               </span>
-              <!-- Ayah End Number (Pure clean number, no brackets) -->
-              <span class="ayah-symbol" @click="handleAyahClick(ayah)">
-                {{ ayah.ayah }}
+
+              <!-- Medina Ayah End Marker -->
+              <span class="ayah-symbol" @click="handleAyahClick(ayah)" title="Ayah {{ ayah.ayah }}">
+                <span class="ayah-num">{{ ayah.ayah }}</span>
               </span>
             </span>
           </template>
@@ -118,19 +134,19 @@
       <div 
         v-for="ayah in projectStore.activeSurah.value?.ayahs" 
         :key="ayah.ayah"
-        class="ayah-row-card glass-panel"
+        class="ayah-row-card"
         :class="{ 'card-active': projectStore.activeAyahNumber.value === ayah.ayah }"
         :id="`ayah_card_${ayah.ayah}`"
       >
         <div class="ayah-row-left">
-          <button class="ayah-play-pill" @click="playAyah(ayah)" title="Play verse">
+          <button class="ayah-play-pill" @click="playAyah(ayah)" title="Play Ayah">
             <Play :size="10" />
             <span>{{ ayah.ayah }}</span>
           </button>
           <span 
             v-if="getCrossHafsAyahLabel(ayah.ayah)" 
             class="cross-hafs-pill" 
-            :title="`يقابل في ترقيم مصحف حفص الآية: ${getCrossHafsAyahLabel(ayah.ayah)}`"
+            :title="`يقابل في ترقيم حفص: ${getCrossHafsAyahLabel(ayah.ayah)}`"
           >
             حفص: {{ getCrossHafsAyahLabel(ayah.ayah) }}
           </span>
@@ -138,7 +154,6 @@
         </div>
 
         <div class="ayah-row-words arabic-quran-text">
-          <!-- Canonical Verse Words displayed once -->
           <span 
             v-for="word in getCanonicalAyahWords(ayah)" 
             :key="word.location"
@@ -162,12 +177,11 @@
       <div 
         v-for="ayah in projectStore.activeSurah.value?.ayahs" 
         :key="ayah.ayah"
-        class="phoneme-ayah-row glass-panel"
+        class="phoneme-ayah-row"
         :id="`ayah_card_${ayah.ayah}`"
       >
         <div class="ph-ayah-index">{{ ayah.ayah }}</div>
         <div class="ph-segments-container">
-          <!-- Each segment/take is isolated in its own line/sub-box to prevent timing collisions -->
           <div 
             v-for="(seg, sIdx) in (ayah.segments || [])" 
             :key="`ph_seg_${ayah.ayah}_${seg.segment || sIdx}`"
@@ -176,7 +190,7 @@
           >
             <div class="ph-segment-tag-row" v-if="(ayah.segments && ayah.segments.length > 1)">
               <span class="ph-seg-badge" :class="{ 'badge-rep': seg.is_repetition || sIdx > 0 }">
-                {{ seg.is_repetition || sIdx > 0 ? `مقطع ${seg.segment || (sIdx + 1)} (إعادة تلاوة)` : `المقطع ${seg.segment || (sIdx + 1)}` }}
+                {{ seg.is_repetition || sIdx > 0 ? `مقطع ${seg.segment || (sIdx + 1)} (إعادة)` : `المقطع ${seg.segment || (sIdx + 1)}` }}
               </span>
               <span class="ph-seg-timing">[{{ seg.start.toFixed(2) }}s - {{ seg.end.toFixed(2) }}s]</span>
             </div>
@@ -186,9 +200,7 @@
                 v-for="(word, wIdx) in seg.words" 
                 :key="`ph_w_${ayah.ayah}_${sIdx}_${wIdx}_${word.start}`"
                 class="ph-word-block"
-                :class="{ 
-                  'ph-active': isPhonemeBlockActive(word)
-                }"
+                :class="{ 'ph-active': isPhonemeBlockActive(word) }"
                 @click="handleWordClick(word)"
                 :id="`ph_word_${word.location}_${sIdx}`"
               >
@@ -214,33 +226,23 @@
 </template>
 
 <script setup lang="ts">
-import { computed, watch, nextTick } from 'vue';
+import { watch, nextTick } from 'vue';
 import { projectStore } from '../services/projectStore';
 import { 
   RiwayahProvider, 
-  normalizeRiwayahKey, 
-  isNonHafsRiwayah, 
-  RIWAYAT_METADATA 
+  isNonHafsRiwayah
 } from '../services/RiwayahProvider';
 import type { AlignedWord, AyahItem, PhonemeItem } from '../types/aligner';
 import { 
   BookOpen, 
-  Play 
+  Play,
+  ListTree,
+  Layers
 } from 'lucide-vue-next';
 
 const emit = defineEmits<{
   (e: 'word-context-menu', event: MouseEvent, word: AlignedWord): void;
 }>();
-
-const currentRiwayahMeta = computed(() => {
-  const r = normalizeRiwayahKey(projectStore.project?.settings?.riwayah);
-  return RIWAYAT_METADATA[r];
-});
-
-const isNonHafs = computed(() => {
-  const r = projectStore.project?.settings?.riwayah;
-  return isNonHafsRiwayah(r);
-});
 
 function getCrossHafsAyahLabel(ayahNum: number): string | null {
   const currentR = projectStore.project?.settings?.riwayah;
@@ -265,8 +267,6 @@ function getWordClasses(word: AlignedWord) {
   const isPlaying = projectStore.isPlaying.value;
   const isKaraokeActive = projectStore.currentKaraokeLocation.value === word.location;
   
-  // When playing, only the currently reciting word lights up (no stuck past selection).
-  // When paused, if a word is clicked it lights up with the same soft emerald tone.
   const isHighlighted = isPlaying
     ? isKaraokeActive
     : (isKaraokeActive || projectStore.activeWordLocation.value === word.location);
@@ -276,7 +276,6 @@ function getWordClasses(word: AlignedWord) {
   };
 }
 
-// Canonical words deduplicated by Quranic word position (avoids printing repeated phrases twice)
 function getCanonicalAyahWords(ayah: AyahItem): AlignedWord[] {
   if (!ayah.segments || ayah.segments.length === 0) return [];
   const wordMap = new Map<string, AlignedWord>();
@@ -334,8 +333,6 @@ function handleContextMenu(event: MouseEvent, word: AlignedWord) {
   emit('word-context-menu', event, word);
 }
 
-
-// Auto-scroll follow across Mushaf, Verses, and Phonemes tabs (maintains highlighted word at mid of screen)
 watch(() => projectStore.currentWordAtPlayhead.value, (word) => {
   if (!word || !projectStore.autoScrollMushaf.value) return;
 
@@ -371,82 +368,66 @@ watch(() => projectStore.activeAyahNumber.value, (ayahNum) => {
 .mushaf-container {
   flex: 1;
   overflow-y: auto;
-  padding: 12px 20px 30px;
+  padding: 12px 24px 36px;
   display: flex;
   flex-direction: column;
   background: var(--bg-base);
 }
 
-/* Pinned View Header Bar */
-.view-header {
+@media (max-width: 700px) {
+  .mushaf-container {
+    padding: 8px 10px 24px;
+  }
+}
+
+/* Pinned View Mode Switcher & Sizing Bar */
+.view-switcher-bar {
   position: sticky;
-  top: -12px;
+  top: 0;
   z-index: 30;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 0 10px 0;
-  margin-bottom: 12px;
-  background: var(--bg-base);
-  border-bottom: 1px solid var(--border-subtle);
+  max-width: 880px;
+  width: 100%;
+  margin: 0 auto 12px;
+  pointer-events: none;
 }
 
-.riwayah-view-badge {
+.switcher-left,
+.switcher-right {
+  pointer-events: auto;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 3px 9px;
-  background: rgba(56, 189, 248, 0.08);
-  border: 1px solid rgba(56, 189, 248, 0.2);
-  border-radius: 6px;
-}
-.riwayah-name-ar {
-  font-family: var(--font-arabic);
-  font-size: 0.85rem;
-  color: #38bdf8;
-  font-weight: 600;
-}
-.riwayah-pill-en {
-  font-size: 0.65rem;
-  font-weight: 700;
-  background: rgba(56, 189, 248, 0.2);
-  color: #7dd3fc;
-  padding: 1px 5px;
-  border-radius: 4px;
+  gap: 8px;
 }
 
-.cross-hafs-pill {
-  font-size: 9px;
-  font-family: var(--font-arabic);
-  color: #a78bfa;
-  background: rgba(167, 139, 250, 0.12);
-  border: 1px solid rgba(167, 139, 250, 0.28);
-  padding: 1px 6px;
-  border-radius: 12px;
-  white-space: nowrap;
-}
-
-.view-toggle {
+.view-toggle-pill {
   display: flex;
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  padding: 2px;
+  align-items: center;
+  background: var(--glass-bg);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-pill);
+  padding: 3px;
   gap: 2px;
+  box-shadow: var(--shadow-e2);
 }
+
 .toggle-btn {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 5px;
   background: transparent;
   border: none;
-  color: var(--text-dim);
-  border-radius: 4px;
+  color: var(--text-muted);
+  border-radius: var(--radius-pill);
   padding: 4px 12px;
-  font-size: 0.72rem;
+  font-size: var(--text-xs);
   font-weight: 500;
   cursor: pointer;
-  transition: all 0.12s ease;
+  transition: all var(--dur-fast) var(--ease-out);
 }
 .toggle-btn:hover {
   color: var(--text-main);
@@ -454,89 +435,167 @@ watch(() => projectStore.activeAyahNumber.value, (ayahNum) => {
 .toggle-btn.active {
   background: var(--bg-surface-elevated);
   color: var(--text-main);
-  border: 1px solid var(--border-medium);
+  box-shadow: var(--shadow-e1);
+  font-weight: 600;
+}
+
+/* Font Size Stepper Control */
+.font-stepper-group {
+  display: flex;
+  align-items: center;
+  background: var(--glass-bg);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-pill);
+  padding: 2px 6px;
+  gap: 4px;
+  box-shadow: var(--shadow-e1);
+}
+
+.stepper-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-pill);
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+.stepper-btn:hover:not(:disabled) {
+  background: var(--bg-surface-elevated);
+  color: var(--text-main);
+  box-shadow: var(--shadow-e1);
+}
+.stepper-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.stepper-val {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  min-width: 32px;
+  text-align: center;
+}
+
+/* Empty State */
+.mushaf-empty-wrapper {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+}
+.mushaf-empty-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 8px;
+  padding: 36px 40px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  border: 1px dashed var(--border-subtle);
+  max-width: 380px;
+}
+.empty-icon {
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+.empty-title {
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+.empty-sub {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  line-height: 1.4;
 }
 
 /* VIEW 1: Medina Mushaf */
 .mushaf-page-wrapper {
   display: flex;
   justify-content: center;
+  padding: 4px 0 24px;
 }
 
 .mushaf-card {
-  max-width: 920px;
+  max-width: 880px;
   width: 100%;
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  padding: 24px 36px 36px;
+  border-radius: var(--radius-lg);
+  padding: 28px 40px 44px;
+  box-shadow: var(--shadow-e2);
 }
 
-.surah-banner {
-  display: flex;
-  justify-content: center;
-  margin-bottom: 18px;
-}
-.banner-border {
-  background: var(--bg-surface-elevated);
-  border: 1px solid var(--border-medium);
-  border-radius: 6px;
-  padding: 4px 20px;
-}
-.surah-title {
-  font-family: var(--font-arabic);
-  font-size: 1.55rem;
-  color: #fff;
-  margin: 0;
+@media (max-width: 700px) {
+  .mushaf-card {
+    padding: 18px 16px 26px;
+  }
 }
 
+/* Basmalah Row */
 .basmalah-row {
   text-align: center;
-  margin-bottom: 20px;
+  margin-bottom: 24px;
   direction: rtl;
 }
-.static-basmalah, .basmalah-words {
+.basmalah-words {
   font-family: var(--font-arabic);
-  font-size: 1.55rem;
+  font-size: 1.65rem;
   color: var(--text-main);
 }
 
 .verses-flow {
-  font-size: 1.9rem;
-  line-height: 2.25;
-  color: #f8fafc;
+  font-size: 1.95rem;
+  line-height: 2.3;
+  color: var(--text-main);
   text-align: justify;
   text-align-last: center;
-  word-spacing: 4px;
+  word-spacing: 5px;
 }
 
 .ayah-inline-group {
   display: inline;
 }
 
-
-
+/* Authentic Medina Ayah End Marker */
 .ayah-symbol {
-  font-family: var(--font-mono) !important;
-  font-size: 0.72rem;
-  font-weight: 700;
-  color: var(--text-muted);
-  margin: 0 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  margin: 0 6px;
+  border-radius: 50%;
+  border: 1.5px solid var(--gold-border);
+  background: var(--gold-subtle);
   cursor: pointer;
   vertical-align: middle;
-  padding: 1px 6px;
-  border: 1px solid var(--border-medium);
-  border-radius: 4px;
-  background: var(--bg-surface-elevated);
-  display: inline-block;
-  line-height: 1.4;
-  border-radius: 3px;
-  transition: all 0.1s ease;
+  transition: all var(--dur-fast) var(--ease-out);
   user-select: none;
 }
 .ayah-symbol:hover {
-  color: var(--accent-primary);
-  background: var(--accent-subtle);
+  border-color: var(--gold-primary);
+  background: rgba(var(--gold-rgb), 0.20);
+  transform: scale(1.08);
+}
+.ayah-num {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--gold-primary);
+  line-height: 1;
 }
 
 /* VIEW 2: Ayah Studio Workstation */
@@ -544,7 +603,7 @@ watch(() => projectStore.activeAyahNumber.value, (ayahNum) => {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-width: 920px;
+  max-width: 880px;
   margin: 0 auto;
   width: 100%;
 }
@@ -553,15 +612,16 @@ watch(() => projectStore.activeAyahNumber.value, (ayahNum) => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 16px;
-  border-radius: 10px;
+  padding: 12px 18px;
+  border-radius: var(--radius-md);
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
-  transition: border-color 0.15s ease;
+  transition: all var(--dur-fast) var(--ease-out);
 }
 .ayah-row-card.card-active {
-  border-color: var(--accent-primary);
+  border-color: var(--accent-border);
   background: var(--bg-surface-elevated);
+  box-shadow: 0 0 0 1px var(--accent-subtle), var(--shadow-e1);
 }
 
 .ayah-row-left {
@@ -577,35 +637,43 @@ watch(() => projectStore.activeAyahNumber.value, (ayahNum) => {
   background: var(--bg-surface-elevated);
   border: 1px solid var(--border-subtle);
   color: var(--text-secondary);
-  border-radius: 4px;
-  padding: 3px 8px;
-  font-size: 0.72rem;
+  border-radius: var(--radius-pill);
+  padding: 3px 9px;
+  font-size: 11px;
   font-family: var(--font-mono);
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.12s ease;
+  transition: all var(--dur-fast) var(--ease-out);
 }
 .ayah-play-pill:hover {
   background: var(--accent-primary);
   border-color: var(--accent-primary);
-  color: #fff;
+  color: #ffffff;
 }
 .ayah-time-subtle {
   font-family: var(--font-mono);
-  font-size: 0.68rem;
-  color: var(--text-dim);
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.cross-hafs-pill {
+  font-size: 9px;
+  color: #a78bfa;
+  background: rgba(167, 139, 250, 0.1);
+  border: 1px solid rgba(167, 139, 250, 0.25);
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
 }
 
 .ayah-row-words {
   direction: rtl;
   font-family: var(--font-arabic) !important;
   font-size: 1.65rem;
-  line-height: 2.1;
+  line-height: 2;
 }
 
 /* VIEW 3: Phonemes */
 .phoneme-inspector-wrapper {
-  max-width: 920px;
+  max-width: 880px;
   margin: 0 auto;
   width: 100%;
   display: flex;
@@ -617,22 +685,22 @@ watch(() => projectStore.activeAyahNumber.value, (ayahNum) => {
   display: flex;
   align-items: flex-start;
   gap: 12px;
-  padding: 8px 12px;
-  border-radius: 6px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
 }
 .ph-ayah-index {
   font-family: var(--font-mono);
   font-weight: 700;
-  font-size: 0.75rem;
+  font-size: 11px;
   color: var(--accent-primary);
   padding-top: 4px;
 }
 .ph-segments-container {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   flex: 1;
 }
 .ph-segment-line {
@@ -640,32 +708,29 @@ watch(() => projectStore.activeAyahNumber.value, (ayahNum) => {
   flex-direction: column;
   gap: 6px;
   padding: 8px 10px;
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: var(--radius-xs);
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
 }
 .ph-segment-line.is-repetition-segment {
-  background: rgba(99, 102, 241, 0.04);
-  border: 1px dashed rgba(99, 102, 241, 0.25);
+  border-style: dashed;
 }
 .ph-segment-tag-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 2px;
 }
 .ph-seg-badge {
   font-size: 10px;
   font-weight: 600;
-  color: #94a3b8;
-  background: rgba(255, 255, 255, 0.06);
-  padding: 2px 8px;
-  border-radius: 4px;
+  color: var(--text-muted);
+  background: var(--bg-surface);
+  padding: 2px 7px;
+  border-radius: var(--radius-xs);
 }
 .ph-seg-badge.badge-rep {
   color: #a5b4fc;
   background: rgba(99, 102, 241, 0.15);
-  border: 1px solid rgba(99, 102, 241, 0.3);
 }
 .ph-seg-timing {
   font-family: var(--font-mono);
@@ -675,84 +740,67 @@ watch(() => projectStore.activeAyahNumber.value, (ayahNum) => {
 .ph-words-flow {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
   direction: rtl;
-  flex: 1;
 }
 .ph-word-block {
   background: var(--bg-surface-elevated);
   border: 1px solid var(--border-subtle);
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   padding: 4px 6px;
   display: flex;
   flex-direction: column;
   align-items: center;
   cursor: pointer;
-  transition: all 0.12s ease;
-}
-.ph-word-block.ph-selected {
-  border-color: #10b981;
-  background: rgba(16, 185, 129, 0.18);
-  box-shadow: none;
+  transition: all var(--dur-fast) var(--ease-out);
 }
 .ph-word-block.ph-active {
-  border-color: #10b981;
-  background: rgba(16, 185, 129, 0.18);
-  box-shadow: none;
+  border-color: var(--emerald-primary);
+  background: rgba(16, 185, 129, 0.15);
 }
 .ph-word-text {
   font-family: var(--font-arabic);
   font-size: 1.1rem;
-  color: #fff;
+  color: var(--text-main);
 }
 .ph-chain {
   display: flex;
-  gap: 3px;
+  gap: 2px;
   margin-top: 2px;
 }
 .ph-atom {
   font-family: var(--font-arabic);
-  font-size: 0.85rem;
+  font-size: 10px;
   color: var(--text-secondary);
   background: var(--bg-base);
   border: 1px solid var(--border-subtle);
   padding: 1px 4px;
-  border-radius: 3px;
+  border-radius: 2px;
   cursor: pointer;
 }
 .ph-atom.atom-playing {
   background: var(--emerald-primary);
   border-color: var(--emerald-primary);
-  color: #fff;
+  color: #ffffff;
 }
 
-.mushaf-empty-wrapper {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 40px;
+/* Light Theme High-Contrast Overrides */
+html[data-theme='light'] .cross-hafs-pill {
+  color: #6d28d9;
+  background: #ede9fe;
+  border-color: #c4b5fd;
 }
-.mushaf-empty-card {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  gap: 10px;
-  padding: 36px 48px;
-  border-radius: 12px;
-  background: var(--bg-surface);
-  border: 1px dashed var(--border-subtle);
-  max-width: 440px;
+html[data-theme='light'] .ph-seg-badge.badge-rep {
+  color: #4338ca;
+  background: #e0e7ff;
 }
-.empty-title {
-  font-size: 1.05rem;
-  font-weight: 600;
-  color: #fff;
+html[data-theme='light'] .ph-word-block.ph-active {
+  border-color: var(--emerald-primary);
+  background: #d1fae5;
 }
-.empty-desc {
-  font-size: 0.8rem;
-  color: var(--text-dim);
-  line-height: 1.45;
+html[data-theme='light'] .ph-atom.atom-playing {
+  background: var(--emerald-primary);
+  border-color: var(--emerald-primary);
+  color: #ffffff;
 }
 </style>

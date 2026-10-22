@@ -1,74 +1,32 @@
 <template>
   <div class="projects-container">
-    <!-- Clean Desktop Header (QuranCaption Aesthetic) -->
-    <header class="hub-header">
-      <div class="header-main">
-        <div class="title-group">
-          <h1 class="page-title">Projects</h1>
-          <p class="page-subtitle">Quran recitation alignment workspaces and audio sessions</p>
-        </div>
+    <input 
+      type="file" 
+      ref="fileInputRef" 
+      accept=".qproj,.json" 
+      style="display: none" 
+      @change="handleFileInputChange" 
+    />
 
-        <div class="action-group">
-          <input 
-            type="file" 
-            ref="fileInputRef" 
-            accept=".qproj,.json" 
-            style="display: none" 
-            @change="handleFileInputChange" 
-          />
-          <button 
-            class="btn-secondary" 
-            @click="triggerFileInput" 
-            title="Import .qproj project file"
-          >
-            <FolderOpen :size="14" />
-            <span>Import</span>
-          </button>
-
-          <button 
-            class="btn-secondary" 
-            @click="revealProjectsDirectory" 
-            title="Reveal projects folder in Explorer"
-          >
-            <Folder :size="14" />
-            <span>Folder</span>
-          </button>
-
-          <button 
-            class="btn-icon" 
-            @click="fetchProjects" 
-            :disabled="isFetching"
-            title="Refresh projects"
-          >
-            <RefreshCw :size="14" :class="{ 'spin': isFetching }" />
-          </button>
-
-          <button 
-            class="btn-primary" 
-            @click="showNewModal = true" 
-            title="Create a new recitation alignment project"
-          >
-            <Plus :size="15" />
-            <span>New Project</span>
-          </button>
-        </div>
-      </div>
-
-      <!-- Controls Row: Search, Status Filter, Sort & View Switcher -->
-      <div class="controls-row">
-        <!-- Search Input -->
+    <!-- Modern Minimalist Toolbar -->
+    <header class="hub-toolbar">
+      <div class="toolbar-left">
+        <!-- Quick Search -->
         <div class="search-wrap">
-          <Search :size="14" class="search-icon" />
+          <Search :size="13" class="search-icon" />
           <input 
+            ref="searchInputRef"
             type="text" 
             v-model="searchQuery" 
-            placeholder="Search by name, reciter, or surah..." 
+            placeholder="Search projects…" 
             class="search-input"
+            spellcheck="false"
           />
-          <button v-if="searchQuery" class="clear-btn" @click="searchQuery = ''">✕</button>
+          <button v-if="searchQuery" class="clear-btn" @click="searchQuery = ''" title="Clear">✕</button>
+          <span v-else class="kbd-hint search-kbd">/</span>
         </div>
 
-        <!-- Minimal Status Tabs -->
+        <!-- Filter Segmented Tabs -->
         <div class="status-tabs">
           <button 
             class="tab-btn" 
@@ -91,66 +49,86 @@
             @click="activeStatusFilter = 'needs_review'"
           >
             <span class="dot dot-amber"></span>
-            Needs Review
-          </button>
-          <button 
-            class="tab-btn" 
-            :class="{ 'active': activeStatusFilter === 'draft' }"
-            @click="activeStatusFilter = 'draft'"
-          >
-            <span class="dot dot-gray"></span>
-            Draft
+            Review
           </button>
         </div>
+      </div>
 
-        <!-- Right Side: Sort & View Mode Switcher -->
-        <div class="view-controls">
-          <div class="sort-select-wrap">
-            <SlidersHorizontal :size="12" class="sort-icon" />
-            <select v-model="sortKey" class="sort-select">
-              <option value="updated">Recently Modified</option>
-              <option value="name">Name (A-Z)</option>
-              <option value="duration">Audio Duration</option>
-              <option value="ayahs">Ayah Count</option>
-            </select>
-          </div>
+      <div class="toolbar-right">
+        <!-- Sort Control -->
+        <div class="sort-select-wrap">
+          <SlidersHorizontal :size="12" class="sort-icon" />
+          <select v-model="sortKey" class="sort-select">
+            <option value="updated">Recent</option>
+            <option value="review">Needs Review First</option>
+            <option value="surahs">Surah Count</option>
+            <option value="name">Name (A-Z)</option>
+          </select>
+        </div>
 
-          <div class="mode-toggle">
-            <button 
-              class="mode-btn" 
-              :class="{ 'active': viewMode === 'grid' }"
-              @click="setViewMode('grid')"
-              title="Card Grid View"
-            >
-              <LayoutGrid :size="14" />
+        <!-- Overflow Menu -->
+        <div class="more-wrap" ref="moreWrapRef">
+          <button 
+            class="btn-icon" 
+            :class="{ 'more-active': moreOpen }"
+            @click.stop="moreOpen = !moreOpen" 
+            title="More Options"
+          >
+            <MoreHorizontal :size="14" />
+          </button>
+          <div v-if="moreOpen" class="more-menu glass-float anim-scale">
+            <button v-if="isTauriEnv" class="more-item" @click="revealProjectsDirectory(); moreOpen = false">
+              <Folder :size="13" />
+              <span>Open folder</span>
             </button>
-            <button 
-              class="mode-btn" 
-              :class="{ 'active': viewMode === 'list' }"
-              @click="setViewMode('list')"
-              title="Table List View"
-            >
-              <List :size="14" />
+            <button class="more-item" @click="triggerFileInput(); moreOpen = false">
+              <FolderOpen :size="13" />
+              <span>Import .qproj</span>
+            </button>
+            <button class="more-item" @click="fetchProjects(); moreOpen = false">
+              <RefreshCw :size="13" :class="{ 'spin': isFetching }" />
+              <span>Refresh list</span>
             </button>
           </div>
         </div>
       </div>
     </header>
 
-    <!-- Main Workspace Area -->
+    <!-- Welcome -->
+    <div class="hub-hero-banner">
+      <div v-if="loadError" class="error-banner anim-rise">
+        <span>{{ loadError }}</span>
+        <button class="error-dismiss" @click="loadError = ''">✕</button>
+      </div>
+
+      <h1 class="hero-title arabic-quran-text" dir="rtl">بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ</h1>
+    </div>
+
+    <!-- Main Workspace -->
     <main class="hub-main">
-      <!-- Loading Skeleton (Initial Fetch Only) -->
-      <div v-if="isFetching && projectsList.length === 0" class="empty-state">
-        <RefreshCw :size="24" class="spin text-accent" />
-        <p class="state-text">Loading projects...</p>
+      <!-- Loading Shimmer -->
+      <div v-if="isFetching && projectsList.length === 0" class="projects-grid">
+        <div v-for="i in 6" :key="i" class="skeleton-card">
+          <div class="skeleton-thumb shimmer"></div>
+          <div class="skeleton-body">
+            <div class="skeleton-line shimmer" style="width: 70%"></div>
+            <div class="skeleton-line shimmer" style="width: 40%"></div>
+          </div>
+        </div>
       </div>
 
       <!-- Empty State -->
-      <div v-else-if="filteredProjects.length === 0" class="empty-state">
-        <FolderKanban :size="38" class="empty-icon" />
-        <h3 class="empty-title">{{ searchQuery ? 'No matching projects found' : 'No projects created yet' }}</h3>
+      <div v-else-if="filteredProjects.length === 0" class="empty-state anim-rise">
+        <div class="empty-orb">
+          <FolderKanban :size="28" class="empty-icon" />
+        </div>
+        <h3 class="empty-title">{{ searchQuery ? 'No matching projects' : 'No projects found' }}</h3>
         <p class="empty-desc">
-          {{ searchQuery ? 'Try adjusting your search query or status filter.' : 'Create your first recitation alignment project or import an existing .qproj file.' }}
+          {{ searchQuery
+            ? 'Try a different search query or filter.'
+            : (isTauriEnv
+              ? 'Create a recitation project or import an existing .qproj archive.'
+              : 'Open your portable .qproj — timings and audio travel inside the file.') }}
         </p>
         <div class="empty-actions" v-if="!searchQuery">
           <button class="btn-primary" @click="showNewModal = true">
@@ -164,185 +142,107 @@
         </div>
       </div>
 
-      <!-- View 1: Card Grid (Directly modeled on QuranCaption's ProjectDetailCard) -->
-      <div v-else-if="viewMode === 'grid'" class="projects-grid">
+      <!-- Project Card Grid -->
+      <div v-else class="projects-grid stagger">
+        <!-- New Project Tile -->
+        <button class="create-tile" @click="showNewModal = true">
+          <span class="create-orb">
+            <Plus :size="18" />
+          </span>
+          <span class="create-label">New Project</span>
+        </button>
+
+        <!-- Project Cards -->
         <div 
           v-for="p in filteredProjects" 
           :key="p.file_name"
           class="project-card"
           @click="openProject(p)"
         >
-          <!-- Card Thumbnail Header (QuranCaption Style) -->
+          <!-- Card Header / Watermark -->
           <div class="card-thumbnail">
-            <!-- Center Surah Number / Watermark -->
-            <div class="thumbnail-surah">
-              <span class="surah-num">{{ getSurahWatermark(p) }}</span>
-              <span class="surah-name" v-if="p.primary_surah?.surah_name_arabic">
+            <div class="watermark-layer">
+              <span class="surah-watermark-ar" v-if="p.primary_surah?.surah_name_arabic" dir="rtl">
                 {{ p.primary_surah.surah_name_arabic }}
               </span>
+              <span class="surah-num-pill">Surah {{ getSurahWatermark(p) }}</span>
             </div>
 
-            <!-- Top Right: Status Badge -->
-            <div class="thumbnail-status" :class="getStatusClass(p.status)">
-              <span class="status-dot"></span>
-              <span>{{ getStatusLabel(p.status) }}</span>
-            </div>
+            <!-- Review Toggle (same as the sidebar's ✓ button — one click marks reviewed) -->
+            <button
+              class="card-status-chip"
+              :class="[getStatusClass(p.status), { 'is-done': isVerified(p) }]"
+              @click.stop="toggleReview(p)"
+              :title="isVerified(p) ? 'Reviewed — click to send back to review' : 'Click to mark reviewed'"
+            >
+              <CircleCheck :size="11" v-if="isVerified(p)" />
+              <Circle :size="11" v-else />
+              <span class="status-chip-label">{{ isVerified(p) ? 'Verified' : 'Review' }}</span>
+            </button>
 
-            <!-- Bottom Left: Reciter -->
-            <div class="thumbnail-reciter" v-if="p.reciter">
-              <Mic :size="11" />
-              <span>{{ p.reciter }}</span>
-            </div>
-
-            <!-- Bottom Right: Duration Badge -->
+            <!-- Duration Badge -->
             <div class="thumbnail-duration" v-if="p.total_duration > 0">
-              <Clock :size="10" />
               <span>{{ formatDuration(p.total_duration) }}</span>
             </div>
           </div>
 
-          <!-- Card Details -->
+          <!-- Card Info -->
           <div class="card-details">
             <h3 class="card-name" :title="p.project_name">{{ p.project_name }}</h3>
+            
+            <div class="card-meta-line">
+              <span v-if="p.reciter" class="meta-tag">
+                <span>{{ p.reciter }}</span>
+              </span>
+              <span v-if="p.total_ayahs > 0" class="meta-tag dim">
+                <span>{{ p.total_ayahs }} ayahs</span>
+              </span>
+            </div>
 
-            <div class="card-meta">
-              <span class="meta-item" v-if="p.riwayah">{{ p.riwayah }}</span>
-              <span class="meta-dot" v-if="p.riwayah && p.total_ayahs > 0">•</span>
-              <span class="meta-item" v-if="p.total_ayahs > 0">{{ p.total_ayahs }} Ayahs</span>
-              <span class="meta-dot">•</span>
-              <span class="meta-item time">{{ formatDateRelative(p.updated_at) }}</span>
+            <div class="card-time-row">
+              <span class="time-text">{{ formatDateRelative(p.updated_at) }}</span>
             </div>
           </div>
 
-          <!-- Card Footer Actions -->
-          <div class="card-footer" @click.stop>
-            <button class="btn-card-open" @click="openProject(p)" title="Open in Studio">
-              <span>Open</span>
-              <ArrowRight :size="13" />
+          <!-- Hover-Action Floating Dock -->
+          <div class="card-actions-dock" @click.stop>
+            <button class="btn-card-action" @click="duplicateProject(p)" title="Duplicate">
+              <Copy :size="12" />
             </button>
-
-            <div class="card-icons">
-              <button 
-                class="btn-card-tool" 
-                @click="duplicateProject(p)" 
-                title="Duplicate project"
-              >
-                <Copy :size="13" />
-              </button>
-              <button 
-                class="btn-card-tool" 
-                @click="revealProjectInExplorer(p)" 
-                title="Reveal in Windows Explorer"
-              >
-                <Folder :size="13" />
-              </button>
-              <button 
-                class="btn-card-tool" 
-                @click="exportProject(p)" 
-                title="Download .qproj"
-              >
-                <Download :size="13" />
-              </button>
-              <button 
-                class="btn-card-tool btn-danger" 
-                @click="deleteProject(p)" 
-                title="Delete project"
-              >
-                <Trash2 :size="13" />
-              </button>
-            </div>
+            <button v-if="isTauriEnv" class="btn-card-action" @click="revealProjectInExplorer(p)" title="Open in Explorer">
+              <Folder :size="12" />
+            </button>
+            <button class="btn-card-action" @click="exportProject(p)" title="Download .qproj">
+              <Download :size="12" />
+            </button>
+            <button
+              class="btn-card-action btn-delete"
+              :class="{ 'armed-danger': confirmDeleteFile === p.file_name }"
+              @click="requestDelete(p)"
+              :title="confirmDeleteFile === p.file_name ? 'Click again to confirm delete' : 'Delete Project'"
+            >
+              <Trash2 :size="12" />
+            </button>
           </div>
         </div>
       </div>
-
-      <!-- View 2: High-Density Table List View -->
-      <div v-else class="table-wrap">
-        <table class="projects-table">
-          <thead>
-            <tr>
-              <th class="col-surah">Surah</th>
-              <th class="col-name">Project Name</th>
-              <th class="col-reciter">Reciter</th>
-              <th class="col-riwayah">Riwayah</th>
-              <th class="col-status">Status</th>
-              <th class="col-ayahs">Ayahs</th>
-              <th class="col-duration">Duration</th>
-              <th class="col-updated">Updated</th>
-              <th class="col-actions">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr 
-              v-for="p in filteredProjects" 
-              :key="p.file_name"
-              class="table-row"
-              @click="openProject(p)"
-            >
-              <td class="col-surah">
-                <span class="table-surah-badge">{{ getSurahWatermark(p) }}</span>
-              </td>
-              <td class="col-name">
-                <div class="name-text" :title="p.project_name">{{ p.project_name }}</div>
-                <div class="file-text">{{ p.file_name }}</div>
-              </td>
-              <td class="col-reciter">
-                {{ p.reciter || '—' }}
-              </td>
-              <td class="col-riwayah">
-                {{ p.riwayah || '—' }}
-              </td>
-              <td class="col-status">
-                <span class="status-badge-inline" :class="getStatusClass(p.status)">
-                  <span class="status-dot"></span>
-                  <span>{{ getStatusLabel(p.status) }}</span>
-                </span>
-              </td>
-              <td class="col-ayahs">
-                {{ p.total_ayahs || 0 }}
-              </td>
-              <td class="col-duration">
-                {{ formatDuration(p.total_duration) }}
-              </td>
-              <td class="col-updated">
-                {{ formatDateRelative(p.updated_at) }}
-              </td>
-              <td class="col-actions" @click.stop>
-                <div class="table-actions-row">
-                  <button class="btn-table-open" @click="openProject(p)" title="Open in Studio">
-                    Open
-                  </button>
-                  <button class="btn-card-tool" @click="duplicateProject(p)" title="Duplicate">
-                    <Copy :size="12" />
-                  </button>
-                  <button class="btn-card-tool" @click="revealProjectInExplorer(p)" title="Reveal folder">
-                    <Folder :size="12" />
-                  </button>
-                  <button class="btn-card-tool btn-danger" @click="deleteProject(p)" title="Delete">
-                    <Trash2 :size="12" />
-                  </button>
-                </div>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
     </main>
 
-    <!-- Create New Project Modal -->
+    <!-- Clean, Minimalist Create Modal -->
     <div v-if="showNewModal" class="modal-backdrop" @click.self="showNewModal = false">
-      <div class="modal-box">
-        <div class="modal-header">
-          <h3 class="modal-title">New Recitation Project</h3>
-          <button class="modal-close-btn" @click="showNewModal = false">✕</button>
+      <div class="modal-card glass-float anim-scale" @click.stop>
+        <div class="modal-card-header">
+          <h3 class="modal-heading">New Recitation Project</h3>
+          <button class="btn-icon" @click="showNewModal = false" title="Close">✕</button>
         </div>
 
         <form @submit.prevent="handleCreateProject" class="modal-form">
           <div class="form-group">
-            <label class="form-label">Project Name *</label>
+            <label class="form-label">Project Name</label>
             <input 
               type="text" 
               v-model="newProjectName" 
-              placeholder="e.g., Surat Al-Kahf - Mishary Rashid" 
+              placeholder="e.g. Al-Fatihah · Mishary Rashid" 
               required
               autofocus
               class="form-input"
@@ -350,44 +250,37 @@
           </div>
 
           <div class="form-group">
-            <label class="form-label">Reciter (Optional)</label>
+            <label class="form-label">Reciter (optional)</label>
             <input 
               type="text" 
               v-model="newReciterName" 
-              placeholder="e.g., Sheikh Mishary Rashid Alafasy" 
+              placeholder="Reciter Name" 
               class="form-input"
             />
           </div>
 
           <div class="form-group">
-            <label class="form-label">Riwayah</label>
-            <select v-model="newRiwayah" class="form-select">
+            <label class="form-label">Recitation Tradition (Riwayah)</label>
+            <select v-model="newRiwayah" class="form-input form-select">
               <option value="Hafs">حفص عن عاصم — Hafs 'an 'Asim</option>
               <option value="Warsh">ورش عن نافع — Warsh 'an Nafi'</option>
               <option value="Qaloon">قالون عن نافع — Qalun 'an Nafi'</option>
               <option value="Shouba">شعبة عن عاصم — Shu'bah 'an 'Asim</option>
-              <option value="Doori">الدوري عن أبي عمرو — Al-Duri 'an Abi 'Amr</option>
-              <option value="Soosi">السوسي عن أبي عمرو — Al-Susi 'an Abi 'Amr</option>
-              <option value="Bazzi">البزي عن ابن كثير — Al-Bazzi 'an Ibn Kathir</option>
-              <option value="Qumbul">قنبل عن ابن كثير — Qumbul 'an Ibn Kathir</option>
+              <option value="Doori">الدوري عن أبي عمرو — Al-Duri</option>
+              <option value="Soosi">السوسي عن أبي عمرو — Al-Susi</option>
+              <option value="Bazzi">البزي عن ابن كثير — Al-Bazzi</option>
+              <option value="Qumbul">قنبل عن ابن كثير — Qumbul</option>
             </select>
           </div>
 
-          <div class="modal-actions">
-            <button 
-              type="button" 
-              class="btn-secondary" 
-              @click="showNewModal = false"
-            >
-              Cancel
-            </button>
+          <div class="modal-card-footer">
+            <button type="button" class="btn-secondary" @click="showNewModal = false">Cancel</button>
             <button 
               type="submit" 
               class="btn-primary" 
               :disabled="isCreating || !newProjectName.trim()"
             >
-              <span v-if="isCreating">Creating...</span>
-              <span v-else>Create Project</span>
+              <span>{{ isCreating ? 'Creating…' : 'Create Project' }}</span>
             </button>
           </div>
         </form>
@@ -397,48 +290,74 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed, watch } from 'vue';
+import { ref, onMounted, onUnmounted, computed, watch } from 'vue';
 import { projectStore } from '../services/projectStore';
-import { listProjects, loadProject, revealInExplorer } from '../services/api';
+import { listProjects, loadProject, revealInExplorer, isTauriEnvironment } from '../services/api';
+import { vaultList } from '../services/projectVault';
 import type { ProjectSummary } from '../types/aligner';
 import { 
   FolderKanban,
   FolderOpen, 
   Folder, 
   Plus, 
-  ArrowRight, 
   Copy,
   Download, 
   Trash2,
   Search,
-  Clock,
   RefreshCw,
-  LayoutGrid,
-  List,
+  Circle,
+  CircleCheck,
   SlidersHorizontal,
-  Mic
+  MoreHorizontal
 } from 'lucide-vue-next';
 
 const CACHE_KEY = 'quran_studio_projects_cache';
 
-// Reactive State
 const searchQuery = ref('');
-const activeStatusFilter = ref<'all' | 'verified' | 'needs_review' | 'draft'>('all');
-const sortKey = ref<'updated' | 'name' | 'duration' | 'ayahs'>('updated');
-const viewMode = ref<'grid' | 'list'>('grid');
+const activeStatusFilter = ref<'all' | 'verified' | 'needs_review'>('all');
+const sortKey = ref<'updated' | 'review' | 'surahs' | 'name'>('updated');
 
 const showNewModal = ref(false);
 const newProjectName = ref('');
 const newReciterName = ref('');
-const newRiwayah = ref("Hafs 'an 'Asim");
+const newRiwayah = ref('Hafs');
 const isCreating = ref(false);
 const isFetching = ref(false);
 const projectsList = ref<ProjectSummary[]>([]);
 const fileInputRef = ref<HTMLInputElement | null>(null);
+const searchInputRef = ref<HTMLInputElement | null>(null);
 
-// Lifecycle
+const moreOpen = ref(false);
+const moreWrapRef = ref<HTMLElement | null>(null);
+
+/** Desktop app vs shared-link/browser mode (vault storage, no folder reveal). */
+const isTauriEnv = isTauriEnvironment();
+
+const confirmDeleteFile = ref<string | null>(null);
+const loadError = ref('');
+let deleteArmTimer: ReturnType<typeof setTimeout> | null = null;
+
+function requestDelete(p: ProjectSummary) {
+  const fname = getProjectFileName(p) || '';
+  if (!fname) return;
+  (p as any).file_name = fname;
+  if (confirmDeleteFile.value === fname) {
+    deleteProject(p);
+    return;
+  }
+  confirmDeleteFile.value = fname;
+  if (deleteArmTimer) clearTimeout(deleteArmTimer);
+  deleteArmTimer = setTimeout(() => { confirmDeleteFile.value = null; }, 3200);
+}
+
+watch(showNewModal, (open) => {
+  if (!open) return;
+  const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') showNewModal.value = false; };
+  window.addEventListener('keydown', onKey);
+  watch(showNewModal, () => window.removeEventListener('keydown', onKey), { once: true });
+});
+
 onMounted(() => {
-  // 1. Instant cache load (0ms rendering)
   try {
     const cached = localStorage.getItem(CACHE_KEY);
     if (cached) {
@@ -446,14 +365,24 @@ onMounted(() => {
     }
   } catch {}
 
-  const savedView = localStorage.getItem('quran_projects_view_mode');
-  if (savedView === 'grid' || savedView === 'list') {
-    viewMode.value = savedView;
-  }
-
-  // 2. Fetch projects immediately on mount
   fetchProjects();
+
+  window.addEventListener('keydown', handleGlobalKey);
+  window.addEventListener('click', handleOutsideClick);
 });
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleGlobalKey);
+  window.removeEventListener('click', handleOutsideClick);
+});
+
+function handleOutsideClick(e: MouseEvent) {
+  if (!moreOpen.value) return;
+  const t = e.target as Node;
+  if (moreWrapRef.value && !moreWrapRef.value.contains(t)) {
+    moreOpen.value = false;
+  }
+}
 
 watch(() => projectStore.currentTab.value, (newTab) => {
   if (newTab === 'projects') {
@@ -461,18 +390,17 @@ watch(() => projectStore.currentTab.value, (newTab) => {
   }
 });
 
-function setViewMode(mode: 'grid' | 'list') {
-  viewMode.value = mode;
-  try {
-    localStorage.setItem('quran_projects_view_mode', mode);
-  } catch {}
+function handleGlobalKey(e: KeyboardEvent) {
+  if (e.key !== '/' || projectStore.currentTab.value !== 'projects') return;
+  const t = e.target as HTMLElement | null;
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+  e.preventDefault();
+  searchInputRef.value?.focus();
 }
 
-// Filtered & Sorted Projects
 const filteredProjects = computed(() => {
   let list = projectsList.value;
 
-  // 1. Search Query
   const q = searchQuery.value.trim().toLowerCase();
   if (q) {
     list = list.filter(p => {
@@ -485,29 +413,28 @@ const filteredProjects = computed(() => {
     });
   }
 
-  // 2. Status Filter
   if (activeStatusFilter.value !== 'all') {
     list = list.filter(p => {
-      const st = (p.status || 'draft').toLowerCase();
+      const st = String(p.status || '').toLowerCase();
       if (activeStatusFilter.value === 'verified') return st === 'verified' || st === 'completed' || st === 'done';
-      if (activeStatusFilter.value === 'needs_review') return st === 'needs_review' || st === 'review';
-      if (activeStatusFilter.value === 'draft') return st === 'draft' || st === 'aligned' || !p.status;
+      if (activeStatusFilter.value === 'needs_review') return st === 'needs_review' || st === 'review' || st === 'aligned' || !p.status;
       return true;
     });
   }
 
-  // 3. Sorting
+  const byRecent = (a: ProjectSummary, b: ProjectSummary) =>
+    (new Date(b.updated_at).getTime() || 0) - (new Date(a.updated_at).getTime() || 0);
+
   return [...list].sort((a, b) => {
     if (sortKey.value === 'name') {
       return a.project_name.localeCompare(b.project_name);
-    } else if (sortKey.value === 'duration') {
-      return (b.total_duration || 0) - (a.total_duration || 0);
-    } else if (sortKey.value === 'ayahs') {
-      return (b.total_ayahs || 0) - (a.total_ayahs || 0);
+    } else if (sortKey.value === 'surahs') {
+      return (b.surahs_count || 0) - (a.surahs_count || 0) || byRecent(a, b);
+    } else if (sortKey.value === 'review') {
+      // Unreviewed work first, most recently touched on top
+      return (isVerified(a) ? 1 : 0) - (isVerified(b) ? 1 : 0) || byRecent(a, b);
     } else {
-      const timeA = new Date(a.updated_at).getTime() || 0;
-      const timeB = new Date(b.updated_at).getTime() || 0;
-      return timeB - timeA;
+      return byRecent(a, b);
     }
   });
 });
@@ -516,11 +443,19 @@ function getProjectFileName(p: any): string {
   return p?.file_name || p?._file || p?.file || (p?.project_name ? `${p.project_name}.qproj` : '');
 }
 
-// Fetch projects via Tauri IPC (no HTTP server)
 async function fetchProjects(retries?: number | Event) {
   const retryCount = typeof retries === 'number' ? retries : 3;
   isFetching.value = true;
   try {
+    // Browser/shared-link mode: projects (and audio) live in the local vault
+    if (!isTauriEnvironment()) {
+      const list = await vaultList();
+      projectsList.value = list;
+      try {
+        localStorage.setItem(CACHE_KEY, JSON.stringify(list));
+      } catch {}
+      return;
+    }
     const data = await listProjects();
     const rawList = data.projects || [];
     const list = rawList.map((p: any) => ({
@@ -542,7 +477,6 @@ async function fetchProjects(retries?: number | Event) {
   }
 }
 
-// User Actions
 async function handleCreateProject() {
   if (!newProjectName.value.trim()) return;
   isCreating.value = true;
@@ -576,22 +510,30 @@ function handleFileInputChange(e: Event) {
 
 function loadFile(file: File) {
   const reader = new FileReader();
-  reader.onload = (event) => {
+  reader.onload = async (event) => {
     try {
       const content = event.target?.result as string;
       const parsed = JSON.parse(content);
       if (parsed.surahs && parsed.project_name) {
         projectStore.loadProject(parsed);
         projectStore.currentTab.value = 'studio';
+        // Shared-link mode: keep the opened project (and its embedded audio) in the vault
+        if (!isTauriEnvironment()) {
+          try {
+            await projectStore.saveActiveProject();
+          } catch { /* vault unavailable — project stays for this session */ }
+        }
       } else if (parsed.surahs && parsed.surahs[0]?.ayahs) {
         projectStore.project.surahs = [];
         projectStore.loadAlignedSurah(parsed);
         projectStore.currentTab.value = 'studio';
       } else {
-        alert('Invalid project file structure.');
+        loadError.value = 'Invalid project file format.';
+        setTimeout(() => { loadError.value = ''; }, 4000);
       }
     } catch (err: any) {
-      alert(`Error reading project file: ${err.message}`);
+      loadError.value = `Failed to load: ${err.message}`;
+      setTimeout(() => { loadError.value = ''; }, 4000);
     }
   };
   reader.readAsText(file);
@@ -600,22 +542,41 @@ function loadFile(file: File) {
 async function openProject(p: ProjectSummary) {
   const fname = getProjectFileName(p);
   if (fname) {
-    await projectStore.openProjectByFileName(fname);
+    const ok = await projectStore.openProjectByFileName(fname);
+    if (!ok) {
+      loadError.value = `Unable to open "${p.project_name}".`;
+      setTimeout(() => { loadError.value = ''; }, 4000);
+    }
   }
+}
+
+/** Mirrors the sidebar's ✓ toggle: one click marks the whole project reviewed. */
+function isVerified(p: ProjectSummary): boolean {
+  const st = String(p.status || '').toLowerCase();
+  return st === 'verified' || st === 'completed' || st === 'done';
+}
+
+async function toggleReview(p: ProjectSummary) {
+  const fname = getProjectFileName(p);
+  if (!fname) return;
+  const nowVerified = await projectStore.toggleProjectReview(fname);
+  p.status = nowVerified ? 'verified' : 'needs_review';
+  try {
+    localStorage.setItem(CACHE_KEY, JSON.stringify(projectsList.value));
+  } catch {}
 }
 
 async function deleteProject(p: ProjectSummary) {
   const fname = getProjectFileName(p);
   if (!fname) return;
-  if (confirm(`Are you sure you want to delete "${p.project_name}"?`)) {
-    const ok = await projectStore.deleteProjectFile(fname);
-    if (ok) {
-      projectsList.value = projectsList.value.filter(item => getProjectFileName(item) !== fname);
-      try {
-        localStorage.setItem(CACHE_KEY, JSON.stringify(projectsList.value));
-      } catch {}
-      await fetchProjects();
-    }
+  const ok = await projectStore.deleteProjectFile(fname);
+  confirmDeleteFile.value = null;
+  if (ok) {
+    projectsList.value = projectsList.value.filter(item => getProjectFileName(item) !== fname);
+    try {
+      localStorage.setItem(CACHE_KEY, JSON.stringify(projectsList.value));
+    } catch {}
+    await fetchProjects();
   }
 }
 
@@ -644,7 +605,7 @@ async function exportProject(p: ProjectSummary) {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
   } catch (err) {
-    console.error('Failed to export project:', err);
+    console.error('Failed to export:', err);
   }
 }
 
@@ -653,7 +614,7 @@ async function revealProjectInExplorer(p: ProjectSummary) {
   try {
     await revealInExplorer(fname || p.project_name);
   } catch (err) {
-    console.error('Failed to reveal file:', err);
+    console.error('Failed to reveal:', err);
   }
 }
 
@@ -661,23 +622,14 @@ async function revealProjectsDirectory() {
   try {
     await revealInExplorer('projects');
   } catch (err) {
-    console.error('Failed to reveal projects folder:', err);
+    console.error('Failed to reveal folder:', err);
   }
 }
 
-// Helpers
-function getStatusLabel(status?: string): string {
-  const st = (status || 'draft').toLowerCase();
-  if (st === 'verified' || st === 'completed' || st === 'done') return 'Verified';
-  if (st === 'needs_review' || st === 'review') return 'Needs Review';
-  return 'Draft';
-}
-
 function getStatusClass(status?: string): string {
-  const st = (status || 'draft').toLowerCase();
+  const st = (status || '').toLowerCase();
   if (st === 'verified' || st === 'completed' || st === 'done') return 'status-verified';
-  if (st === 'needs_review' || st === 'review') return 'status-review';
-  return 'status-draft';
+  return 'status-review';
 }
 
 function getSurahWatermark(p: ProjectSummary): string {
@@ -691,6 +643,10 @@ function formatDuration(secs: number): string {
   if (isNaN(secs) || secs <= 0) return '—';
   const mins = Math.floor(secs / 60);
   const remainingSecs = Math.floor(secs % 60);
+  if (mins >= 60) {
+    const hrs = Math.floor(mins / 60);
+    return `${hrs}h ${mins % 60}m`;
+  }
   return `${mins}:${remainingSecs.toString().padStart(2, '0')}`;
 }
 
@@ -715,218 +671,121 @@ function formatDateRelative(dateStr: string): string {
   display: flex;
   flex-direction: column;
   height: calc(100vh - var(--header-height));
-  background: #090d16;
-  color: #f3f4f6;
+  color: var(--text-main);
   overflow-y: auto;
   overflow-x: hidden;
+  background: var(--bg-base);
 }
 
-/* ==============================================================================
-   1. Clean Desktop Header (QuranCaption Style)
-   ============================================================================== */
-.hub-header {
-  background: #0d111a;
-  border-bottom: 1px solid #1e2638;
-  padding: 20px 32px 16px 32px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.header-main {
+/* Minimalist Toolbar */
+.hub-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 20px;
+  gap: 12px;
+  padding: 10px 24px;
+  background: var(--glass-bg);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
-.title-group {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.page-title {
-  font-size: 1.45rem;
-  font-weight: 700;
-  color: #ffffff;
-  margin: 0;
-  letter-spacing: -0.01em;
-}
-
-.page-subtitle {
-  font-size: 0.8rem;
-  color: #8b949e;
-  margin: 0;
-}
-
-.action-group {
+.toolbar-left,
+.toolbar-right {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-/* Buttons */
-.btn-primary {
-  background: #2563eb;
-  color: #ffffff;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  font-size: 0.8rem;
-  font-weight: 600;
-  padding: 7px 14px;
-  border-radius: 6px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  cursor: pointer;
-  transition: background 0.1s ease;
-}
-.btn-primary:hover:not(:disabled) {
-  background: #1d4ed8;
-}
-.btn-primary:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.btn-secondary {
-  background: #161b26;
-  border: 1px solid #28334a;
-  color: #c9d1d9;
-  font-size: 0.8rem;
-  font-weight: 500;
-  padding: 7px 12px;
-  border-radius: 6px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  cursor: pointer;
-  transition: all 0.1s ease;
-}
-.btn-secondary:hover:not(:disabled) {
-  background: #21293a;
-  color: #ffffff;
-  border-color: #3e4e70;
-}
-
-.btn-icon {
-  background: #161b26;
-  border: 1px solid #28334a;
-  color: #c9d1d9;
-  padding: 7px 9px;
-  border-radius: 6px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: all 0.1s ease;
-}
-.btn-icon:hover:not(:disabled) {
-  background: #21293a;
-  color: #ffffff;
-}
-
-/* Controls Row */
-.controls-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-
 .search-wrap {
   position: relative;
-  width: 280px;
+  display: flex;
+  align-items: center;
 }
 .search-icon {
   position: absolute;
-  left: 10px;
-  top: 50%;
-  transform: translateY(-50%);
-  color: #6b7280;
+  left: 9px;
+  color: var(--text-muted);
   pointer-events: none;
 }
 .search-input {
-  width: 100%;
-  background: #121722;
-  border: 1px solid #232d42;
-  border-radius: 6px;
-  padding: 6px 28px 6px 30px;
-  font-size: 0.78rem;
-  color: #ffffff;
-  outline: none;
-  transition: border-color 0.1s ease;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 5px 28px 5px 28px;
+  font-size: var(--text-xs);
+  color: var(--text-main);
+  width: 190px;
+  transition: all var(--dur-fast) var(--ease-out);
 }
 .search-input:focus {
-  border-color: #3b82f6;
+  width: 240px;
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 2px var(--accent-subtle);
+  outline: none;
+}
+.search-kbd {
+  position: absolute;
+  right: 8px;
+  pointer-events: none;
 }
 .clear-btn {
   position: absolute;
-  right: 8px;
-  top: 50%;
-  transform: translateY(-50%);
-  background: transparent;
+  right: 7px;
+  background: none;
   border: none;
-  color: #9ca3af;
-  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-size: 10px;
   cursor: pointer;
 }
 
+/* Status Filter Tabs */
 .status-tabs {
   display: flex;
   align-items: center;
-  gap: 4px;
-  background: #121722;
-  padding: 3px;
-  border-radius: 6px;
-  border: 1px solid #1e2638;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 2px;
 }
-.tab-btn {
-  background: transparent;
-  border: none;
-  color: #8b949e;
-  font-size: 0.75rem;
-  font-weight: 500;
-  padding: 4px 10px;
-  border-radius: 4px;
+.status-tabs .tab-btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
+  background: transparent;
+  border: none;
+  padding: 3px 9px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+  border-radius: var(--radius-xs);
   cursor: pointer;
-  transition: all 0.1s ease;
+  transition: all var(--dur-fast) var(--ease-out);
 }
-.tab-btn:hover {
-  color: #ffffff;
+.status-tabs .tab-btn:hover {
+  color: var(--text-main);
 }
-.tab-btn.active {
-  background: #1e2638;
-  color: #ffffff;
+.status-tabs .tab-btn.active {
+  background: var(--bg-surface-elevated);
+  color: var(--text-main);
   font-weight: 600;
+  box-shadow: var(--shadow-e1);
 }
 .tab-badge {
-  background: #2a344d;
-  color: #c9d1d9;
-  font-size: 0.68rem;
-  padding: 1px 5px;
-  border-radius: 10px;
+  font-size: 10px;
+  color: var(--text-muted);
 }
-
 .dot {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
 }
-.dot-green { background: #10b981; }
-.dot-amber { background: #f59e0b; }
-.dot-gray { background: #6b7280; }
-
-.view-controls {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-left: auto;
-}
+.dot-green { background: var(--emerald-primary); }
+.dot-amber { background: var(--amber-primary); }
+.dot-gray { background: var(--text-muted); }
 
 .sort-select-wrap {
   display: flex;
@@ -936,477 +795,469 @@ function formatDateRelative(dateStr: string): string {
 .sort-icon {
   position: absolute;
   left: 8px;
-  color: #6b7280;
+  color: var(--text-muted);
   pointer-events: none;
 }
 .sort-select {
-  background: #121722;
-  border: 1px solid #232d42;
-  color: #c9d1d9;
-  font-size: 0.75rem;
-  padding: 6px 10px 6px 26px;
-  border-radius: 6px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-size: 11px;
+  padding: 5px 10px 5px 24px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   outline: none;
 }
-.sort-select:focus {
-  border-color: #3b82f6;
+.sort-select:hover {
+  color: var(--text-main);
+  border-color: var(--border-medium);
 }
 
-.mode-toggle {
+.more-wrap {
+  position: relative;
+}
+.more-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 6px;
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-sm);
+  padding: 4px;
+  min-width: 140px;
+  z-index: 100;
+}
+.more-item {
+  width: 100%;
   display: flex;
   align-items: center;
-  background: #121722;
-  border: 1px solid #1e2638;
-  border-radius: 6px;
-  padding: 2px;
-}
-.mode-btn {
-  background: transparent;
+  gap: 7px;
+  padding: 6px 10px;
+  font-size: var(--text-xs);
+  color: var(--text-main);
+  background: none;
   border: none;
-  color: #6b7280;
-  padding: 4px 7px;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  text-align: left;
 }
-.mode-btn.active {
-  background: #1e2638;
-  color: #ffffff;
+.more-item:hover {
+  background: var(--bg-surface-hover);
 }
 
-/* ==============================================================================
-   2. Main Content & Cards Grid
-   ============================================================================== */
-.hub-main {
-  padding: 24px 32px;
-  flex: 1;
+/* Welcome */
+.hub-hero-banner {
+  padding: 30px 32px 22px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
+  position: relative;
 }
 
-.empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
+@media (max-width: 700px) {
+  .hub-toolbar {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 12px;
+  }
+
+  .status-tabs {
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .status-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .hub-hero-banner {
+    padding: 20px 14px 14px;
+  }
+
+  .hub-main {
+    padding: 14px 10px 20px;
+  }
+
+  .hero-title {
+    font-size: 1.4rem;
+  }
+}
+
+.hero-title {
+  font-family: var(--font-arabic);
+  font-size: 2rem;
+  line-height: 1.4;
+  color: var(--gold-primary);
+  margin: 0;
   text-align: center;
-  padding: 60px 20px;
-  color: #8b949e;
-}
-.empty-icon {
-  color: #3b4252;
-  margin-bottom: 12px;
-}
-.empty-title {
-  font-size: 1.05rem;
-  font-weight: 600;
-  color: #ffffff;
-  margin: 0 0 6px 0;
-}
-.empty-desc {
-  font-size: 0.82rem;
-  max-width: 400px;
-  margin: 0 0 16px 0;
-}
-.empty-actions {
-  display: flex;
-  gap: 8px;
-}
-.state-text {
-  margin-top: 10px;
-  font-size: 0.82rem;
+  font-weight: 400;
 }
 
-/* Cards Grid */
+/* Workspace Grid */
+.hub-main {
+  flex: 1;
+  padding: 24px;
+}
+
 .projects-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
-  gap: 20px;
+  grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr));
+  gap: 16px;
 }
 
-.project-card {
-  background: #111622;
-  border: 1px solid #1e2638;
-  border-radius: 10px;
-  overflow: hidden;
+/* Create Tile */
+.create-tile {
+  background: var(--bg-surface);
+  border: 1px dashed var(--border-medium);
+  border-radius: var(--radius-md);
+  padding: 24px 18px;
   display: flex;
   flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   cursor: pointer;
-  transition: border-color 0.15s ease, transform 0.15s ease;
+  transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+  min-height: 190px;
+  position: relative;
+  overflow: hidden;
 }
-.project-card:hover {
-  border-color: #388bfd;
-  transform: translateY(-2px);
+.create-tile:hover {
+  border-color: var(--accent-primary);
+  background: var(--bg-surface-hover);
+}
+.create-orb {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-md);
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-medium);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+.create-tile:hover .create-orb {
+  color: var(--text-main);
+}
+.create-label {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--text-main);
 }
 
-/* Thumbnail */
+/* Project Card */
+.project-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  position: relative;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+.project-card:hover {
+  border-color: var(--border-medium);
+}
+
 .card-thumbnail {
-  background: #0d111a;
-  height: 120px;
+  height: 84px;
+  background: var(--bg-surface-elevated);
+  border-bottom: 1px solid var(--border-subtle);
   position: relative;
   display: flex;
   align-items: center;
-  justify-content: center;
-  border-bottom: 1px solid #1a2233;
+  justify-content: space-between;
+  padding: 12px 14px;
+  overflow: hidden;
 }
 
-.thumbnail-surah {
+/* Waveform graphic (removed design) */
+
+.watermark-layer {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 2px;
+  gap: 8px;
+  position: relative;
+  z-index: 2;
 }
-.surah-num {
+.surah-watermark-ar {
   font-family: var(--font-arabic);
-  font-size: 2.5rem;
-  font-weight: 700;
-  line-height: 1;
-  color: #2b354d;
-  letter-spacing: 0.05em;
+  font-size: 21px;
+  color: var(--text-main);
+  opacity: 0.88;
 }
-.surah-name {
-  font-family: var(--font-arabic);
-  font-size: 0.85rem;
-  color: #6b7280;
+.surah-num-pill {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: var(--bg-base);
+  padding: 2px 7px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-subtle);
 }
 
-.thumbnail-status {
-  position: absolute;
-  top: 8px;
-  right: 8px;
+/* Review Toggle Chip — clickable, like the sidebar's ✓ button */
+.card-status-chip {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 0.68rem;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  font-size: 10px;
   font-weight: 600;
-  padding: 2px 7px;
-  border-radius: 10px;
-  background: rgba(0, 0, 0, 0.4);
+  position: relative;
+  z-index: 2;
+  border: 1px solid transparent;
+  background: none;
+  cursor: pointer;
+  transition: opacity 0.15s ease, transform 0.1s ease;
 }
-.status-verified {
-  color: #34d399;
+.card-status-chip:hover {
+  opacity: 0.85;
 }
-.status-verified .status-dot {
-  background: #10b981;
+.card-status-chip:active {
+  transform: scale(0.94);
 }
-.status-review {
-  color: #fbbf24;
+.card-status-chip.status-verified {
+  background: var(--emerald-bg);
+  color: var(--emerald-primary);
+  border-color: var(--emerald-border);
 }
-.status-review .status-dot {
-  background: #f59e0b;
-}
-.status-draft {
-  color: #9ca3af;
-}
-.status-draft .status-dot {
-  background: #6b7280;
-}
-.status-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-}
-
-.thumbnail-reciter {
-  position: absolute;
-  bottom: 8px;
-  left: 10px;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 0.7rem;
-  font-weight: 500;
-  color: #c9d1d9;
-  background: rgba(0, 0, 0, 0.5);
-  padding: 2px 6px;
-  border-radius: 4px;
-  max-width: 60%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.card-status-chip.status-review {
+  background: var(--amber-bg);
+  color: var(--amber-primary);
+  border-color: var(--amber-border);
 }
 
 .thumbnail-duration {
   position: absolute;
+  right: 12px;
   bottom: 8px;
-  right: 10px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 0.68rem;
-  font-weight: 600;
-  color: #9ca3af;
-  background: rgba(0, 0, 0, 0.5);
-  padding: 2px 6px;
+  background: var(--glass-bg);
+  backdrop-filter: blur(6px);
+  padding: 1px 5px;
   border-radius: 4px;
+  z-index: 2;
 }
 
-/* Card Details */
 .card-details {
-  padding: 14px 16px 10px 16px;
+  padding: 12px 14px;
+  flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  flex: 1;
+  gap: 8px;
 }
-
 .card-name {
-  font-size: 0.92rem;
-  font-weight: 600;
-  color: #ffffff;
   margin: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-main);
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
-
-.card-meta {
+.card-meta-line {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 0.72rem;
-  color: #8b949e;
-}
-.meta-dot {
-  color: #4b5563;
-}
-.meta-item.time {
-  color: #6b7280;
-}
-
-/* Card Footer */
-.card-footer {
-  padding: 8px 14px 12px 14px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  border-top: 1px solid #1a2233;
-}
-
-.btn-card-open {
-  background: #1e2638;
-  color: #ffffff;
-  border: 1px solid #28334a;
-  border-radius: 5px;
-  font-size: 0.75rem;
-  font-weight: 600;
-  padding: 5px 12px;
-  display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 5px;
-  cursor: pointer;
-  transition: all 0.1s ease;
 }
-.btn-card-open:hover {
-  background: #2563eb;
-  border-color: #2563eb;
+.meta-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs);
+  padding: 2px 6px;
+  font-size: 10.5px;
+  color: var(--text-muted);
+  transition: all var(--dur-fast) var(--ease-out);
+}
+.meta-tag:hover {
+  color: var(--text-main);
+  border-color: var(--border-medium);
+}
+.card-time-row {
+  margin-top: auto;
+  padding-top: 8px;
+  font-size: 10.5px;
+  color: var(--text-dim);
+  border-top: 1px solid var(--border-subtle);
 }
 
-.card-icons {
+/* Floating Actions Dock on Card Hover */
+.card-actions-dock {
+  position: absolute;
+  top: 8px;
+  right: 8px;
   display: flex;
   align-items: center;
   gap: 3px;
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+  opacity: 0;
+  transform: translateY(-4px);
+  transition: all var(--dur-fast) var(--ease-out);
+  box-shadow: var(--shadow-e1);
 }
-.btn-card-tool {
+.project-card:hover .card-actions-dock {
+  opacity: 1;
+  transform: translateY(0);
+}
+.btn-card-action {
   background: transparent;
   border: none;
-  color: #6b7280;
-  padding: 5px;
-  border-radius: 4px;
+  color: var(--text-muted);
+  padding: 4px;
+  border-radius: var(--radius-xs);
   cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  text-decoration: none;
-  transition: color 0.1s ease, background 0.1s ease;
-}
-.btn-card-tool:hover {
-  color: #ffffff;
-  background: #1e2638;
-}
-.btn-card-tool.btn-danger:hover {
-  color: #ef4444;
-  background: rgba(239, 68, 68, 0.15);
-}
-
-/* ==============================================================================
-   3. High-Density Table List View
-   ============================================================================== */
-.table-wrap {
-  background: #111622;
-  border: 1px solid #1e2638;
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.projects-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.78rem;
-  text-align: left;
-}
-
-.projects-table th {
-  background: #0d111a;
-  color: #8b949e;
-  font-weight: 600;
-  padding: 10px 14px;
-  border-bottom: 1px solid #1e2638;
-  white-space: nowrap;
-}
-
-.table-row {
-  border-bottom: 1px solid #161d2b;
-  cursor: pointer;
-  transition: background 0.1s ease;
-}
-.table-row:hover {
-  background: #161d2a;
-}
-
-.table-row td {
-  padding: 10px 14px;
-  color: #c9d1d9;
-  vertical-align: middle;
-}
-
-.table-surah-badge {
-  background: #1a2233;
-  color: #8b949e;
-  font-family: monospace;
-  font-size: 0.75rem;
-  font-weight: 700;
-  padding: 2px 6px;
-  border-radius: 4px;
-}
-
-.name-text {
-  font-weight: 600;
-  color: #ffffff;
-}
-.file-text {
-  font-size: 0.68rem;
-  color: #6b7280;
-}
-
-.status-badge-inline {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 0.72rem;
-  font-weight: 500;
-}
-
-.table-actions-row {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-.btn-table-open {
-  background: #1e2638;
-  color: #ffffff;
-  border: 1px solid #28334a;
-  border-radius: 4px;
-  font-size: 0.72rem;
-  font-weight: 600;
-  padding: 3px 8px;
-  cursor: pointer;
-}
-.btn-table-open:hover {
-  background: #2563eb;
-  border-color: #2563eb;
-}
-
-/* ==============================================================================
-   4. Modal
-   ============================================================================== */
-.modal-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.75);
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+.btn-card-action:hover {
+  background: var(--bg-surface-hover);
+  color: var(--text-main);
+}
+.btn-card-action.btn-delete:hover,
+.btn-card-action.armed-danger {
+  color: var(--ruby-primary) !important;
+  background: rgba(239, 68, 68, 0.12) !important;
 }
 
-.modal-box {
-  background: #111622;
-  border: 1px solid #28334a;
-  border-radius: 10px;
-  width: 440px;
-  max-width: 90vw;
-  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+/* Modal Card */
+.modal-card {
+  width: min(420px, calc(100vw - 32px));
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  box-shadow: var(--shadow-e4);
 }
-
-.modal-header {
-  padding: 16px 20px;
-  border-bottom: 1px solid #1e2638;
+.modal-card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  margin-bottom: 16px;
 }
-.modal-title {
-  font-size: 1rem;
-  font-weight: 700;
-  color: #ffffff;
+.modal-heading {
   margin: 0;
+  font-size: var(--text-md);
+  font-weight: 600;
 }
-.modal-close-btn {
-  background: transparent;
-  border: none;
-  color: #8b949e;
-  font-size: 1rem;
-  cursor: pointer;
-}
-.modal-close-btn:hover {
-  color: #ffffff;
-}
-
 .modal-form {
-  padding: 20px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
 }
-
 .form-group {
   display: flex;
   flex-direction: column;
   gap: 5px;
 }
 .form-label {
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: #c9d1d9;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
 }
-.form-input, .form-select {
-  background: #0d111a;
-  border: 1px solid #232d42;
-  border-radius: 6px;
+.form-input {
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
   padding: 8px 10px;
-  font-size: 0.82rem;
-  color: #ffffff;
+  font-size: var(--text-xs);
+  color: var(--text-main);
   outline: none;
 }
-.form-input:focus, .form-select:focus {
-  border-color: #3b82f6;
+.form-input:focus {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 2px var(--accent-subtle);
 }
-
-.modal-actions {
+.form-select {
+  cursor: pointer;
+}
+.modal-card-footer {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
   margin-top: 10px;
 }
 
-/* Animations */
-.spin {
-  animation: spin 1s linear infinite;
+/* Empty State */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+  text-align: center;
 }
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+.empty-orb {
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  background: var(--bg-surface-elevated);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+}
+.empty-title {
+  margin: 0 0 4px 0;
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+.empty-desc {
+  margin: 0 0 16px 0;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  max-width: 320px;
+}
+.empty-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* Skeleton Loading */
+.skeleton-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  height: 160px;
+  overflow: hidden;
+}
+.skeleton-thumb {
+  height: 80px;
+  background: var(--bg-surface-elevated);
+}
+.skeleton-body {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.skeleton-line {
+  height: 12px;
+  border-radius: var(--radius-xs);
+  background: var(--bg-surface-hover);
+}
+.shimmer {
+  animation: fade-in 1.2s var(--ease-in-out) infinite alternate;
 }
 </style>

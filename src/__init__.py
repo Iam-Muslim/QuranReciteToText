@@ -528,6 +528,29 @@ class AudioPipeline:
                 for idx, sub in enumerate(seg.sub_segments):
                     sub.sub_segment_number = idx + 1
 
+        # Phase 3.5: Position-calibrated word timing (post-match; matcher results untouched).
+        # Shunts per-position systematic bias (ayah-initial starts early, ayah-final ends late)
+        # using measured calibration offsets. Positive = later. Zero weights = disabled.
+        _cal = getattr(config, "WORD_TIMING_CALIBRATION_S", None)
+        if _cal:
+            for seg in segments:
+                ws = seg.words
+                if not ws:
+                    continue
+                m = len(ws)
+                for pos, w in enumerate(ws):
+                    key = "ayah_initial" if (m > 1 and pos == 0) else (
+                        "ayah_final" if (m > 1 and pos == m - 1) else "interior")
+                    sh = _cal.get(key) or _cal.get("interior")
+                    if sh:
+                        try:
+                            if w.start is not None:
+                                w.start = w.start + float(sh.get("start", 0.0))
+                            if w.end is not None:
+                                w.end = w.end + float(sh.get("end", 0.0))
+                        except (TypeError, AttributeError):
+                            pass
+
         result = PipelineResult(
             audio_duration_seconds=audio_duration,
             raw_phonemes=raw_phonemes,

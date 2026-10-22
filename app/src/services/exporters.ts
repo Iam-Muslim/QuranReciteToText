@@ -1,5 +1,6 @@
-import type { SurahItem, AlignerProject } from '../types/aligner';
+﻿import type { SurahItem, AlignerProject } from '../types/aligner';
 import JSZip from 'jszip';
+import { getAudioStreamUrl } from './api';
 
 export type ExportFormatId = 'json' | 'qproj' | 'srt' | 'vtt' | 'ass' | 'qurancaption' | 'csv' | 'premiere';
 
@@ -50,7 +51,7 @@ function formatAssTime(seconds: number): string {
  * (directly from QuranCaption WbwHelper.ts).
  */
 export function stripWbwDisplayMarkers(text: string): string {
-  return text.replace(/[۟۠]/g, '');
+  return text.replace(/[ÛŸÛ ]/g, '');
 }
 
 /**
@@ -130,6 +131,60 @@ export function exportProjectFile(project: AlignerProject): string {
   return JSON.stringify(project, null, 2);
 }
 
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || '');
+      resolve(result.includes(',') ? result.slice(result.indexOf(',') + 1) : result);
+    };
+    reader.onerror = () => reject(new Error('Could not read the audio file.'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+/**
+ * Builds a portable copy of the project: every reachable audio file is
+ * embedded into its surah as `audio_embedded` (base64), and session-only
+ * blob/data URLs are stripped. The result is a single .qproj JSON file that
+ * can travel through the cloud (email, drive, chat) and open with its audio
+ * on any device — no second file to carry.
+ */
+export async function buildPortableProject(project: AlignerProject): Promise<AlignerProject> {
+  const clone: AlignerProject = JSON.parse(JSON.stringify(project));
+  for (const s of clone.surahs || []) {
+    if (s.audio_embedded?.base64) continue;
+    // Session URLs (blob:/data:) are always fetchable and correct.
+    const sessionUrl =
+      typeof s.audio_url === 'string' && /^(blob|data):/.test(s.audio_url) ? s.audio_url : '';
+    // A bare "name.ext" in audio_file is not a path — only real paths do.
+    const fileRef = s.audio_file || '';
+    const isRealPath = !!(fileRef && /[\\/:]/.test(fileRef));
+    const fetchUrl = sessionUrl || (isRealPath ? getAudioStreamUrl(fileRef) : '');
+    // blob:/data: URLs never survive a session — drop them from the portable copy
+    if (typeof s.audio_url === 'string' && /^(blob|data):/.test(s.audio_url)) {
+      s.audio_url = '';
+    }
+    try {
+      const res = await fetch(fetchUrl);
+      if (!res.ok) continue;
+      const blob = await res.blob();
+      const type = blob.type || '';
+      if (type && !type.startsWith('audio') && !type.startsWith('video')) continue;
+      if (!blob.size || blob.size > 256 * 1024 * 1024) continue;
+      const base64 = await blobToBase64(blob);
+      s.audio_embedded = {
+        name: fileRef || 'audio',
+        mime: type || 'audio/mpeg',
+        base64,
+      };
+    } catch {
+      // Audio unavailable (e.g. file moved) — export timings only.
+    }
+  }
+  return clone;
+}
+
 export function exportSrt(surah: SurahItem, wordLevel: boolean = false): string {
   const entries: string[] = [];
   let index = 1;
@@ -199,7 +254,7 @@ PlayResY: 1080
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: QuranKaraoke,Amiri Quran,68,&H00FFFFFF,&H0000D7FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3,2,2,100,100,120,1
+Style: QuranKaraoke,KFGQPC Hafs,68,&H00FFFFFF,&H0000D7FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3,2,2,100,100,120,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -259,9 +314,9 @@ export function exportQuranCaption(surah: SurahItem): string {
     }));
 
     const introText = surah.intro.text || surah.intro.words.map(w => w.word).join(' ');
-    const specType = (introText.includes('أعوذ') || introText.includes('اعوذ'))
+    const specType = (introText.includes('Ø£Ø¹ÙˆØ°') || introText.includes('Ø§Ø¹ÙˆØ°'))
       ? "Isti'adha"
-      : (introText.includes('أكبر') || introText.includes('اكبر'))
+      : (introText.includes('Ø£ÙƒØ¨Ø±') || introText.includes('Ø§ÙƒØ¨Ø±'))
       ? "Takbeer"
       : "Basmala";
 
@@ -450,7 +505,7 @@ PlayResY: 1080
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: QuranKaraoke,Amiri Quran,68,&H00FFFFFF,&H0000D7FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3,2,2,100,100,120,1
+Style: QuranKaraoke,KFGQPC Hafs,68,&H00FFFFFF,&H0000D7FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3,2,2,100,100,120,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -621,6 +676,9 @@ export async function exportSurahsAsZip(
   const zip = new JSZip();
   const projFolder = zip.folder(sanitizeBatchExportFileName(project.project_name || 'quran_recitations')) || zip;
 
+  // qproj exports are portable: audio is embedded when reachable
+  const portable = format === 'qproj' ? await buildPortableProject(project) : project;
+
   for (const surah of project.surahs) {
     const num = String(surah.surah_number).padStart(3, '0');
     const safeName = sanitizeBatchExportFileName(surah.surah_name_english || `Surah_${num}`);
@@ -657,7 +715,7 @@ export async function exportSurahsAsZip(
         ext = 'csv';
         break;
       case 'qproj':
-        content = exportProjectFile(project);
+        content = exportProjectFile(portable);
         ext = 'qproj';
         break;
     }
@@ -666,7 +724,7 @@ export async function exportSurahsAsZip(
   }
 
   // Also include the project file in root of zip
-  projFolder.file('project_specification.qproj', exportProjectFile(project));
+  projFolder.file('project_specification.qproj', exportProjectFile(portable));
 
   return await zip.generateAsync({ type: 'blob' });
 }

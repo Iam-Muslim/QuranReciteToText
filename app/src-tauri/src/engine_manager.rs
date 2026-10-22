@@ -11,9 +11,10 @@
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
@@ -126,13 +127,72 @@ pub fn set_status(app: Option<&AppHandle>, msg: &str, ready: bool) {
 
 // ── Python resolution ─────────────────────────────────────────────────────────
 
+/// Runs a command with a hard timeout, capturing stdout/stderr.
+///
+/// Some interpreter candidates (notably the Microsoft Store `python.exe` /
+/// `python3.exe` App Execution Aliases) can hang or open the Store window
+/// instead of exiting, which would otherwise stall engine startup for minutes.
+fn run_command_with_timeout(cmd: &mut Command, timeout: Duration) -> Option<std::process::Output> {
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    let mut child = cmd.spawn().ok()?;
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return child.wait_with_output().ok(),
+            Ok(None) => {
+                if started.elapsed() > timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Err(_) => {
+                let _ = child.kill();
+                return None;
+            }
+        }
+    }
+}
+
+/// Detects the tiny Microsoft Store "App Execution Alias" stubs on PATH
+/// (e.g. `%LOCALAPPDATA%\Microsoft\WindowsApps\python.exe`). Launching them
+/// can pop up the Microsoft Store and stall for a long time, so they are
+/// skipped while probing for a usable system Python.
+fn is_windows_store_stub_alias(name: &str) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        let exe_name = format!("{}.exe", name);
+        let path_var = std::env::var("PATH").unwrap_or_default();
+        for dir in path_var.split(';') {
+            let trimmed = dir.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let candidate = Path::new(trimmed).join(&exe_name);
+            if candidate.is_file() {
+                let len = fs::metadata(&candidate).map(|m| m.len()).unwrap_or(0);
+                let lower = candidate.to_string_lossy().to_lowercase();
+                return lower.contains("\\windowsapps\\") && len < 100_000;
+            }
+        }
+        false
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = name;
+        false
+    }
+}
+
 pub fn read_python_version(python_exe: &Path) -> Option<(u8, u8, u8)> {
     let check_script =
         "import json,sys; print(json.dumps({'major':sys.version_info[0],'minor':sys.version_info[1],'patch':sys.version_info[2]}))";
     let mut cmd = Command::new(python_exe);
     cmd.args(["-c", check_script]);
     configure_command_no_window(&mut cmd);
-    let output = cmd.output().ok()?;
+    let output = run_command_with_timeout(&mut cmd, Duration::from_secs(10))?;
     if !output.status.success() {
         return None;
     }
@@ -170,10 +230,14 @@ pub fn resolve_system_python() -> Option<PathBuf> {
     };
 
     for candidate in candidates {
+        // Skip broken Microsoft Store aliases that hang or open the Store.
+        if is_windows_store_stub_alias(candidate) {
+            continue;
+        }
         let mut cmd = Command::new(candidate);
         cmd.args(["-c", "import sys; print(sys.executable)"]);
         configure_command_no_window(&mut cmd);
-        if let Ok(output) = cmd.output() {
+        if let Some(output) = run_command_with_timeout(&mut cmd, Duration::from_secs(10)) {
             if output.status.success() {
                 let exe_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 let exe_path = PathBuf::from(&exe_str);
@@ -743,8 +807,24 @@ pub fn is_environment_fully_installed(app_handle: &AppHandle) -> bool {
 
 /// Initializes the Python environment. No server is started.
 /// After this, the engine is "ready" — the UI can invoke `run_align`.
-pub async fn start_engine(app_handle: AppHandle) -> Result<(), String> {
+///
+/// `force = false` (normal app boot) takes a fast path when the environment
+/// is already installed: no interpreter probing, no pip audit, no bootstrap
+/// spawns. `force = true` (install/repair flows) always performs the full
+/// verification.
+pub async fn start_engine(app_handle: AppHandle, force: bool) -> Result<(), String> {
     let already_installed = is_environment_fully_installed(&app_handle);
+
+    // ── Fast path: everything is in place — zero subprocess work ──────────────
+    if !force && already_installed {
+        let venv_dir = get_engine_venv_path(&app_handle)?;
+        let venv_exe = get_venv_python_exe(&venv_dir);
+        if venv_exe.exists() {
+            *STATE.python_exe.lock().unwrap() = venv_exe.to_string_lossy().to_string();
+            set_status_progress(Some(&app_handle), "Alignment Engine Ready", 100, true);
+            return Ok(());
+        }
+    }
 
     if !already_installed {
         set_status_progress(Some(&app_handle), "Resolving Python environment...", 5, false);
@@ -955,6 +1035,21 @@ pub fn run_alignment(
         serde_json::json!({
             "type": "start",
             "audio": display_target,
+        }),
+    );
+
+    // The Python engine spends its first seconds importing NumPy/ONNX and
+    // building model sessions before any real progress exists. Emit a
+    // "loading" stage immediately so the UI shows live feedback from t=0.
+    let _ = app_handle.emit(
+        "align-event",
+        serde_json::json!({
+            "type": "progress",
+            "data": {
+                "stage": "loading",
+                "progress": 4,
+                "message": "Starting Python alignment engine…",
+            },
         }),
     );
 

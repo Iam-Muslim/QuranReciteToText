@@ -1,165 +1,149 @@
 <template>
-  <header class="top-navbar glass-panel" data-tauri-drag-region>
-    <!-- Brand & Tab Switcher (Left) -->
-    <div class="brand-section">
-      <div class="brand-header" @click="projectStore.currentTab.value = 'projects'">
+  <header class="top-navbar" data-tauri-drag-region>
+    <!-- Left: Brand, View Tabs, Update badge -->
+    <div class="nav-left">
+      <button class="brand-btn" @click="projectStore.currentTab.value = 'projects'" title="Quran Recite2Text">
         <img src="/logo.png" alt="Logo" class="brand-icon-img" />
-        <span class="brand-title">Quran Recite2Text</span>
-      </div>
-
-      <!-- Glowing Auto-Update Notification Button (from QuranCaption) -->
-      <button 
-        v-if="versionService.hasUpdate.value"
-        class="update-nav-btn" 
-        @click="$emit('open-update-modal')" 
-        title="New update available! Click to install"
-      >
-        <Sparkles :size="12" class="text-sky" />
-        <span class="update-nav-text">v{{ versionService.latestVersion.value }}</span>
-        <span class="update-pulse-ring"></span>
       </button>
 
-      <div class="tab-divider"></div>
-
-      <!-- First Tab Switcher: Projects / Studio -->
-      <nav class="view-tabs">
-        <button 
-          class="tab-btn" 
+      <!-- Modern Segmented Pill Control -->
+      <nav class="view-tabs" role="tablist">
+        <span class="tab-indicator" :class="`pos-${projectStore.currentTab.value === 'projects' ? 0 : 1}`"></span>
+        <button
+          class="tab-btn"
+          role="tab"
+          :aria-selected="projectStore.currentTab.value === 'projects'"
           :class="{ 'active': projectStore.currentTab.value === 'projects' }"
           @click="projectStore.currentTab.value = 'projects'"
-          title="Projects Hub (Create, Open, Manage Projects)"
         >
-          <FolderKanban :size="13" />
           <span>Projects</span>
         </button>
 
-        <button 
-          class="tab-btn" 
+        <button
+          class="tab-btn"
+          role="tab"
+          :aria-selected="projectStore.currentTab.value === 'studio'"
           :class="{ 'active': projectStore.currentTab.value === 'studio' }"
           @click="projectStore.currentTab.value = 'studio'"
-          title="Studio Workstation (Waveform & Mushaf Editor)"
         >
-          <Sliders :size="13" />
           <span>Studio</span>
         </button>
       </nav>
 
-      <!-- Active Project Riwayah Pill -->
-      <div 
-        class="navbar-riwayah-pill" 
-        v-if="currentRiwayahMeta" 
-        :title="`رواية المصحف الشريف: ${currentRiwayahMeta.arabicName} (${currentRiwayahMeta.englishName})`"
+      <!-- Sidebar Toggle (Studio Mode Only) -->
+      <button
+        v-if="projectStore.currentTab.value === 'studio'"
+        class="btn-icon sidebar-toggle-btn"
+        :class="{ 'active': !projectStore.sidebarCollapsed.value }"
+        @click="projectStore.sidebarCollapsed.value = !projectStore.sidebarCollapsed.value"
+        :title="projectStore.sidebarCollapsed.value ? 'Show Recitations (Ctrl+B)' : 'Hide Recitations (Ctrl+B)'"
+        aria-label="Toggle Recitations Sidebar"
       >
-        <span class="riwayah-pill-text">{{ currentRiwayahMeta.arabicName }}</span>
-      </div>
+        <PanelLeft :size="14" />
+      </button>
+
+      <!-- Subtle Update Badge -->
+      <button
+        v-if="versionService.hasUpdate.value"
+        class="update-nav-btn"
+        @click="$emit('open-update-modal')"
+        title="Update Available"
+      >
+        <span class="update-dot"></span>
+        <span class="update-nav-text">Update</span>
+      </button>
     </div>
 
-    <!-- Centered Ayah Banner without Tashkeel -->
-    <div class="center-ayah-banner" title="وما اسالكم عليه من اجر ان اجري الا على رب العالمين">
-      <span class="ayah-text">وما اسالكم عليه من اجر ان اجري الا على رب العالمين</span>
+    <!-- Center: Ayah (Quran font, always visible) -->
+    <div class="nav-center-ayah" dir="rtl" lang="ar" aria-hidden="true">
+      و ما اسالكم عليه من اجر ان اجري الا على رب العالمين
     </div>
 
-
-
-    <!-- Right-Aligned Action Controls -->
+    <!-- Right: Tool Cluster & Window Controls -->
     <div class="right-actions">
-      <!-- Undo / Redo (Right Aligned) -->
-      <button 
-        class="btn-icon" 
-        @click="projectStore.undo()" 
-        :disabled="!projectStore.canUndo.value"
-        title="Undo boundary edit (Ctrl+Z)"
-      >
-        <Undo2 :size="15" />
-      </button>
+      <!-- History Group -->
+      <div class="btn-group">
+        <button
+          class="btn-icon btn-group-item"
+          @click="projectStore.undo()"
+          :disabled="!projectStore.canUndo.value"
+          title="Undo (Ctrl+Z)"
+        >
+          <Undo2 :size="14" />
+        </button>
+        <button
+          class="btn-icon btn-group-item"
+          @click="projectStore.redo()"
+          :disabled="!projectStore.canRedo.value"
+          title="Redo (Ctrl+Y)"
+        >
+          <Redo2 :size="14" />
+        </button>
+      </div>
 
-      <button 
-        class="btn-icon" 
-        @click="projectStore.redo()" 
-        :disabled="!projectStore.canRedo.value"
-        title="Redo (Ctrl+Y)"
-      >
-        <Redo2 :size="15" />
-      </button>
-
-      <div class="divider"></div>
-
-      <!-- Autosave Status Indicator Pill -->
-      <div 
-        class="autosave-status-pill" 
-        :class="projectStore.saveStatus.value" 
+      <!-- Minimalist Save Status Indicator -->
+      <button
+        class="save-chip"
+        :class="projectStore.saveStatus.value"
         @click="saveProject"
+        :disabled="projectStore.isSaving.value"
         :title="autosaveTooltip"
       >
-        <span v-if="projectStore.saveStatus.value === 'saving'" class="status-dot saving-spinner"></span>
-        <span v-else-if="projectStore.saveStatus.value === 'unsaved'" class="status-dot unsaved-dot"></span>
-        <span v-else-if="projectStore.saveStatus.value === 'error'" class="status-dot error-dot"></span>
-        <Check v-else :size="11" class="saved-icon" />
-        
-        <span class="status-label">
-          {{ autosaveLabel }}
-        </span>
-      </div>
-
-      <!-- Quick Save Project -->
-      <button 
-        class="btn-icon save-btn-rel" 
-        @click="saveProject" 
-        :disabled="projectStore.isSaving.value"
-        :title="saveSuccess ? 'Saved' : (projectStore.isDirty.value ? 'Unsaved edits - Click to save' : 'All changes saved')"
-        :class="{ 'text-green': saveSuccess, 'has-unsaved': projectStore.isDirty.value }"
-      >
-        <Check v-if="saveSuccess" :size="15" />
-        <Save v-else :size="15" />
-        <span v-if="projectStore.isDirty.value && !saveSuccess" class="unsaved-badge-dot"></span>
+        <span v-if="projectStore.saveStatus.value === 'saving'" class="saving-spinner"></span>
+        <span v-else-if="projectStore.saveStatus.value === 'unsaved'" class="unsaved-dot"></span>
+        <span v-else-if="projectStore.saveStatus.value === 'error'" class="error-dot"></span>
+        <Check v-else :size="12" class="saved-icon" />
       </button>
 
-      <!-- Auditor Toggle -->
-      <button 
-        class="btn-icon auditor-btn" 
+      <!-- Confidence Auditor Drawer Toggle -->
+      <button
+        class="btn-icon auditor-btn"
         :class="{ 'active': projectStore.issuesDrawerOpen.value }"
         @click="projectStore.issuesDrawerOpen.value = !projectStore.issuesDrawerOpen.value"
         title="Confidence Auditor"
       >
-        <AlertCircle :size="15" />
+        <AlertCircle :size="14" />
         <span v-if="projectStore.issues.value.length > 0" class="issue-pill">
           {{ projectStore.issues.value.length }}
         </span>
       </button>
 
-      <!-- Export Button -->
-      <button class="btn-export" @click="$emit('open-export-modal')" title="Export Subtitles, Karaoke & Project">
-        <Download :size="13" />
-        <span>Export</span>
+      <!-- Theme Switcher (bulb) -->
+      <button
+        class="btn-icon theme-bulb"
+        :class="{ 'lit': theme === 'light' }"
+        @click="setTheme(theme === 'dark' ? 'light' : 'dark')"
+        :title="theme === 'dark' ? 'Turn on the light' : 'Turn off the light'"
+        aria-label="Toggle Theme"
+      >
+        <Lightbulb :size="15" />
       </button>
 
-      <!-- Custom Window Controls (Directly beside Export, matching QuranCaption TitleBar) -->
+      <!-- Export moved to the Recitations sidebar -->
+
+      <!-- Window Controls -->
       <div class="window-controls-divider"></div>
       <div class="window-controls">
-        <button 
-          class="win-btn win-min" 
-          @click="minimizeWindow" 
-          title="Minimize" 
-          aria-label="Minimize"
-        >
-          <Minus :size="13" />
+        <button class="win-btn win-min" @click="minimizeWindow" title="Minimize" aria-label="Minimize">
+          <Minus :size="12" />
         </button>
-        <button 
-          class="win-btn win-max" 
-          @click="toggleMaximizeWindow" 
-          :title="isMaximized ? 'Restore Down' : 'Maximize'" 
-          :aria-label="isMaximized ? 'Restore Down' : 'Maximize'"
+        <button
+          class="win-btn win-max"
+          @click="toggleMaximizeWindow"
+          :title="isMaximized ? 'Restore' : 'Maximize'"
+          :aria-label="isMaximized ? 'Restore' : 'Maximize'"
         >
-          <Copy v-if="isMaximized" :size="11" class="restore-icon" />
-          <Square v-else :size="11" />
+          <Copy v-if="isMaximized" :size="10" class="restore-icon" />
+          <Square v-else :size="10" />
         </button>
-        <button 
-          class="win-btn win-close" 
-          @click="closeWindow" 
-          title="Close" 
+        <button
+          class="win-btn win-close"
+          :class="{ 'armed': closeArmed }"
+          @click="closeWindow"
+          :title="closeArmed ? 'Click to confirm close' : 'Close'"
           aria-label="Close"
         >
-          <X :size="14" />
+          <X :size="13" />
         </button>
       </div>
     </div>
@@ -167,70 +151,62 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { projectStore } from '../services/projectStore';
 import { versionService } from '../services/VersionService';
-import { normalizeRiwayahKey, RIWAYAT_METADATA } from '../services/RiwayahProvider';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { 
-  Undo2, 
-  Redo2, 
-  Download, 
-  AlertCircle, 
-  Check, 
-  Save,
-  FolderKanban,
-  Sliders,
+import {
+  Undo2,
+  Redo2,
+  AlertCircle,
+  Check,
   Minus,
   Square,
   Copy,
   X,
-  Sparkles
+  Lightbulb,
+  PanelLeft
 } from 'lucide-vue-next';
 
 defineEmits<{
-  (e: 'open-export-modal'): void;
   (e: 'open-update-modal'): void;
 }>();
 
+/* ---- Light/dark theme toggle ---- */
+const theme = ref<string>(localStorage.getItem('quran_theme') || 'dark');
+
+function applyTheme() {
+  document.documentElement.dataset.theme = theme.value;
+  window.dispatchEvent(new Event('quran-theme-changed'));
+}
+
+function setTheme(mode: string) {
+  theme.value = mode;
+  try { localStorage.setItem('quran_theme', mode); } catch {}
+  applyTheme();
+}
+
+onMounted(() => {
+  applyTheme();
+});
+
 const saveSuccess = ref(false);
 
-const currentRiwayahMeta = computed(() => {
-  const r = normalizeRiwayahKey(projectStore.project?.settings?.riwayah);
-  return RIWAYAT_METADATA[r];
-});
-
-const autosaveLabel = computed(() => {
-  if (projectStore.saveStatus.value === 'saving') return 'Saving...';
-  if (projectStore.saveStatus.value === 'unsaved') return 'Unsaved';
-  if (projectStore.saveStatus.value === 'error') return 'Save failed';
-  if (projectStore.lastSavedAt.value) {
-    const d = projectStore.lastSavedAt.value;
-    const hh = String(d.getHours()).padStart(2, '0');
-    const mm = String(d.getMinutes()).padStart(2, '0');
-    const ss = String(d.getSeconds()).padStart(2, '0');
-    return `Saved ${hh}:${mm}:${ss}`;
-  }
-  return 'Saved';
-});
-
 const autosaveTooltip = computed(() => {
-  if (projectStore.saveStatus.value === 'unsaved') return 'Unsaved changes exist (idle autosave in ~15s or click to save now)';
-  if (projectStore.saveStatus.value === 'saving') return 'Saving project state to disk...';
-  if (projectStore.lastSavedAt.value) return `Last saved at ${projectStore.lastSavedAt.value.toLocaleTimeString()}`;
-  return 'All changes saved to project';
+  if (projectStore.saveStatus.value === 'unsaved') return 'Unsaved changes (click to save)';
+  if (projectStore.saveStatus.value === 'saving') return 'Saving to disk...';
+  if (projectStore.lastSavedAt.value) return `Saved at ${projectStore.lastSavedAt.value.toLocaleTimeString()} (click to save)`;
+  return 'Saved (click to save)';
 });
 
 async function saveProject() {
   saveSuccess.value = false;
-  const ok = await projectStore.saveActiveProject();
-  if (ok) {
-    saveSuccess.value = true;
-    setTimeout(() => { saveSuccess.value = false; }, 2000);
-  }
+  await projectStore.saveActiveProject();
 }
 
 const isMaximized = ref(false);
+const closeArmed = ref(false);
+let closeArmTimer: ReturnType<typeof setTimeout> | null = null;
 
 async function minimizeWindow() {
   try {
@@ -265,10 +241,23 @@ async function closeWindow() {
     await win.close();
   } catch (e) {
     console.debug('Window close error', e);
-    if (confirm('Are you sure you want to close Quran Recite2Text?')) {
-      window.close();
-    }
+    requestClose();
   }
+}
+
+function requestClose() {
+  if (closeArmed.value) {
+    closeArmed.value = false;
+    try {
+      window.close();
+    } catch (e) {
+      console.debug('Window close error', e);
+    }
+    return;
+  }
+  closeArmed.value = true;
+  if (closeArmTimer) clearTimeout(closeArmTimer);
+  closeArmTimer = setTimeout(() => { closeArmed.value = false; }, 3200);
 }
 </script>
 
@@ -278,7 +267,7 @@ async function closeWindow() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 12px 0 16px;
+  padding: 0 10px 0 12px;
   position: relative;
   z-index: 50;
   border-bottom: 1px solid var(--border-subtle);
@@ -287,146 +276,226 @@ async function closeWindow() {
   user-select: none;
 }
 
-.brand-section,
+.brand-btn,
 .view-tabs,
 .tab-btn,
+.sidebar-toggle-btn,
+.update-nav-btn,
 .right-actions,
-.btn-icon,
-.autosave-status-pill,
-.btn-export,
+.save-chip,
 .window-controls {
   -webkit-app-region: no-drag;
 }
 
-.brand-section {
+.nav-left {
   display: flex;
   align-items: center;
   gap: 12px;
 }
-.brand-header {
+
+.brand-btn {
   display: flex;
   align-items: center;
-  gap: 8px;
   cursor: pointer;
-  user-select: none;
+  border-radius: var(--radius-sm);
+  padding: 2px;
+  background: transparent;
+  border: none;
+  transition: opacity var(--dur-fast) var(--ease-out);
 }
-.brand-icon-img {
-  width: 20px;
-  height: 20px;
-  border-radius: 4px;
-  object-fit: contain;
-}
-.brand-title {
-  font-size: 0.88rem;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  color: var(--text-main);
-}
-
-.navbar-riwayah-pill {
-  display: inline-flex;
-  align-items: center;
-  margin-left: 8px;
-  padding: 2px 8px;
-  background: rgba(56, 189, 248, 0.08);
-  border: 1px solid rgba(56, 189, 248, 0.22);
-  border-radius: 4px;
-  cursor: default;
-}
-.navbar-riwayah-pill .riwayah-pill-text {
-  font-family: var(--font-arabic);
-  font-size: 0.78rem;
-  font-weight: 600;
-  color: #38bdf8;
-}
-
-/* Centered Ayah Banner between left and right controls */
-.center-ayah-banner {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  pointer-events: none;
-  user-select: none;
-  max-width: 48%;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.ayah-text {
-  font-family: var(--font-arabic);
-  font-size: 0.98rem;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-  color: #94a3b8;
-  direction: rtl;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
-  transition: color 0.2s ease, opacity 0.2s ease;
+.brand-btn:hover {
   opacity: 0.85;
 }
-
-.top-navbar:hover .ayah-text {
-  color: #e2e8f0;
-  opacity: 1;
+.brand-icon-img {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  object-fit: contain;
 }
 
-.tab-divider {
-  width: 1px;
-  height: 16px;
-  background: var(--border-subtle);
-}
-
+/* Modern Sliding Segmented Pill */
 .view-tabs {
   display: flex;
   align-items: center;
+  position: relative;
   background: var(--bg-base);
   border: 1px solid var(--border-subtle);
-  border-radius: 5px;
-  padding: 2px;
-  gap: 2px;
+  border-radius: var(--radius-pill);
+  padding: 3px;
+  height: 28px;
 }
 
+.tab-indicator {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc(50% - 3px);
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-e1);
+  transition: transform var(--dur-base) var(--ease-spring);
+}
+.tab-indicator.pos-0 { transform: translateX(0); }
+.tab-indicator.pos-1 { transform: translateX(100%); }
+
 .tab-btn {
+  position: relative;
+  z-index: 1;
+  flex: 1;
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 3px 9px;
-  border-radius: 3px;
-  font-size: 0.72rem;
+  justify-content: center;
+  padding: 0 14px;
+  height: 100%;
+  border-radius: var(--radius-pill);
+  font-size: var(--text-xs);
   font-weight: 500;
   color: var(--text-muted);
   background: transparent;
-  border: 1px solid transparent;
+  border: none;
   cursor: pointer;
-  transition: all 0.1s ease;
+  transition: color var(--dur-fast) var(--ease-out);
 }
-
 .tab-btn:hover {
   color: var(--text-main);
 }
-
 .tab-btn.active {
-  background: var(--bg-surface-elevated);
   color: var(--text-main);
-  border-color: var(--border-medium);
+  font-weight: 600;
 }
 
-
+.update-nav-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: transparent;
+  border: none;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--sky-primary);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: background var(--dur-fast) var(--ease-out);
+}
+.update-nav-btn:hover {
+  background: var(--bg-surface-hover);
+}
+.update-nav-text {
+  font-family: var(--font-mono);
+}
+.update-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--sky-primary);
+}
 
 .right-actions {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
 }
 
-.divider {
-  width: 1px;
-  height: 16px;
-  background: var(--border-subtle);
-  margin: 0 2px;
+.btn-group {
+  display: flex;
+  align-items: center;
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 1px;
+}
+.btn-group-item {
+  border-radius: var(--radius-xs);
+  padding: 4px;
+}
+
+/* Minimalist Save Icon Button */
+.save-chip {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+.save-chip:hover:not(:disabled) {
+  background: var(--bg-surface-hover);
+  border-color: var(--border-subtle);
+}
+.save-chip:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.save-chip.saved .saved-icon {
+  color: var(--emerald-primary);
+}
+.save-chip.unsaved {
+  border-color: var(--amber-border);
+  background: var(--amber-bg);
+}
+.unsaved-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--amber-primary);
+}
+.error-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ruby-primary);
+}
+.saving-spinner {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--accent-subtle);
+  border-top-color: var(--accent-primary);
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Center Ayah */
+.nav-center-ayah {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: var(--font-quran);
+  font-size: 14px;
+  line-height: 1;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 46%;
+  pointer-events: none;
+  -webkit-app-region: drag;
+}
+
+@media (max-width: 980px) {
+  .nav-center-ayah {
+    display: none;
+  }
+}
+
+/* Theme bulb */
+.theme-bulb {
+  color: var(--text-dim);
+}
+.theme-bulb.lit {
+  color: var(--gold-primary);
+  filter: drop-shadow(0 0 5px rgba(var(--gold-rgb), 0.55));
 }
 
 .auditor-btn {
@@ -442,103 +511,18 @@ async function closeWindow() {
   top: 1px;
   right: 1px;
   background: var(--ruby-primary);
-  color: #fff;
-  font-size: 0.58rem;
-  font-weight: 600;
-  width: 13px;
+  color: #ffffff;
+  font-size: 9px;
+  font-weight: 700;
+  min-width: 13px;
   height: 13px;
-  border-radius: 50%;
+  padding: 0 3px;
+  border-radius: var(--radius-pill);
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
-.btn-export {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  background: var(--accent-primary);
-  color: #ffffff;
-  border: 1px solid var(--accent-hover);
-  border-radius: 5px;
-  padding: 4px 10px;
-  font-size: 0.75rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.1s ease;
-  margin-left: 4px;
-}
-.btn-export:hover {
-  background: var(--accent-hover);
-}
-
-.text-green {
-  color: var(--emerald-primary) !important;
-}
-
-.autosave-status-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 8px;
-  border-radius: 9999px;
-  font-size: 0.69rem;
-  font-weight: 500;
-  user-select: none;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid var(--border-subtle);
-  color: var(--text-muted);
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-.autosave-status-pill:hover {
-  background: rgba(255, 255, 255, 0.06);
-  border-color: var(--border-medium);
-}
-.autosave-status-pill.saved {
-  color: #34d399;
-  border-color: rgba(52, 211, 153, 0.22);
-}
-.autosave-status-pill.saving {
-  color: #60a5fa;
-  border-color: rgba(96, 165, 250, 0.25);
-}
-.autosave-status-pill.unsaved {
-  color: #fbbf24;
-  border-color: rgba(251, 191, 36, 0.25);
-}
-.autosave-status-pill.error {
-  color: #f87171;
-  border-color: rgba(248, 113, 113, 0.25);
-}
-
-.status-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  display: inline-block;
-}
-.unsaved-dot {
-  background: #fbbf24;
-  box-shadow: 0 0 5px rgba(251, 191, 36, 0.6);
-}
-.error-dot {
-  background: #f87171;
-}
-.saving-spinner {
-  border: 1.5px solid rgba(96, 165, 250, 0.3);
-  border-top-color: #60a5fa;
-  animation: spin 0.7s linear infinite;
-}
-.saved-icon {
-  color: #34d399;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
-/* Window Control Buttons (Directly adapted from QuranCaption TitleBar) */
 .window-controls-divider {
   width: 1px;
   height: 16px;
@@ -549,7 +533,7 @@ async function closeWindow() {
 .window-controls {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 1px;
 }
 
 .win-btn {
@@ -558,69 +542,56 @@ async function closeWindow() {
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   border: none;
   background: transparent;
-  color: var(--text-dim);
+  color: var(--text-muted);
   cursor: pointer;
   transition: all 0.12s ease;
   padding: 0;
 }
-
 .win-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--hover-overlay);
   color: var(--text-main);
 }
-
-.win-close:hover {
-  background: #dc2626 !important;
+.win-close.armed {
+  background: rgba(220, 38, 38, 0.85) !important;
   color: #ffffff !important;
 }
-
+.win-close:hover {
+  background: var(--ruby-primary) !important;
+  color: #ffffff !important;
+}
 .restore-icon {
   transform: rotate(180deg);
 }
 
-/* Glowing Auto-Update Notification Button (from QuranCaption) */
-.update-nav-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  background: rgba(14, 165, 233, 0.14);
-  border: 1px solid rgba(14, 165, 233, 0.35);
-  border-radius: 999px;
-  padding: 3px 9px;
-  font-size: 0.69rem;
-  font-weight: 600;
-  color: #38bdf8;
-  cursor: pointer;
-  position: relative;
-  transition: all 0.15s ease;
-  margin-left: 2px;
-}
-.update-nav-btn:hover {
-  background: rgba(14, 165, 233, 0.25);
-  border-color: #38bdf8;
-  box-shadow: 0 0 12px rgba(56, 189, 248, 0.35);
-}
-.text-sky {
-  color: #38bdf8;
-}
-.update-nav-text {
-  font-family: monospace;
-}
-.update-pulse-ring {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #38bdf8;
-  box-shadow: 0 0 6px #38bdf8;
-  animation: pulse-glow 1.5s infinite;
-}
+/* Small screens: compact chrome, keep window controls */
+@media (max-width: 760px) {
+  .top-navbar {
+    padding: 0 6px;
+  }
 
-@keyframes pulse-glow {
-  0% { transform: scale(0.95); opacity: 0.7; }
-  50% { transform: scale(1.3); opacity: 1; }
-  100% { transform: scale(0.95); opacity: 0.7; }
+  .nav-left {
+    gap: 6px;
+  }
+
+  .tab-btn {
+    padding: 0 10px;
+  }
+
+  /* Undo/redo and the save chip hide on phones (Ctrl+Z / autosave still work) */
+  .btn-group,
+  .save-chip {
+    display: none;
+  }
+
+  .update-nav-text {
+    display: none;
+  }
+
+  .update-nav-btn {
+    padding: 3px 5px;
+  }
 }
 </style>
