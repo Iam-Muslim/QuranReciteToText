@@ -494,6 +494,7 @@ export function useAlignmentRunner(
           projectStore.project.settings.riwayah = selectedRiwayah.value;
         }
         projectStore.loadAlignedSurah(event.result, effPath, effUrl);
+        projectStore.saveActiveProject().catch(() => {});
         projectStore.currentTab.value = 'studio';
       }
     } else if (event.type === 'error') {
@@ -570,6 +571,7 @@ export function useAlignmentRunner(
     if (!isAborted.value) {
       isComplete.value = true;
       statusMessage.value = `Batch alignment finished! Processed ${filesQueue.value.length} recitation(s).`;
+      projectStore.saveActiveProject().catch(() => {});
       if (filesQueue.value.length === 1 && !errorMessage.value && onSingleSuccessCallback) {
         setTimeout(() => {
           if (!isAborted.value && isComplete.value) {
@@ -611,6 +613,7 @@ export function useAlignmentRunner(
       await executeAlignment(undefined, undefined, targetDir);
       if (!isAborted.value) {
         isComplete.value = true;
+        projectStore.saveActiveProject().catch(() => {});
       }
     } catch (err: any) {
       if (!isAborted.value) {

@@ -310,6 +310,7 @@ export function useTimingImporter(
       progressPercent.value = 100;
       statusMessage.value = `Imported timings for ${ok} recitation(s).`;
       isComplete.value = true;
+      projectStore.saveActiveProject().catch(() => {});
       if (pairs.length === 1 && !errorMessage.value && onSingleSuccessCallback) {
         setTimeout(() => {
           if (!isAborted.value && isComplete.value) {

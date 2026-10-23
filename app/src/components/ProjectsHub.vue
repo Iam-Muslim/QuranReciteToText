@@ -174,9 +174,9 @@
             <h3 class="card-name" :title="p.project_name">{{ p.project_name }}</h3>
             
             <div class="card-meta-line">
-              <span class="meta-tag surah-count-pill" :title="`${p.surahs_count || 1} Surah(s)`">
+              <span class="meta-tag surah-count-pill" :title="`${p.surahs_count} Surah(s)`">
                 <BookOpen :size="11" />
-                <span>{{ p.surahs_count || 1 }} {{ (p.surahs_count || 1) === 1 ? 'Surah' : 'Surahs' }}</span>
+                <span>{{ p.surahs_count }} {{ p.surahs_count === 1 ? 'Surah' : 'Surahs' }}</span>
               </span>
               <span v-if="p.reciter" class="meta-tag">
                 <span>{{ p.reciter }}</span>
@@ -395,15 +395,69 @@ function handleGlobalKey(e: KeyboardEvent) {
   searchInputRef.value?.focus();
 }
 
+function normalizeProjectSummary(p: any): ProjectSummary {
+  const surahs: any[] = Array.isArray(p.surahs) ? p.surahs : [];
+  const surahsCount = surahs.length || (typeof p.surahs_count === 'number' ? p.surahs_count : 0);
+
+  // Extract primary surah
+  let primarySurah = p.primary_surah;
+  if (!primarySurah && surahs.length > 0) {
+    const s0 = surahs[0];
+    primarySurah = {
+      surah_number: s0.surah_number || 1,
+      surah_name_arabic: s0.surah_name_arabic || '',
+      surah_name_english: s0.surah_name_english || '',
+    };
+  }
+
+  // Calculate total ayahs and total duration
+  let totalAyahs = typeof p.total_ayahs === 'number' && p.total_ayahs > 0 ? p.total_ayahs : 0;
+  if (totalAyahs === 0 && surahs.length > 0) {
+    totalAyahs = surahs.reduce((sum: number, s: any) => sum + (Array.isArray(s.ayahs) ? s.ayahs.length : 0), 0);
+  }
+
+  let totalDuration = typeof p.total_duration === 'number' && p.total_duration > 0 ? p.total_duration : 0;
+  if (totalDuration === 0 && surahs.length > 0) {
+    totalDuration = surahs.reduce((sum: number, s: any) => sum + (Number(s.audio_duration_seconds) || 0), 0);
+  }
+
+  // Derive status
+  let status = p.status;
+  if (!status && surahs.length > 0) {
+    const isAllVerified = surahs.every((s: any) => s.status === 'verified');
+    status = isAllVerified ? 'verified' : 'needs_review';
+  }
+
+  const fileName = getProjectFileName(p);
+  const projectName = String(p.project_name || p.name || fileName.replace(/\.qproj$/i, '') || 'Recitation Project');
+
+  return {
+    ...p,
+    file_name: fileName,
+    project_name: projectName,
+    reciter: p.reciter || p.settings?.reciter_name || '',
+    riwayah: p.riwayah || p.settings?.riwayah || 'Hafs',
+    status: status || 'needs_review',
+    surahs_count: surahsCount,
+    surah_numbers: p.surah_numbers || surahs.map((s: any) => s.surah_number),
+    primary_surah: primarySurah,
+    total_ayahs: totalAyahs,
+    total_duration: totalDuration,
+    created_at: p.created_at || new Date().toISOString(),
+    updated_at: p.updated_at || p.created_at || new Date().toISOString(),
+    size_bytes: p.size_bytes || 0,
+  };
+}
+
 const filteredProjects = computed(() => {
   let list = projectsList.value;
 
   const q = searchQuery.value.trim().toLowerCase();
   if (q) {
     list = list.filter(p => {
-      const matchName = p.project_name.toLowerCase().includes(q);
-      const matchReciter = p.reciter && p.reciter.toLowerCase().includes(q);
-      const matchRiwayah = p.riwayah && p.riwayah.toLowerCase().includes(q);
+      const matchName = String(p.project_name || '').toLowerCase().includes(q);
+      const matchReciter = p.reciter && String(p.reciter).toLowerCase().includes(q);
+      const matchRiwayah = p.riwayah && String(p.riwayah).toLowerCase().includes(q);
       const matchSurahAr = p.primary_surah?.surah_name_arabic && p.primary_surah.surah_name_arabic.includes(q);
       const matchSurahEn = p.primary_surah?.surah_name_english && p.primary_surah.surah_name_english.toLowerCase().includes(q);
       return matchName || matchReciter || matchRiwayah || matchSurahAr || matchSurahEn;
@@ -419,16 +473,18 @@ const filteredProjects = computed(() => {
     });
   }
 
-  const byRecent = (a: ProjectSummary, b: ProjectSummary) =>
-    (new Date(b.updated_at).getTime() || 0) - (new Date(a.updated_at).getTime() || 0);
+  const byRecent = (a: ProjectSummary, b: ProjectSummary) => {
+    const ta = new Date(a.updated_at || a.created_at || 0).getTime() || 0;
+    const tb = new Date(b.updated_at || b.created_at || 0).getTime() || 0;
+    return tb - ta;
+  };
 
   return [...list].sort((a, b) => {
     if (sortKey.value === 'name') {
-      return a.project_name.localeCompare(b.project_name);
+      return String(a.project_name || '').localeCompare(String(b.project_name || ''));
     } else if (sortKey.value === 'surahs') {
-      return (b.surahs_count || 0) - (a.surahs_count || 0) || byRecent(a, b);
+      return (Number(b.surahs_count) || 0) - (Number(a.surahs_count) || 0) || byRecent(a, b);
     } else if (sortKey.value === 'review') {
-      // Unreviewed work first, most recently touched on top
       return (isVerified(a) ? 1 : 0) - (isVerified(b) ? 1 : 0) || byRecent(a, b);
     } else {
       return byRecent(a, b);
@@ -444,21 +500,42 @@ async function fetchProjects(retries?: number | Event) {
   const retryCount = typeof retries === 'number' ? retries : 3;
   isFetching.value = true;
   try {
-    // Browser/shared-link mode: projects (and audio) live in the local vault
+    let rawList: any[] = [];
     if (!isTauriEnvironment()) {
-      const list = await vaultList();
-      projectsList.value = list;
-      try {
-        localStorage.setItem(CACHE_KEY, JSON.stringify(list));
-      } catch {}
-      return;
+      rawList = await vaultList();
+    } else {
+      const data = await listProjects();
+      rawList = data.projects || [];
     }
-    const data = await listProjects();
-    const rawList = data.projects || [];
-    const list = rawList.map((p: any) => ({
-      ...p,
-      file_name: getProjectFileName(p),
-    }));
+
+    let list = rawList.map(normalizeProjectSummary);
+
+    // CRITICAL: Ensure currently active project in store is represented,
+    // even if it was just aligned in memory or Tauri file write is still finishing:
+    if (projectStore.project && projectStore.project.project_name) {
+      const activeSurahs = projectStore.project.surahs || [];
+      if (activeSurahs.length > 0 || projectStore.isDirty.value) {
+        const activeFileName = projectStore.project.file_name || `${projectStore.project.project_name}.qproj`;
+        const existingIdx = list.findIndex(p => getProjectFileName(p) === activeFileName || p.project_name === projectStore.project.project_name);
+        if (existingIdx === -1) {
+          list.unshift(normalizeProjectSummary({
+            ...projectStore.project,
+            file_name: activeFileName,
+          }));
+          // Trigger immediate disk write if not yet saved
+          projectStore.saveActiveProject().catch(() => {});
+        } else {
+          // If in-memory copy has more surahs than disk scan, upgrade it:
+          if (activeSurahs.length > (list[existingIdx].surahs_count || 0)) {
+            list[existingIdx] = normalizeProjectSummary({
+              ...projectStore.project,
+              file_name: activeFileName,
+            });
+          }
+        }
+      }
+    }
+
     projectsList.value = list;
     try {
       localStorage.setItem(CACHE_KEY, JSON.stringify(list));

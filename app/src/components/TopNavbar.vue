@@ -1,8 +1,8 @@
 <template>
-  <header class="top-navbar" data-tauri-drag-region>
+  <header class="top-navbar">
     <!-- Left: Brand, View Tabs, Update badge -->
     <div class="nav-left">
-      <button class="brand-btn" @click="projectStore.currentTab.value = 'projects'" title="Quran Recite2Text">
+      <button class="brand-btn" @click="switchTab('projects')" title="Quran Recite2Text">
         <img src="/logo.png" alt="Logo" class="brand-icon-img" />
       </button>
 
@@ -14,7 +14,7 @@
           role="tab"
           :aria-selected="projectStore.currentTab.value === 'projects'"
           :class="{ 'active': projectStore.currentTab.value === 'projects' }"
-          @click="projectStore.currentTab.value = 'projects'"
+          @click="switchTab('projects')"
         >
           <span>Projects</span>
         </button>
@@ -24,7 +24,7 @@
           role="tab"
           :aria-selected="projectStore.currentTab.value === 'studio'"
           :class="{ 'active': projectStore.currentTab.value === 'studio' }"
-          @click="projectStore.currentTab.value = 'studio'"
+          @click="switchTab('studio')"
         >
           <span>Studio</span>
         </button>
@@ -54,8 +54,8 @@
       </button>
     </div>
 
-    <!-- Center: Ayah (Quran font, always visible) -->
-    <div class="nav-center-ayah" dir="rtl" lang="ar" aria-hidden="true">
+    <!-- Center: Ayah (Quran font, always visible, window drag area) -->
+    <div class="nav-center-ayah" dir="rtl" lang="ar" aria-hidden="true" data-tauri-drag-region>
       و ما اسالكم عليه من اجر ان اجري الا على رب العالمين
     </div>
 
@@ -207,6 +207,14 @@ async function saveProject() {
   await projectStore.saveActiveProject();
 }
 
+async function switchTab(tab: 'projects' | 'studio') {
+  if (projectStore.currentTab.value === tab) return;
+  if (projectStore.isDirty.value) {
+    await projectStore.flushAutosave();
+  }
+  projectStore.currentTab.value = tab;
+}
+
 const isTauri = isTauriEnvironment();
 const isMaximized = ref(false);
 const closeArmed = ref(false);
@@ -279,7 +287,6 @@ function requestClose() {
   z-index: 50;
   border-bottom: 1px solid var(--border-subtle);
   background: var(--bg-surface);
-  -webkit-app-region: drag;
   user-select: none;
 }
 
@@ -486,7 +493,7 @@ function requestClose() {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 46%;
-  pointer-events: none;
+  pointer-events: auto;
   -webkit-app-region: drag;
 }
 

@@ -879,6 +879,9 @@ function open() {
 
 function close() {
   if (!isRunning.value) {
+    if (projectStore.isDirty.value) {
+      projectStore.saveActiveProject().catch(() => {});
+    }
     if (isComplete.value) {
       projectStore.currentTab.value = 'studio';
     }
@@ -901,6 +904,9 @@ function restoreModal() {
 }
 
 function handleContinueToStudio() {
+  if (projectStore.isDirty.value) {
+    projectStore.saveActiveProject().catch(() => {});
+  }
   projectStore.currentTab.value = 'studio';
   visible.value = false;
   isMinimized.value = false;

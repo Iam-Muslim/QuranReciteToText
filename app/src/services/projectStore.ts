@@ -1,4 +1,4 @@
-import { reactive, computed, ref } from 'vue';
+import { reactive, computed, ref, toRaw } from 'vue';
 import type { 
   AlignerProject, 
   SurahItem, 
@@ -101,9 +101,7 @@ class ProjectStore {
     this.autosave = new AutosaveService({
       saveFn: () => this.saveActiveProject(),
       canSavePredicate: () => {
-        const isModalOpen = typeof document !== 'undefined' && 
-          document.querySelector('.modal-wrapper, [role="dialog"], .dialog-overlay, .modal-backdrop, .alignment-modal, .modal-overlay') !== null;
-        return !this.isPlaying.value && !isModalOpen;
+        return !this.isPlaying.value;
       }
     });
     this.isDirty = this.autosave.isDirty;
@@ -131,7 +129,10 @@ class ProjectStore {
 
     try {
       if (isTauriEnvironment()) {
-        const fileName = this.project.file_name || `${this.project.project_name}.qproj`;
+        if (!this.project.file_name) {
+          this.project.file_name = `${this.project.project_name}.qproj`;
+        }
+        const fileName = this.project.file_name;
         await saveProject(fileName, this.buildPersistentSnapshot());
       } else {
         // Browser vault: same snapshot shape, audio blobs stored beside it
@@ -182,16 +183,27 @@ class ProjectStore {
    * Disk-safe copy of the project: strips runtime-only audio sources
    * (blob:/data: URLs die with the session) and embedded audio payloads
    * (kept for explicit portable exports, not for autosave).
+   * Uses toRaw to prevent recursive Proxy getter evaluation.
    */
   public buildPersistentSnapshot(): AlignerProject {
-    const clone: AlignerProject = JSON.parse(JSON.stringify(this.project));
-    for (const s of clone.surahs || []) {
-      if (typeof s.audio_url === 'string' && /^(blob|data):/.test(s.audio_url)) {
-        s.audio_url = '';
+    const raw = toRaw(this.project);
+    const surahs = (raw.surahs || []).map(s => {
+      const rawS = toRaw(s);
+      const isCustomUrl = typeof rawS.audio_url === 'string' && /^(blob|data):/.test(rawS.audio_url);
+      const hasEmbedded = 'audio_embedded' in rawS;
+      if (!isCustomUrl && !hasEmbedded) {
+        return rawS;
       }
-      if (s.audio_embedded) delete (s as any).audio_embedded;
-    }
-    return clone;
+      const sCopy = { ...rawS };
+      if (isCustomUrl) sCopy.audio_url = '';
+      if (hasEmbedded) delete (sCopy as any).audio_embedded;
+      return sCopy;
+    });
+
+    return {
+      ...raw,
+      surahs,
+    };
   }
 
   // Active Surah getter
@@ -1320,6 +1332,7 @@ class ProjectStore {
 
     this.isDirty.value = true;
     this.scheduleAutosave();
+    this.flushAutosave().catch(() => {});
   }
 
   /**
@@ -1361,6 +1374,7 @@ class ProjectStore {
 
     this.isDirty.value = true;
     this.scheduleAutosave();
+    this.flushAutosave().catch(() => {});
   }
 
   // Delete a single surah from project (works even if it's the only one!)
