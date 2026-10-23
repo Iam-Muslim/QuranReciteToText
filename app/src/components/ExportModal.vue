@@ -9,7 +9,7 @@
             <Download v-else :size="18" class="text-accent" />
           </div>
           <div class="header-titles">
-            <h3 class="modal-title">Export & Cloud Publishing</h3>
+            <h3 class="modal-title">Export & Hugging Face Publishing</h3>
             <span class="modal-subtitle">Generate Medina timing JSON or publish directly to Hugging Face</span>
           </div>
         </div>
@@ -33,7 +33,7 @@
           :class="{ 'active': activeMainTab === 'upload' }"
           @click="activeMainTab = 'upload'; resetUploadState()"
         >
-          <Cloud :size="14" />
+          <span style="font-size: 13px;">🤗</span>
           <span>Upload to Hugging Face</span>
           <span v-if="isCloudOrigin" class="tab-badge-synced">Synced</span>
         </button>
@@ -137,14 +137,14 @@
       <!-- ══════════════════════════════════════════════ -->
       <div v-else class="tab-content-wrap upload-tab-wrap">
         <div class="upload-scrollable-body">
-          <!-- 1. Destination Repository Banner -->
+          <!-- 1. Clean Destination Repository Banner -->
           <div class="hf-destination-card">
             <div class="hf-card-left">
               <span class="hf-emoji" style="font-size: 22px;">🤗</span>
               <div class="hf-dest-info">
                 <span class="hf-dest-label">Target Dataset Repository:</span>
                 <div class="hf-repo-row">
-                  <a :href="`https://huggingface.co/datasets/${currentHfRepo}`" target="_blank" rel="noopener" class="hf-repo-link">
+                  <a :href="`https://huggingface.co/datasets/${currentHfRepo}`" target="_blank" rel="noopener" class="hf-repo-link" title="Open repository on Hugging Face">
                     <span>{{ currentHfRepo }}</span>
                     <ExternalLink :size="11" />
                   </a>
@@ -157,79 +157,37 @@
                 <ShieldCheck :size="12" />
                 <span>Write Token Configured</span>
               </div>
-              <div v-else class="token-status-pill token-missing">
+              <button v-else type="button" class="token-status-pill token-missing-btn" @click="navigateToDatasetConfig" title="Configure token in Dataset Settings">
                 <ShieldAlert :size="12" />
-                <span>Token Required</span>
-              </div>
+                <span>Set Token in Config ↗</span>
+              </button>
             </div>
           </div>
 
-          <!-- Token Input (if missing or editing) -->
-          <div v-if="!hasWriteToken || showTokenInput" class="token-input-card anim-rise">
-            <div class="token-card-header">
-              <span class="token-card-title">Hugging Face Access Token (Write Permission)</span>
-              <button class="btn-text-sm" @click="showTokenInput = false" v-if="hasWriteToken">Hide</button>
-            </div>
-            <div class="token-input-row">
-              <input 
-                type="password" 
-                v-model="tokenInputValue" 
-                placeholder="hf_xxxxxxxxxxxxxxxxxxxxxxxx (must have Write role)"
-                class="token-input"
-              />
-              <button class="btn btn-secondary btn-sm" @click="saveToken">Save Token</button>
-            </div>
-            <small class="token-hint">
-              Get or create a Write token at <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noopener">huggingface.co/settings/tokens</a>.
-            </small>
-          </div>
 
-          <!-- 2. Project Cloud Identity Card -->
+          <!-- 2. Clean Project Identity Card -->
           <div class="project-identity-card">
             <div class="identity-header">
               <div>
-                <span class="identity-label">Project / Reciter:</span>
+                <span class="identity-label">Publishing Project:</span>
                 <h4 class="identity-name">{{ projectStore.project.project_name }}</h4>
               </div>
-
-              <!-- Cloud Origin Badge -->
-              <div v-if="isCloudOrigin" class="cloud-badge badge-synced" title="Imported from Cloud — updates will overwrite">
-                <Cloud :size="12" />
-                <span>Cloud Synced Project</span>
+              <div v-if="isCloudOrigin" class="cloud-badge badge-synced" title="Updates existing files in dataset">
+                <span style="font-size: 11px;">🤗</span>
+                <span>Hugging Face Synced</span>
               </div>
-              <div v-else class="cloud-badge badge-new" title="New local project — will not overwrite existing projects">
+              <div v-else class="cloud-badge badge-new" title="New project folder in dataset">
                 <Plus :size="12" />
-                <span>New Local Project</span>
+                <span>New Reciter Project</span>
               </div>
             </div>
 
-            <div class="identity-meta-grid">
-              <div class="identity-meta-item">
-                <span class="meta-name">Reciter</span>
-                <span class="meta-val">{{ projectStore.project.reciter || projectStore.project.settings?.reciter_name || 'Reciter' }}</span>
-              </div>
-              <div class="identity-meta-item">
-                <span class="meta-name">Riwayah</span>
-                <span class="meta-val">{{ projectStore.project.settings?.riwayah || 'Hafs' }}</span>
-              </div>
-              <div class="identity-meta-item">
-                <span class="meta-name">Destination Folder</span>
-                <span class="meta-val font-mono">{{ proposedTargetFolder }}</span>
-              </div>
-              <div class="identity-meta-item">
-                <span class="meta-name">Total Surahs</span>
-                <span class="meta-val">{{ totalSurahsCount }}</span>
-              </div>
-            </div>
-
-            <!-- Overwrite / Sync Behavior Notice -->
-            <div class="identity-behavior-note" :class="{ 'note-synced': isCloudOrigin, 'note-new': !isCloudOrigin }">
-              <span v-if="isCloudOrigin">
-                🔄 <strong>Cloud Update:</strong> This project originated from <code>{{ proposedTargetFolder }}</code>. Uploading will update its JSON files in the dataset.
-              </span>
-              <span v-else>
-                🛡️ <strong>Safe Upload:</strong> This is a local project. The app checks for duplicates to prevent overwriting existing dataset files.
-              </span>
+            <div class="identity-summary-line">
+              <span><strong>{{ totalSurahsCount }}</strong> Surahs ({{ totalAyahsCount }} Ayahs)</span>
+              <span class="dot-sep">•</span>
+              <span>Folder: <code class="font-mono">{{ proposedTargetFolder }}</code></span>
+              <span class="dot-sep">•</span>
+              <span>Tradition: <strong>{{ projectStore.project.settings?.riwayah || 'Hafs' }}</strong></span>
             </div>
           </div>
 
@@ -280,7 +238,7 @@
 
             <div class="collision-actions">
               <button class="btn btn-warning" @click="executeHfUpload(true, collisionFolder)" :disabled="isUploading">
-                <span>Overwrite Existing Cloud Project</span>
+                <span>Overwrite Existing Dataset Project</span>
               </button>
               <button class="btn btn-primary" @click="executeHfUpload(false, collisionSuggestedFolder)" :disabled="isUploading">
                 <span>Upload as New Version ({{ collisionSuggestedFolder }})</span>
@@ -327,11 +285,11 @@
           <button 
             class="btn btn-primary btn-upload-cloud" 
             @click="handleHfUploadInitiate" 
-            :disabled="isUploading || totalSurahsCount === 0"
+            :disabled="isUploading || !hasWriteToken || totalSurahsCount === 0"
           >
             <Loader2 v-if="isUploading" :size="15" class="animate-spin" />
             <UploadCloud v-else :size="15" />
-            <span>{{ isUploading ? (uploadProgressMessage || 'Committing to Hugging Face...') : (isCloudOrigin ? 'Update Cloud Dataset' : 'Publish to Hugging Face') }}</span>
+            <span>{{ isUploading ? (uploadProgressMessage || 'Committing to Hugging Face...') : (isCloudOrigin ? 'Update Hugging Face Dataset' : 'Publish to Hugging Face') }}</span>
           </button>
         </div>
       </div>
@@ -353,7 +311,6 @@ import {
 import { 
   getHfRepo, 
   getHfToken, 
-  setHfToken, 
   uploadProjectToHfDataset,
   checkCloudProjectCollision,
   inspectProjectAudioReachability
@@ -368,7 +325,6 @@ import {
   Archive, 
   FileSpreadsheet, 
   Loader2,
-  Cloud,
   UploadCloud,
   ExternalLink,
   ShieldCheck,
@@ -392,8 +348,6 @@ const isExporting = ref(false);
 const currentHfRepo = ref(getHfRepo());
 const currentHfToken = ref(getHfToken());
 const hasWriteToken = computed(() => Boolean(currentHfToken.value && currentHfToken.value.startsWith('hf_')));
-const showTokenInput = ref(false);
-const tokenInputValue = ref(getHfToken());
 
 const isUploading = ref(false);
 const uploadProgressMessage = ref('');
@@ -480,7 +434,6 @@ async function open() {
   visible.value = true;
   currentHfRepo.value = getHfRepo();
   currentHfToken.value = getHfToken();
-  tokenInputValue.value = getHfToken();
   resetUploadState();
   if (totalSurahsCount.value > 1 && !projectStore.activeSurah.value) {
     exportScope.value = 'all';
@@ -581,20 +534,17 @@ function resetUploadState() {
   uploadedTargetFolder.value = '';
 }
 
-function saveToken() {
-  if (tokenInputValue.value.trim()) {
-    setHfToken(tokenInputValue.value.trim());
-    currentHfToken.value = getHfToken();
-    showTokenInput.value = false;
-  }
+function navigateToDatasetConfig() {
+  close();
+  projectStore.currentTab.value = 'projects';
+  window.dispatchEvent(new CustomEvent('open-dataset-config'));
 }
 
 async function handleHfUploadInitiate() {
   resetUploadState();
 
   if (!hasWriteToken.value) {
-    showTokenInput.value = true;
-    uploadError.value = 'Please provide a Hugging Face Write Token to publish.';
+    uploadError.value = 'Hugging Face Write Token is required. Click "Set Token in Config" above to set it.';
     return;
   }
 
@@ -1020,51 +970,15 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown));
   border: 1px solid rgba(245, 158, 11, 0.3);
 }
 
-.token-input-card {
-  background: var(--bg-surface-elevated);
-  border: 1px solid var(--accent-border);
-  border-radius: var(--radius-md);
-  padding: 12px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+.token-missing-btn {
+  background: rgba(225, 29, 72, 0.1);
+  color: #f43f5e;
+  border: 1px solid rgba(225, 29, 72, 0.25);
+  cursor: pointer;
 }
 
-.token-card-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.token-card-title {
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--text-main);
-}
-
-.token-input-row {
-  display: flex;
-  gap: 8px;
-}
-
-.token-input {
-  flex: 1;
-  background: var(--bg-input);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  padding: 6px 10px;
-  font-size: 12px;
-  color: var(--text-main);
-  outline: none;
-}
-
-.token-hint {
-  font-size: 10.5px;
-  color: var(--text-muted);
-}
-
-.token-hint a {
-  color: var(--accent-primary);
+.token-missing-btn:hover {
+  background: rgba(225, 29, 72, 0.2);
 }
 
 /* Project Identity Card */
@@ -1072,10 +986,10 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown));
   background: var(--bg-card);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
-  padding: 16px;
+  padding: 14px 16px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
 }
 
 .identity-header {
@@ -1118,47 +1032,27 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown));
   border: 1px solid var(--accent-border);
 }
 
-.identity-meta-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 10px;
-  background: var(--bg-input);
-  border-radius: var(--radius-md);
-  padding: 10px 14px;
-}
-
-.identity-meta-item {
+.identity-summary-line {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.meta-name {
-  font-size: 10.5px;
-  color: var(--text-muted);
-}
-
-.meta-val {
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
   font-size: 12px;
-  font-weight: 600;
-  color: var(--text-main);
-}
-
-.identity-behavior-note {
-  font-size: 11.5px;
-  line-height: 1.5;
+  color: var(--text-secondary);
+  background: var(--bg-input);
   padding: 8px 12px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
 }
 
-.note-synced {
-  background: rgba(16, 185, 129, 0.1);
-  color: #10b981;
+.identity-summary-line code {
+  color: var(--accent-primary);
+  font-size: 11.5px;
 }
 
-.note-new {
-  background: rgba(46, 124, 228, 0.08);
-  color: var(--text-main);
+.dot-sep {
+  color: var(--text-muted);
+  opacity: 0.5;
 }
 
 /* Audio Upload Option Card */

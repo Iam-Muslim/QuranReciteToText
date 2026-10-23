@@ -48,7 +48,7 @@
         <div class="surah-info">
           <span class="name-ar">{{ s.surah_name_arabic }}</span>
           <span class="meta-line">
-            {{ s.ayahs.length }} ayahs<span v-if="s.audio_duration_seconds"> · {{ formatDuration(s.audio_duration_seconds) }}</span>
+            {{ s.ayahs?.length || 0 }} ayahs<span v-if="s.audio_duration_seconds"> · {{ formatDuration(s.audio_duration_seconds) }}</span>
           </span>
         </div>
 

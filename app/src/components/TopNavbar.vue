@@ -206,10 +206,10 @@ async function saveProject() {
 
 async function switchTab(tab: 'projects' | 'studio') {
   if (projectStore.currentTab.value === tab) return;
-  if (projectStore.isDirty.value) {
-    await projectStore.flushAutosave();
-  }
   projectStore.currentTab.value = tab;
+  if (projectStore.isDirty.value) {
+    projectStore.flushAutosave().catch((err) => console.warn('Autosave flush on tab switch:', err));
+  }
 }
 
 const isTauri = isTauriEnvironment();

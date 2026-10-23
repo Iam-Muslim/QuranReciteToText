@@ -42,7 +42,7 @@
 
         <!-- Sacred Verses Flow -->
         <div class="verses-flow arabic-quran-text" :style="{ fontSize: `${projectStore.mushafFontSize.value}rem` }">
-          <template v-for="ayah in projectStore.activeSurah.value.ayahs" :key="ayah.ayah">
+          <template v-for="ayah in (projectStore.activeSurah.value?.ayahs || [])" :key="ayah.ayah">
             <span 
               class="ayah-inline-group" 
               :class="{ 'ayah-focused': projectStore.activeAyahNumber.value === ayah.ayah }"
@@ -80,7 +80,7 @@
       class="ayah-cards-wrapper"
     >
       <div 
-        v-for="ayah in projectStore.activeSurah.value?.ayahs" 
+        v-for="ayah in (projectStore.activeSurah.value?.ayahs || [])" 
         :key="ayah.ayah"
         class="ayah-row-card"
         :class="{ 'card-active': projectStore.activeAyahNumber.value === ayah.ayah }"
@@ -98,7 +98,7 @@
           >
             حفص: {{ getCrossHafsAyahLabel(ayah.ayah) }}
           </span>
-          <span class="ayah-time-subtle">{{ ayah.start.toFixed(1) }}s</span>
+          <span class="ayah-time-subtle">{{ (ayah.start ?? 0).toFixed(1) }}s</span>
         </div>
 
         <div class="ayah-row-words arabic-quran-text">
@@ -126,7 +126,7 @@
       class="phoneme-inspector-wrapper"
     >
       <div 
-        v-for="ayah in projectStore.activeSurah.value?.ayahs" 
+        v-for="ayah in (projectStore.activeSurah.value?.ayahs || [])" 
         :key="ayah.ayah"
         class="phoneme-ayah-row"
         :id="`ayah_card_${ayah.ayah}`"

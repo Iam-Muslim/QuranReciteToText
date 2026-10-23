@@ -91,7 +91,7 @@ function buildSummary(project: AlignerProject, fileName: string, sizeBytes: numb
     project_name: project.project_name || fileName.replace(/\.qproj$/i, ''),
     reciter: project.reciter || project.settings?.reciter_name || '',
     riwayah: project.settings?.riwayah || 'Hafs',
-    status: worstStatus(surahs),
+    status: (project as any).status || worstStatus(surahs),
     surahs_count: surahs.length,
     surah_numbers: surahs.map(s => s.surah_number),
     primary_surah: surahs.length > 0
@@ -106,6 +106,8 @@ function buildSummary(project: AlignerProject, fileName: string, sizeBytes: numb
     created_at: project.created_at || new Date().toISOString(),
     updated_at: new Date().toISOString(),
     size_bytes: sizeBytes,
+    cloud_origin: !!project.settings?.cloud_origin,
+    cloud_repo: project.settings?.cloud_repo || '',
   };
 }
 

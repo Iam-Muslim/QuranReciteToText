@@ -8,7 +8,7 @@ import { exportCanonicalJson } from './exporters';
 const STORAGE_KEY_REPO = 'quran_hf_dataset_repo';
 const STORAGE_KEY_TOKEN = 'quran_hf_access_token';
 const STORAGE_KEY_CATALOG = 'quran_hf_catalog_cache';
-export const DEFAULT_HF_REPO = 'Iam-Muslim/Quran-Recitations-Dataset';
+export const DEFAULT_HF_REPO = 'TheGreatQuran/Quran-recite2text';
 
 import { getSurahMeta } from '../data/quranMetadata';
 export { getSurahMeta };
@@ -27,7 +27,11 @@ export function normalizeHfRepoInput(input: string): string {
 
 export function getHfRepo(): string {
   try {
-    return localStorage.getItem(STORAGE_KEY_REPO) || DEFAULT_HF_REPO;
+    const val = localStorage.getItem(STORAGE_KEY_REPO);
+    if (!val || !val.trim() || val === 'Iam-Muslim/Quran-Recitations-Dataset' || val === 'Iam-Muslim/QuranReciteToText') {
+      return DEFAULT_HF_REPO;
+    }
+    return val.trim();
   } catch {
     return DEFAULT_HF_REPO;
   }
@@ -78,6 +82,7 @@ export function getHfBaseUrl(): string {
  */
 export async function fetchCloudProjects(repoOverride?: string): Promise<CloudReciterProject[]> {
   const repo = normalizeHfRepoInput(repoOverride || getHfRepo());
+  if (!repo) return [];
   const baseUrl = `https://huggingface.co/datasets/${repo}/resolve/main`;
   const headers = getHfHeaders();
 
@@ -219,16 +224,18 @@ export function getCloudSurahUrls(project: CloudReciterProject | CloudProjectIte
   const folder = (project.folder || project.id || 'reciters').replace(/^\/+|\/+$/g, '');
   const padded = String(surahNumber).padStart(3, '0');
   const format = project.audio_format || 'mp3';
+  const token = getHfToken();
+  const tokenQuery = token ? `?token=${encodeURIComponent(token)}` : '';
 
   return {
     jsonUrl: `${baseUrl}/${folder}/json/${padded}.json`,
-    audioUrl: `${baseUrl}/${folder}/audio/${padded}.${format}`,
+    audioUrl: `${baseUrl}/${folder}/audio/${padded}.${format}${tokenQuery}`,
     fallbackJsonUrl: `${baseUrl}/${folder}/json/${surahNumber}.json`,
-    fallbackAudioUrl: `${baseUrl}/${folder}/audio/${surahNumber}.${format}`,
+    fallbackAudioUrl: `${baseUrl}/${folder}/audio/${surahNumber}.${format}${tokenQuery}`,
   };
 }
 
-function normalizeRawAyahsToStudio(rawAyahs: any[], surahNumber: number): AyahItem[] {
+export function normalizeRawAyahsToStudio(rawAyahs: any[], surahNumber: number): AyahItem[] {
   if (!Array.isArray(rawAyahs)) return [];
   return rawAyahs.map((a: any) => {
     if (Array.isArray(a.segments) && a.segments.length > 0) {
@@ -355,7 +362,7 @@ export async function openCloudSurahInStudio(
       const duration = Number(rawData?.duration || rawData?.duration_seconds) || 0;
 
       alignerProject = {
-        project_name: `${reciterName} · ${meta.arabic}`,
+        project_name: (project.project_name || reciterName).trim(),
         reciter: reciterName,
         app_version: '2.0.0',
         created_at: new Date().toISOString(),
@@ -427,7 +434,7 @@ export async function importCloudSurahToLocal(
     const riwayah = project.riwayah || 'Hafs';
 
     const projectData: AlignerProject = (rawData && Array.isArray(rawData.surahs)) ? rawData : {
-      project_name: `${reciterName} - ${meta.english} (${surahNumber})`,
+      project_name: (project.project_name || reciterName).trim(),
       reciter: reciterName,
       app_version: '2.0.0',
       created_at: new Date().toISOString(),
@@ -472,6 +479,127 @@ export async function importCloudSurahToLocal(
     return true;
   } catch (err) {
     console.error('Failed to import cloud surah to local:', err);
+    return false;
+  }
+}
+
+/**
+ * Opens a Hugging Face Reciter Project:
+ * 1. Automatically copies/saves the project to the user's Local Projects vault (or desktop .qproj)
+ * 2. Populates all available surahs from the dataset manifest
+ * 3. Immediately streams audio and loads the word timings
+ * 4. Navigates into Studio mode with Surah selection ready
+ */
+export async function openAndImportHfProject(
+  project: CloudReciterProject | CloudProjectItem
+): Promise<boolean> {
+  try {
+    const item = project as any;
+    const rawSurahs: number[] = Array.isArray(item.available_surahs) && item.available_surahs.length > 0
+      ? item.available_surahs.map((n: any) => Number(n))
+      : (typeof item.surah_number === 'number' ? [Number(item.surah_number)] : [1]);
+
+    const availableSurahs: number[] = Array.from(new Set<number>(rawSurahs)).sort((a: number, b: number) => a - b);
+    const firstSurahNum: number = availableSurahs[0] || 1;
+
+    const reciterName = project.reciter || project.project_name || 'Reciter';
+    const riwayah = project.riwayah || 'Hafs';
+    const folder = (project.folder || project.id || '').replace(/^\/+|\/+$/g, '');
+
+    // 1. Fetch timing JSON for active surah
+    const firstUrls = getCloudSurahUrls(project, firstSurahNum);
+    const headers = getHfHeaders();
+    let firstRawData: any = null;
+
+    try {
+      let res = await fetch(firstUrls.jsonUrl, { headers });
+      if (!res.ok) res = await fetch(firstUrls.fallbackJsonUrl, { headers });
+      if (res.ok) firstRawData = await res.json();
+    } catch (e) {
+      console.warn('Initial surah timing fetch warning:', e);
+    }
+
+    const firstMeta = getSurahMeta(firstSurahNum);
+    const rawAyahsSource = Array.isArray(firstRawData) 
+      ? firstRawData 
+      : (firstRawData?.ayahs || firstRawData?.surahs?.[0]?.ayahs || []);
+    const firstAyahs: AyahItem[] = normalizeRawAyahsToStudio(rawAyahsSource, firstSurahNum);
+    const firstPeaks: number[] = Array.isArray(firstRawData?.peaks) 
+      ? firstRawData.peaks 
+      : (Array.isArray(firstRawData?.waveform) ? firstRawData.waveform : []);
+    const firstDuration = Number(firstRawData?.duration || firstRawData?.duration_seconds || firstRawData?.total_duration) || 0;
+
+    const surahItems: SurahItem[] = [
+      {
+        surah_number: firstSurahNum,
+        surah_name_arabic: firstRawData?.surah_name_arabic || firstMeta.arabic,
+        surah_name_english: firstRawData?.surah_name_english || firstMeta.english,
+        audio_url: firstUrls.audioUrl,
+        waveform_url: firstRawData?.waveform_url || '',
+        peaks: firstPeaks.length > 0 ? firstPeaks : undefined,
+        audio_duration_seconds: firstDuration,
+        status: firstRawData?.status || project.status || 'verified',
+        intro: firstRawData?.intro || undefined,
+        ayahs: firstAyahs,
+      }
+    ];
+
+    // Add entries for all other available surahs in the dataset
+    for (const sNum of availableSurahs.slice(1)) {
+      const sUrls = getCloudSurahUrls(project, sNum);
+      const meta = getSurahMeta(sNum);
+      surahItems.push({
+        surah_number: sNum,
+        surah_name_arabic: meta.arabic,
+        surah_name_english: meta.english,
+        audio_url: sUrls.audioUrl,
+        waveform_url: '',
+        peaks: undefined,
+        audio_duration_seconds: 0,
+        status: project.status || 'verified',
+        ayahs: [],
+      });
+    }
+
+    const displayName = (project.project_name || reciterName).trim();
+    const projectData: AlignerProject = {
+      project_name: displayName,
+      reciter: reciterName,
+      app_version: '2.0.0',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      settings: {
+        snapping_tolerance_ms: 25,
+        confidence_warning_threshold: 0.85,
+        auto_save_interval_s: 30,
+        reciter_name: reciterName,
+        riwayah,
+        cloud_origin: true,
+        cloud_repo: getHfRepo(),
+        cloud_folder: folder,
+        cloud_id: project.id,
+      },
+      surahs: surahItems,
+    };
+
+    const fileName = safeProjectFileName(projectData.project_name);
+    projectData.file_name = fileName;
+
+    // Automatically copy into local projects
+    if (isTauriEnvironment()) {
+      await createProject(projectData.project_name, projectData);
+      await saveProject(fileName, projectData);
+    } else {
+      await vaultSave(fileName, projectData);
+    }
+
+    // Load into studio workspace
+    projectStore.loadProject(projectData);
+    projectStore.selectSurah(firstSurahNum);
+    projectStore.currentTab.value = 'studio';
+    return true;
+  } catch (err) {
+    console.error('Failed to open and import Hugging Face project:', err);
     return false;
   }
 }

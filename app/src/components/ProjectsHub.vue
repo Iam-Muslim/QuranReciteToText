@@ -27,7 +27,7 @@
     <!-- 2. Modern Minimalist Toolbar UNDER the Ayah Banner -->
     <header class="hub-toolbar">
       <div class="toolbar-left">
-        <!-- Segmented Workspace Source: Local vs Cloud -->
+        <!-- Segmented Workspace Source: Local vs Hugging Face -->
         <div class="workspace-tabs">
           <button 
             class="workspace-tab" 
@@ -43,8 +43,8 @@
             :class="{ 'active': activeViewMode === 'cloud' }"
             @click="activeViewMode = 'cloud'; fetchCloudProjects()"
           >
-            <Cloud :size="13" />
-            <span>Cloud</span>
+            <span style="font-size: 13px;">🤗</span>
+            <span>Hugging Face</span>
             <span class="tab-badge tab-badge-cloud">{{ cloudProjects.length }}</span>
           </button>
         </div>
@@ -55,7 +55,7 @@
           <input 
             type="text" 
             v-model="searchQuery" 
-            :placeholder="activeViewMode === 'local' ? 'Search local projects…' : 'Search cloud dataset…'" 
+            :placeholder="activeViewMode === 'local' ? 'Search local projects…' : 'Search Hugging Face datasets…'" 
             class="search-input"
             spellcheck="false"
           />
@@ -95,17 +95,17 @@
         <button 
           v-if="activeViewMode === 'cloud'"
           class="btn-hf-settings" 
-          @click="showHfSettingsModal = true"
+          @click="openHfSettingsModal"
           title="Configure Hugging Face Dataset"
         >
           <Settings2 :size="12" />
           <span>Dataset Config</span>
         </button>
 
-        <!-- Sort Control (local projects) -->
-        <div v-if="activeViewMode === 'local'" class="sort-select-wrap">
+        <!-- Sort Control (Local & Hugging Face) -->
+        <div class="sort-select-wrap">
           <SlidersHorizontal :size="12" class="sort-icon" />
-          <select v-model="sortKey" class="sort-select" title="Sort Projects">
+          <select v-model="sortKey" class="sort-select" :title="activeViewMode === 'local' ? 'Sort Local Projects' : 'Sort Hugging Face Projects'">
             <option value="updated">Recent</option>
             <option value="review">Needs Review First</option>
             <option value="surahs">Surah Count</option>
@@ -132,36 +132,9 @@
         <span>{{ toastMessage }}</span>
       </div>
 
-      <!-- ═══════════ CLOUD VIEW ═══════════ -->
+      <!-- ═══════════ HUGGING FACE VIEW ═══════════ -->
       <div v-if="activeViewMode === 'cloud'" class="cloud-view-wrap">
-        <!-- Subheader Info Banner -->
-        <div class="cloud-dataset-banner">
-          <div class="cloud-banner-left">
-            <span class="cloud-hf-icon" style="font-size: 18px;">🤗</span>
-            <div>
-              <span class="cloud-banner-title">Hugging Face Dataset: </span>
-              <a :href="`https://huggingface.co/datasets/${currentHfRepo}`" target="_blank" rel="noopener" class="cloud-banner-repo">
-                <span>{{ currentHfRepo }}</span>
-                <ExternalLink :size="10" />
-              </a>
-            </div>
-          </div>
-          <div class="cloud-banner-right">
-            <span class="badge-low-bandwidth">
-              ⚡ Lowest Bandwidth · On-Demand HTTP Range Streaming
-            </span>
-            <button class="btn-hf-settings" @click="showGuideModal = true" title="View professional dataset layout guide">
-              <BookOpen :size="11" />
-              <span>Dataset Guide</span>
-            </button>
-            <button class="btn-hf-settings" @click="showHfSettingsModal = true" title="Configure repository and access token">
-              <Settings2 :size="11" />
-              <span>Connect Repo</span>
-            </button>
-          </div>
-        </div>
-
-        <!-- Loading State for Cloud -->
+        <!-- Loading State for Hugging Face -->
         <div v-if="isFetchingCloud && cloudProjects.length === 0" class="projects-grid">
           <div v-for="i in 4" :key="i" class="skeleton-card">
             <div class="skeleton-thumb shimmer"></div>
@@ -172,26 +145,52 @@
           </div>
         </div>
 
-        <!-- Empty Results -->
-        <div v-else-if="filteredCloudProjects.length === 0" class="no-search-results anim-rise">
-          <Cloud :size="28" class="empty-icon" />
-          <h3 class="empty-title">No cloud projects found</h3>
-          <p class="empty-desc">No recitation projects matched your query in {{ currentHfRepo }}.</p>
-          <button class="btn-secondary" @click="searchQuery = ''; activeStatusFilter = 'all'">Reset Filter</button>
+        <!-- Unconfigured Dataset State (No default dataset) -->
+        <div v-else-if="!currentHfRepo" class="no-search-results anim-rise">
+          <span style="font-size: 36px; margin-bottom: 10px;">🤗</span>
+          <h3 class="empty-title">Configure Hugging Face Dataset</h3>
+          <p class="empty-desc">Add your dataset username or repository link to browse, stream, and edit recitation projects.</p>
+          <div style="display: flex; gap: 8px; justify-content: center; margin-top: 8px;">
+            <button class="btn-primary" @click="openHfSettingsModal">
+              <Settings2 :size="13" />
+              <span>Dataset Config</span>
+            </button>
+            <button class="btn-secondary" @click="showGuideModal = true">
+              <BookOpen :size="13" />
+              <span>Dataset Guide</span>
+            </button>
+          </div>
         </div>
 
-        <!-- Cloud Projects Grid -->
+        <!-- Empty Results after Search Filter -->
+        <div v-else-if="filteredCloudProjects.length === 0" class="no-search-results anim-rise">
+          <span style="font-size: 32px; margin-bottom: 8px;">🤗</span>
+          <h3 class="empty-title">No recitation projects found</h3>
+          <p class="empty-desc" v-if="searchQuery">No projects matching "{{ searchQuery }}" in {{ currentHfRepo }}.</p>
+          <p class="empty-desc" v-else>No recitation projects found in {{ currentHfRepo }}.</p>
+          <div style="display: flex; gap: 8px; justify-content: center; margin-top: 8px;">
+            <button v-if="searchQuery" class="btn-secondary" @click="searchQuery = ''; activeStatusFilter = 'all'">Clear Search</button>
+            <button class="btn-secondary" @click="openHfSettingsModal">
+              <Settings2 :size="12" />
+              <span>Dataset Config</span>
+            </button>
+            <button class="btn-secondary" @click="showGuideModal = true">
+              <BookOpen :size="12" />
+              <span>Dataset Guide</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Hugging Face Projects Grid (Minimal, Clean & Direct Open) -->
         <div v-else class="projects-grid stagger">
           <div 
             v-for="item in filteredCloudProjects" 
             :key="item.id"
-            class="cloud-card"
+            class="project-card cloud-card"
+            @click="handleOpenHfProject(item)"
           >
-            <div class="cloud-card-top">
-              <span class="cloud-surah-chip" :title="`Dataset folder: ${item.folder || item.id}`">
-                <Folder :size="10" />
-                <span>{{ item.folder || item.id }}</span>
-              </span>
+            <!-- Top Row: Status Chip on Left + Dataset folder on Right -->
+            <div class="card-header-row">
               <span 
                 class="card-status-chip"
                 :class="getStatusClass(item.status)"
@@ -200,66 +199,39 @@
                 <Circle :size="11" v-else />
                 <span class="status-chip-label">{{ item.status === 'verified' ? 'Verified' : 'Review' }}</span>
               </span>
+
+              <span class="cloud-folder-pill" :title="`Dataset folder: ${item.folder || item.id}`">
+                <Folder :size="10" />
+                <span>{{ item.folder || item.id }}</span>
+              </span>
             </div>
 
-            <div class="cloud-card-body">
-              <div class="cloud-arabic-name" dir="rtl">{{ item.project_name }}</div>
-              <div class="cloud-english-name" v-if="item.reciter_english && item.reciter_english !== item.project_name">
-                {{ item.reciter_english }}
-              </div>
+            <!-- Card Body: Clear, Prominent Project Name -->
+            <div class="card-body">
+              <h3 class="card-name" :title="item.project_name" dir="auto">{{ item.project_name }}</h3>
 
-              <div class="cloud-meta-row">
-                <span class="meta-tag reciter-pill">
-                  <Mic :size="10" />
-                  <span>{{ item.reciter }}</span>
-                </span>
-                <span class="meta-tag riwayah-pill" v-if="item.riwayah">
-                  <span>{{ item.riwayah }}</span>
-                </span>
+              <div class="card-meta-line">
                 <span class="meta-tag surah-count-pill">
-                  <span>{{ item.available_surahs?.length || item.total_surahs || 114 }} Surahs</span>
+                  <span>{{ (item.available_surahs?.length || item.total_surahs || 114) }} Surahs</span>
                 </span>
-              </div>
 
-              <p class="cloud-desc" v-if="item.description">{{ item.description }}</p>
-
-              <!-- Quick Surah Selector -->
-              <div class="cloud-surah-picker-wrap">
-                <span class="cloud-surah-picker-label">Surah:</span>
-                <select 
-                  :value="getSelectedSurah(item)" 
-                  @change="setSelectedSurah(item.id, Number(($event.target as HTMLSelectElement).value))"
-                  class="cloud-surah-picker-select"
-                  title="Select Surah to Stream or Import"
-                >
-                  <option 
-                    v-for="sNum in getProjectSurahs(item)" 
-                    :key="sNum" 
-                    :value="sNum"
-                  >
-                    {{ String(sNum).padStart(3, '0') }} · {{ getSurahMeta(sNum).arabic }} ({{ getSurahMeta(sNum).english }})
-                  </option>
-                </select>
+                <span class="meta-tag riwayah-pill" :title="`Riwayah: ${item.riwayah || 'Hafs'}`">
+                  <span>{{ item.riwayah || 'Hafs' }}</span>
+                </span>
               </div>
             </div>
 
-            <div class="cloud-card-footer">
-              <button 
-                class="btn-cloud-stream" 
-                @click="handleStreamCloudProject(item)"
-                :title="`Stream Surah ${getSelectedSurah(item)} directly in Studio with on-demand audio`"
-              >
-                <Play :size="13" />
-                <span>Stream Surah {{ getSelectedSurah(item) }}</span>
-              </button>
-              <button 
-                class="btn-cloud-import" 
-                @click="handleImportCloudProject(item)"
-                :title="`Clone Surah ${getSelectedSurah(item)} into Local Projects`"
-              >
-                <BookmarkPlus :size="13" />
-                <span>Import</span>
-              </button>
+            <!-- Card Footer: Time / Open Hint -->
+            <div class="card-footer-row">
+              <span class="time-text">{{ item.updated_at ? formatDateRelative(item.updated_at) : 'Hugging Face' }}</span>
+              <span class="open-hint">
+                <RefreshCw v-if="openingProjectId === item.id" :size="11" class="spin" />
+                <span v-if="openingProjectId === item.id">Opening…</span>
+                <template v-else>
+                  <span>Open &amp; Edit</span>
+                  <ArrowRight :size="11" />
+                </template>
+              </span>
             </div>
           </div>
         </div>
@@ -342,18 +314,18 @@
             <div class="card-body">
               <h3 class="card-name" :title="p.project_name">{{ p.project_name }}</h3>
 
-              <div class="card-meta-line" v-if="p.surahs_count > 0 || p.reciter || (p.riwayah && p.riwayah !== 'Hafs')">
+              <div class="card-meta-line">
+                <span v-if="p.cloud_origin" class="meta-tag hf-origin-pill" title="Imported from Hugging Face dataset">
+                  <span style="font-size: 11px;">🤗</span>
+                  <span>Hugging Face</span>
+                </span>
+
                 <span v-if="p.surahs_count > 0" class="meta-tag surah-count-pill">
                   <span>{{ p.surahs_count }} {{ p.surahs_count === 1 ? 'Surah' : 'Surahs' }}</span>
                 </span>
 
-                <span v-if="p.reciter" class="meta-tag reciter-pill" :title="p.reciter">
-                  <Mic :size="10" />
-                  <span>{{ p.reciter }}</span>
-                </span>
-
-                <span v-if="p.riwayah && p.riwayah !== 'Hafs'" class="meta-tag riwayah-pill">
-                  <span>{{ p.riwayah }}</span>
+                <span class="meta-tag riwayah-pill" :title="`Riwayah: ${p.riwayah || 'Hafs'}`">
+                  <span>{{ p.riwayah || 'Hafs' }}</span>
                 </span>
               </div>
             </div>
@@ -385,7 +357,7 @@
             <input 
               type="text" 
               v-model="newProjectName" 
-              placeholder="e.g. Al-Fatihah · Mishary Rashid" 
+              placeholder="e.g. مشاري راشد العفاسي / Mishary Rashid Alafasy" 
               required
               autofocus
               class="form-input"
@@ -488,44 +460,86 @@
 
     <!-- Hugging Face Dataset Configuration Modal -->
     <div v-if="showHfSettingsModal" class="modal-backdrop" @click.self="showHfSettingsModal = false">
-      <div class="modal-card glass-float anim-scale" @click.stop>
+      <div class="modal-card glass-float anim-scale" @click.stop style="max-width: 460px;">
         <div class="modal-card-header">
-          <h3 class="modal-heading">Hugging Face Dataset Configuration</h3>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 18px;">🤗</span>
+            <h3 class="modal-heading">Dataset Configuration</h3>
+          </div>
           <button class="btn-icon" @click="showHfSettingsModal = false" title="Close">✕</button>
+        </div>
+
+        <!-- Sleek Quick Access Dataset Guide Row -->
+        <div class="config-guide-row">
+          <div class="config-guide-lead">
+            <BookOpen :size="14" style="color: var(--accent-primary);" />
+            <span>Dataset folder &amp; manifest schema</span>
+          </div>
+          <button type="button" class="btn-guide-pill" @click="showGuideModal = true" title="View dataset file structure and templates">
+            <span>Dataset Guide</span>
+            <ArrowRight :size="11" />
+          </button>
         </div>
 
         <form @submit.prevent="saveHfSettings" class="modal-form">
           <div class="form-group">
-            <label class="form-label">Dataset Repository (URL or username/repo)</label>
+            <div class="form-label-row">
+              <label class="form-label">Repository</label>
+              <a 
+                v-if="currentHfRepo" 
+                :href="`https://huggingface.co/datasets/${currentHfRepo}`" 
+                target="_blank" 
+                rel="noopener" 
+                class="config-repo-link"
+                title="Open repository on Hugging Face"
+              >
+                <span>{{ currentHfRepo }}</span>
+                <ExternalLink :size="10" />
+              </a>
+            </div>
             <input 
               type="text" 
               v-model="hfRepoInput" 
-              placeholder="e.g. username/quran-dataset or https://huggingface.co/datasets/..." 
+              placeholder="TheGreatQuran/Quran-recite2text" 
               required
               class="form-input"
+              autocomplete="off"
+              spellcheck="false"
             />
-            <small style="font-size: 11px; color: var(--text-muted); margin-top: 4px; display: block;">
-              Accepts full Hugging Face dataset URLs or shorthand repository names.
-            </small>
           </div>
 
           <div class="form-group">
-            <label class="form-label">Access Token (Optional — for Private Datasets)</label>
+            <div class="form-label-row">
+              <label class="form-label">Write Access Token</label>
+              <a 
+                href="https://huggingface.co/settings/tokens" 
+                target="_blank" 
+                rel="noopener" 
+                class="config-repo-link"
+                title="Generate token on Hugging Face"
+              >
+                <span>Get Token</span>
+                <ExternalLink :size="10" />
+              </a>
+            </div>
             <input 
               type="password" 
               v-model="hfTokenInput" 
-              placeholder="hf_xxxxxxxxxxxxxxxxxxxx (optional)" 
+              placeholder="hf_xxxxxxxxxxxxxxxxxxxx (optional for public reads)" 
               class="form-input"
+              autocomplete="off"
             />
-            <small style="font-size: 11px; color: var(--text-muted); margin-top: 4px; display: block;">
-              Required only if your dataset is Private. Get a token at <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noopener" style="color: var(--accent-primary);">huggingface.co/settings/tokens</a>.
-            </small>
+          </div>
+
+          <div v-if="hfConfigError" class="config-error-alert anim-rise">
+            <AlertTriangle :size="13" />
+            <span>{{ hfConfigError }}</span>
           </div>
 
           <div class="modal-card-footer">
             <button type="button" class="btn-secondary" @click="showHfSettingsModal = false">Cancel</button>
             <button type="submit" class="btn-primary">
-              <span>Save & Connect</span>
+              <span>Save &amp; Connect</span>
             </button>
           </div>
         </form>
@@ -533,7 +547,7 @@
     </div>
 
     <!-- Professional Quran Dataset Guide Modal -->
-    <div v-if="showGuideModal" class="modal-backdrop" @click.self="showGuideModal = false">
+    <div v-if="showGuideModal" class="modal-backdrop guide-modal-backdrop" @click.self="showGuideModal = false">
       <div class="modal-card modal-guide glass-float anim-scale" @click.stop style="max-width: 620px; max-height: 85vh; overflow-y: auto;">
         <div class="modal-card-header">
           <div style="display: flex; align-items: center; gap: 8px;">
@@ -593,11 +607,13 @@ my-quran-dataset/
                 <span>{{ copiedSurahJson ? 'Copied!' : 'Copy 001.json' }}</span>
               </button>
             </div>
-            <p>Include downsampled <code>peaks</code> in the JSON for <strong>instant 0-bandwidth waveform rendering</strong> without downloading the audio file:</p>
+            <p>Word boundaries strictly indexed by canonical Mushaf position <code>w</code> with Medina Uthmani <code>text</code> and precomputed waveform <code>peaks</code>:</p>
             <pre style="background: var(--bg-input); padding: 10px 14px; border-radius: var(--radius-md); font-family: monospace; font-size: 11px; border: 1px solid var(--border-subtle); color: var(--text-main); margin-top: 6px; overflow-x: auto;">
 {
-  "surah_number": 1,
-  "duration_seconds": 42.5,
+  "surah": 1,
+  "surah_name_arabic": "الفاتحة",
+  "surah_name_english": "Al-Faatiha",
+  "duration": 42.5,
   "status": "verified",
   "peaks": [0.02, 0.15, 0.45, 0.88, 0.54, 0.22, 0.05],
   "ayahs": [
@@ -606,8 +622,10 @@ my-quran-dataset/
       "start": 0.0,
       "end": 3.85,
       "words": [
-        { "word": "بِسْمِ", "location": "1:1:1", "start": 0.0, "end": 0.58 },
-        { "word": "ٱللَّهِ", "location": "1:1:2", "start": 0.58, "end": 1.35 }
+        { "w": 1, "text": "بِسْمِ", "start": 0.0, "end": 0.58 },
+        { "w": 2, "text": "ٱللَّهِ", "start": 0.58, "end": 1.35 },
+        { "w": 3, "text": "ٱلرَّحْمَٰنِ", "start": 1.35, "end": 2.52 },
+        { "w": 4, "text": "ٱلرَّحِيمِ", "start": 2.52, "end": 3.85 }
       ]
     }
   ]
@@ -634,7 +652,7 @@ my-quran-dataset/
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, onUnmounted, computed, watch } from 'vue';
+import { ref, onMounted, onUnmounted, computed, watch } from 'vue';
 import { projectStore } from '../services/projectStore';
 import { listProjects, loadProject, revealInExplorer, isTauriEnvironment, saveFileToPath } from '../services/api';
 import { vaultList, vaultLoad } from '../services/projectVault';
@@ -652,26 +670,22 @@ import {
   Circle,
   CircleCheck,
   SlidersHorizontal,
-  Mic,
   ArrowRight,
-  Cloud,
   HardDrive,
-  Play,
   Settings2,
   ExternalLink,
-  BookmarkPlus,
   Check,
-  BookOpen
+  BookOpen,
+  AlertTriangle
 } from 'lucide-vue-next';
 import { 
   fetchCloudProjects as apiFetchCloudProjects, 
-  openCloudSurahInStudio, 
-  importCloudSurahToLocal, 
+  openAndImportHfProject,
   getHfRepo, 
-  setHfRepo,
-  getHfToken,
-  setHfToken,
-  getSurahMeta 
+  setHfRepo, 
+  getHfToken, 
+  setHfToken, 
+  normalizeHfRepoInput
 } from '../services/cloudDataset';
 
 const CACHE_KEY = 'quran_studio_projects_cache';
@@ -679,15 +693,16 @@ const CACHE_KEY = 'quran_studio_projects_cache';
 const activeViewMode = ref<'local' | 'cloud'>('local');
 const cloudProjects = ref<CloudReciterProject[]>([]);
 const isFetchingCloud = ref(false);
+const openingProjectId = ref<string | null>(null);
 const showHfSettingsModal = ref(false);
 const showGuideModal = ref(false);
 const currentHfRepo = ref(getHfRepo());
 const hfRepoInput = ref(getHfRepo());
 const hfTokenInput = ref(getHfToken());
+const hfConfigError = ref('');
 const toastMessage = ref('');
 const copiedManifest = ref(false);
 const copiedSurahJson = ref(false);
-const selectedSurahMap = reactive<Record<string, number>>({});
 
 const searchQuery = ref('');
 const activeStatusFilter = ref<'all' | 'verified' | 'needs_review'>('all');
@@ -737,64 +752,70 @@ async function confirmAndExecuteDelete() {
   }
 }
 
-function getSelectedSurah(item: CloudReciterProject): number {
-  if (selectedSurahMap[item.id]) return selectedSurahMap[item.id];
-  return item.available_surahs?.[0] || 1;
-}
-
-function setSelectedSurah(id: string, num: number) {
-  selectedSurahMap[id] = num;
-}
-
-function getProjectSurahs(item: CloudReciterProject): number[] {
-  if (Array.isArray(item.available_surahs) && item.available_surahs.length > 0) {
-    return item.available_surahs;
-  }
-  return Array.from({ length: 114 }, (_, i) => i + 1);
-}
-
 async function fetchCloudProjects() {
+  currentHfRepo.value = getHfRepo();
+  if (!currentHfRepo.value) {
+    cloudProjects.value = [];
+    isFetchingCloud.value = false;
+    return;
+  }
   isFetchingCloud.value = true;
   try {
     cloudProjects.value = await apiFetchCloudProjects();
   } catch (err: any) {
-    loadError.value = `Failed to fetch cloud dataset: ${err?.message || err}`;
+    loadError.value = `Failed to fetch Hugging Face dataset: ${err?.message || err}`;
     setTimeout(() => { loadError.value = ''; }, 4000);
   } finally {
     isFetchingCloud.value = false;
   }
 }
 
-async function handleStreamCloudProject(item: CloudReciterProject) {
-  const surahNum = getSelectedSurah(item);
-  const ok = await openCloudSurahInStudio(item, surahNum);
-  if (!ok) {
-    loadError.value = `Unable to stream Surah ${surahNum} for "${item.project_name}".`;
-    setTimeout(() => { loadError.value = ''; }, 3000);
+async function handleOpenHfProject(item: CloudReciterProject) {
+  openingProjectId.value = item.id;
+  try {
+    const ok = await openAndImportHfProject(item);
+    if (ok) {
+      showToast(`"${item.project_name}" imported from Hugging Face to Local Projects!`);
+      await fetchProjects();
+    } else {
+      loadError.value = `Failed to open "${item.project_name}" from Hugging Face.`;
+      setTimeout(() => { loadError.value = ''; }, 3500);
+    }
+  } finally {
+    openingProjectId.value = null;
   }
 }
 
-async function handleImportCloudProject(item: CloudReciterProject) {
-  const surahNum = getSelectedSurah(item);
-  const ok = await importCloudSurahToLocal(item, surahNum);
-  if (ok) {
-    showToast(`Surah ${surahNum} of "${item.project_name}" imported to Local Projects!`);
-    await fetchProjects();
-  } else {
-    loadError.value = `Failed to import Surah ${surahNum} of "${item.project_name}".`;
-    setTimeout(() => { loadError.value = ''; }, 3000);
-  }
+function openHfSettingsModal() {
+  hfConfigError.value = '';
+  hfRepoInput.value = getHfRepo();
+  hfTokenInput.value = getHfToken();
+  showHfSettingsModal.value = true;
 }
 
 function saveHfSettings() {
-  if (hfRepoInput.value.trim()) {
-    setHfRepo(hfRepoInput.value.trim());
-    setHfToken(hfTokenInput.value.trim());
-    currentHfRepo.value = getHfRepo();
-    showHfSettingsModal.value = false;
-    showToast('Hugging Face dataset connection updated!');
-    fetchCloudProjects();
+  hfConfigError.value = '';
+  const raw = hfRepoInput.value.trim();
+  if (!raw) {
+    hfConfigError.value = 'Please provide a Hugging Face repository name.';
+    return;
   }
+  const normalized = normalizeHfRepoInput(raw);
+  if (!normalized.includes('/')) {
+    hfConfigError.value = 'Repository format must be "username/repository-name".';
+    return;
+  }
+  const token = hfTokenInput.value.trim();
+  if (token && !token.startsWith('hf_')) {
+    hfConfigError.value = 'Hugging Face tokens must start with "hf_".';
+    return;
+  }
+  setHfRepo(normalized);
+  setHfToken(token);
+  currentHfRepo.value = getHfRepo();
+  showHfSettingsModal.value = false;
+  showToast('Dataset configuration updated!');
+  fetchCloudProjects();
 }
 
 function copyManifestTemplate() {
@@ -821,8 +842,10 @@ function copyManifestTemplate() {
 
 function copySurahJsonTemplate() {
   const template = `{
-  "surah_number": 1,
-  "duration_seconds": 42.5,
+  "surah": 1,
+  "surah_name_arabic": "الفاتحة",
+  "surah_name_english": "Al-Faatiha",
+  "duration": 42.5,
   "status": "verified",
   "peaks": [0.02, 0.15, 0.45, 0.88, 0.54, 0.22, 0.05],
   "ayahs": [
@@ -831,8 +854,10 @@ function copySurahJsonTemplate() {
       "start": 0.0,
       "end": 3.85,
       "words": [
-        { "word": "بِسْمِ", "location": "1:1:1", "start": 0.0, "end": 0.58 },
-        { "word": "ٱللَّهِ", "location": "1:1:2", "start": 0.58, "end": 1.35 }
+        { "w": 1, "text": "بِسْمِ", "start": 0.0, "end": 0.58 },
+        { "w": 2, "text": "ٱللَّهِ", "start": 0.58, "end": 1.35 },
+        { "w": 3, "text": "ٱلرَّحْمَٰنِ", "start": 1.35, "end": 2.52 },
+        { "w": 4, "text": "ٱلرَّحِيمِ", "start": 2.52, "end": 3.85 }
       ]
     }
   ]
@@ -868,6 +893,29 @@ const filteredCloudProjects = computed(() => {
     });
   }
 
+  // Apply sorting matching sortKey
+  list.sort((a, b) => {
+    if (sortKey.value === 'name') {
+      return (a.project_name || '').localeCompare(b.project_name || '');
+    }
+    if (sortKey.value === 'surahs') {
+      const countA = a.available_surahs?.length || a.total_surahs || 0;
+      const countB = b.available_surahs?.length || b.total_surahs || 0;
+      return countB - countA;
+    }
+    if (sortKey.value === 'review') {
+      const isReviewA = a.status !== 'verified' ? 1 : 0;
+      const isReviewB = b.status !== 'verified' ? 1 : 0;
+      return isReviewB - isReviewA;
+    }
+    if (sortKey.value === 'updated') {
+      if (a.updated_at && b.updated_at) {
+        return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+      }
+    }
+    return 0;
+  });
+
   return list;
 });
 
@@ -886,18 +934,26 @@ onMounted(() => {
     if (e.key === 'Escape') {
       if (projectToDelete.value) {
         projectToDelete.value = null;
+      } else if (showGuideModal.value) {
+        showGuideModal.value = false;
       } else if (showNewModal.value) {
         showNewModal.value = false;
       } else if (showHfSettingsModal.value) {
         showHfSettingsModal.value = false;
-      } else if (showGuideModal.value) {
-        showGuideModal.value = false;
       }
     }
   };
   window.addEventListener('keydown', handleGlobalKey);
+
+  const handleOpenDatasetConfig = () => {
+    activeViewMode.value = 'cloud';
+    openHfSettingsModal();
+  };
+  window.addEventListener('open-dataset-config', handleOpenDatasetConfig);
+
   onUnmounted(() => {
     window.removeEventListener('keydown', handleGlobalKey);
+    window.removeEventListener('open-dataset-config', handleOpenDatasetConfig);
   });
 });
 
@@ -906,6 +962,16 @@ watch(() => projectStore.currentTab.value, (newTab) => {
     fetchProjects();
   }
 });
+
+function cleanProjectDisplayName(name: string): string {
+  if (!name) return 'Recitation Project';
+  return name
+    .replace(/\s*[-–—·]\s*[\u0600-\u06FFA-Za-z\s'\-]+\s*\(\d+\)\s*$/u, '')
+    .replace(/\s*[-–—·]\s*\(\d+\)\s*$/u, '')
+    .replace(/\s*\(\d+\)\s*$/u, '')
+    .replace(/\s*[-–—·]\s*[\u0600-\u06FFA-Za-z\s'\-]{2,40}$/u, '')
+    .trim() || name;
+}
 
 function normalizeProjectSummary(p: any): ProjectSummary {
   const surahs: any[] = Array.isArray(p.surahs) ? p.surahs : [];
@@ -933,21 +999,20 @@ function normalizeProjectSummary(p: any): ProjectSummary {
     totalDuration = surahs.reduce((sum: number, s: any) => sum + (Number(s.audio_duration_seconds) || 0), 0);
   }
 
-  // Dynamically derive project status from constituent surahs:
-  // If all surahs inside are verified, the project is verified.
-  let status: string = 'needs_review';
-  if (surahs.length > 0) {
+  // Project-level status: respects project's own status first
+  let status: string = p.status || 'needs_review';
+  if (!p.status && surahs.length > 0) {
     status = surahs.every((s: any) => s.status === 'verified') ? 'verified' : 'needs_review';
-  } else if (p.status) {
-    status = p.status;
   }
+
 
   const fileName = getProjectFileName(p);
   const rawProjectName = String(p.project_name || p.name || '').trim();
   const cleanBase = fileName.replace(/\.qproj$/i, '').replace(/^[.\s]+|[.\s]+$/g, '');
-  const projectName = (rawProjectName && rawProjectName !== '.') 
+  const chosenName = (rawProjectName && rawProjectName !== '.') 
     ? rawProjectName 
     : (cleanBase || 'Recitation Project');
+  const projectName = cleanProjectDisplayName(chosenName);
 
   return {
     ...p,
@@ -964,6 +1029,8 @@ function normalizeProjectSummary(p: any): ProjectSummary {
     created_at: p.created_at || new Date().toISOString(),
     updated_at: p.updated_at || p.created_at || new Date().toISOString(),
     size_bytes: p.size_bytes || 0,
+    cloud_origin: !!(p.settings?.cloud_origin || p.cloud_origin),
+    cloud_repo: p.settings?.cloud_repo || p.cloud_repo || '',
   };
 }
 
@@ -1167,9 +1234,6 @@ async function toggleReview(p: ProjectSummary) {
   const nowVerified = await projectStore.toggleProjectReview(fname);
   const targetStatus = nowVerified ? 'verified' : 'needs_review';
   p.status = targetStatus;
-  if (Array.isArray((p as any).surahs)) {
-    (p as any).surahs.forEach((s: any) => { s.status = targetStatus; });
-  }
   try {
     localStorage.setItem(CACHE_KEY, JSON.stringify(projectsList.value));
   } catch {}

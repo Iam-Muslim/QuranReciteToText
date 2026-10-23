@@ -85,10 +85,10 @@ describe('Canonical JSON Exporter & Cloud Helpers', () => {
   });
 
   it('normalizeHfRepoInput handles full URLs and shorthand', () => {
-    expect(normalizeHfRepoInput('https://huggingface.co/datasets/Iam-Muslim/Quran-Recitations-Dataset')).toBe('Iam-Muslim/Quran-Recitations-Dataset');
+    expect(normalizeHfRepoInput('https://huggingface.co/datasets/TheGreatQuran/Quran-recite2text')).toBe('TheGreatQuran/Quran-recite2text');
     expect(normalizeHfRepoInput('https://huggingface.co/datasets/MyOrg/my-recitations/tree/main')).toBe('MyOrg/my-recitations');
     expect(normalizeHfRepoInput('user123/dataset456')).toBe('user123/dataset456');
-    expect(normalizeHfRepoInput('')).toBe('Iam-Muslim/Quran-Recitations-Dataset');
+    expect(normalizeHfRepoInput('')).toBe('TheGreatQuran/Quran-recite2text');
   });
 
   it('correctly preserves phrases and is_repetition flags on repeated phrases and words', () => {

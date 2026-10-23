@@ -166,6 +166,8 @@ export interface ProjectSummary {
   created_at?: string;
   updated_at: string;
   size_bytes: number;
+  cloud_origin?: boolean;
+  cloud_repo?: string;
 }
 
 export type IssueSeverity = 'critical' | 'warning' | 'info';

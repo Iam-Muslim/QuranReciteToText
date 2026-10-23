@@ -205,13 +205,13 @@ class ProjectStore {
 
   // Active Surah getter
   public activeSurah = computed<SurahItem | undefined>(() => {
-    return this.project.surahs.find(s => s.surah_number === this.activeSurahNumber.value);
+    return (this.project.surahs || []).find(s => s.surah_number === this.activeSurahNumber.value);
   });
 
   // Active Ayah getter
   public activeAyah = computed<AyahItem | undefined>(() => {
     if (!this.activeSurah.value || this.activeAyahNumber.value === null) return undefined;
-    return this.activeSurah.value.ayahs.find(a => a.ayah === this.activeAyahNumber.value);
+    return (this.activeSurah.value.ayahs || []).find(a => a.ayah === this.activeAyahNumber.value);
   });
 
   // Flat list of words in active Ayah (or intro)
@@ -224,7 +224,7 @@ class ProjectStore {
     }
     const a = this.activeAyah.value;
     if (!a) return [];
-    return a.segments.flatMap(s => s.words);
+    return (a.segments || []).flatMap(s => s.words || []);
   });
 
   // Flat list of words in active Surah
@@ -234,9 +234,9 @@ class ProjectStore {
     if (this.activeSurah.value.intro && this.activeSurah.value.intro.words) {
       list.push(...this.activeSurah.value.intro.words);
     }
-    for (const a of this.activeSurah.value.ayahs) {
-      for (const seg of a.segments) {
-        list.push(...seg.words);
+    for (const a of (this.activeSurah.value.ayahs || [])) {
+      for (const seg of (a.segments || [])) {
+        list.push(...(seg.words || []));
       }
     }
     return list;
@@ -275,7 +275,7 @@ class ProjectStore {
     // Ayahs & their individual segments (breath groups / repeated takes)
     const surahIssues = this.issues.value.filter(i => !i.resolved);
 
-    for (const a of surah.ayahs) {
+    for (const a of (surah.ayahs || [])) {
       const segs = a.segments || [];
       const hasMultipleSegs = segs.length > 1;
 
@@ -450,7 +450,7 @@ class ProjectStore {
 
   // Automated Confidence Auditor Issues (Pure-TS Engine)
   public issues = computed<ConfidenceIssue[]>(() => {
-    if (!this.activeSurah.value) return [];
+    if (!this.activeSurah.value || !this.activeSurah.value.ayahs || this.activeSurah.value.ayahs.length === 0) return [];
     const threshold = this.project.settings?.confidence_warning_threshold || 0.85;
     return auditSurah(this.activeSurah.value, this.resolvedIssueIds.value, threshold);
   });
@@ -538,12 +538,51 @@ class ProjectStore {
       } else {
         this.activeAyahNumber.value = null;
         this.currentTime.value = 0;
+        if (this.project.settings?.cloud_origin) {
+          this.fetchCloudSurahTimingsOnDemand(s);
+        }
       }
     } else {
       this.activeAyahNumber.value = null;
       this.currentTime.value = 0;
     }
     this.activeWordLocation.value = null;
+  }
+
+  public async fetchCloudSurahTimingsOnDemand(s: SurahItem) {
+    try {
+      const repo = this.project.settings?.cloud_repo || '';
+      const folder = this.project.settings?.cloud_folder || '';
+      if (!repo || !folder) return;
+
+      const padded = String(s.surah_number).padStart(3, '0');
+      const token = localStorage.getItem('quran_hf_access_token') || '';
+      const headers: Record<string, string> = {};
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const baseUrl = `https://huggingface.co/datasets/${repo}/resolve/main`;
+      let res = await fetch(`${baseUrl}/${folder}/json/${padded}.json`, { headers });
+      if (!res.ok) res = await fetch(`${baseUrl}/${folder}/json/${s.surah_number}.json`, { headers });
+      if (res.ok) {
+        const raw = await res.json();
+        const { normalizeRawAyahsToStudio } = await import('./cloudDataset');
+        const rawAyahsSource = Array.isArray(raw) ? raw : (raw.ayahs || raw.surahs?.[0]?.ayahs || []);
+        s.ayahs = normalizeRawAyahsToStudio(rawAyahsSource, s.surah_number);
+        if (Array.isArray(raw.peaks)) s.peaks = raw.peaks;
+        if (raw.duration || raw.duration_seconds) {
+          s.audio_duration_seconds = Number(raw.duration || raw.duration_seconds);
+        }
+        if (raw.status) s.status = raw.status;
+
+        if (this.activeSurahNumber.value === s.surah_number && s.ayahs.length > 0) {
+          this.activeAyahNumber.value = s.ayahs[0].ayah;
+          this.currentTime.value = s.ayahs[0].start;
+        }
+        this.autosave.markDirty();
+      }
+    } catch (err) {
+      console.warn('Failed to load cloud surah on demand:', err);
+    }
   }
 
   public selectAyah(ayahNum: number) {
@@ -1246,13 +1285,6 @@ class ProjectStore {
    * up verified.
    */
   public async toggleProjectReview(fileName: string): Promise<boolean> {
-    const applyTarget = (surahs: any[]): boolean => {
-      const allDone = surahs.length > 0 && surahs.every(s => s.status === 'verified');
-      const target = allDone ? 'needs_review' : 'verified';
-      surahs.forEach(s => { s.status = target; });
-      return target === 'verified';
-    };
-
     let targetVerified = false;
 
     try {
@@ -1273,7 +1305,10 @@ class ProjectStore {
         }
         if (!vaultData?.project) return false;
 
-        targetVerified = applyTarget(vaultData.project.surahs || []);
+        const curStatus = (vaultData.project as any).status || 'needs_review';
+        targetVerified = curStatus !== 'verified';
+        const targetStatus: SurahStatus = targetVerified ? 'verified' : 'needs_review';
+        (vaultData.project as any).status = targetStatus;
         vaultData.project.updated_at = new Date().toISOString();
         await vaultSave(actualKey, vaultData.project);
       } else {
@@ -1283,7 +1318,10 @@ class ProjectStore {
         }
         if (!data) return false;
 
-        targetVerified = applyTarget(data.surahs || []);
+        const curStatus = (data as any).status || 'needs_review';
+        targetVerified = curStatus !== 'verified';
+        const targetStatus: SurahStatus = targetVerified ? 'verified' : 'needs_review';
+        (data as any).status = targetStatus;
         (data as any).updated_at = new Date().toISOString();
         await saveProject(fileName, data);
       }
@@ -1295,9 +1333,8 @@ class ProjectStore {
         (activeFile && (activeFile === fileName || safeProjectFileName(activeFile) === safeProjectFileName(fileName))) ||
         (activeName && (activeName === fileName.replace(/\.qproj$/i, '') || safeProjectFileName(activeName) === safeProjectFileName(fileName)));
 
-      if (isCurrentProject && this.project?.surahs) {
-        const targetStatus: SurahStatus = targetVerified ? 'verified' : 'needs_review';
-        this.project.surahs.forEach(s => { s.status = targetStatus; });
+      if (isCurrentProject && this.project) {
+        (this.project as any).status = targetVerified ? 'verified' : 'needs_review';
         this.isDirty.value = false;
       }
 
@@ -1453,10 +1490,27 @@ class ProjectStore {
   public async openProjectByFileName(fileName: string): Promise<boolean> {
     try {
       if (!isTauriEnvironment()) {
-        const vaultData = await vaultLoad(fileName);
+        let vaultData = await vaultLoad(fileName);
+        let actualKey = fileName;
+        if (!vaultData?.project) {
+          actualKey = safeProjectFileName(fileName);
+          vaultData = await vaultLoad(actualKey);
+        }
+        if (!vaultData?.project) {
+          const list = await vaultList();
+          const match = list.find((item: any) => 
+            item.file_name === fileName || 
+            item.project_name === fileName.replace(/\.qproj$/i, '') ||
+            safeProjectFileName(item.project_name) === safeProjectFileName(fileName)
+          );
+          if (match) {
+            actualKey = match.file_name;
+            vaultData = await vaultLoad(actualKey);
+          }
+        }
         if (vaultData?.project) {
           const data = vaultData.project;
-          data.file_name = fileName;
+          data.file_name = actualKey;
           this.loadProject(data);
           // Session audio lives in the vault — rebuild blob URLs for surahs
           // that have no session/embedded source.
@@ -1472,15 +1526,24 @@ class ProjectStore {
               }
             }
           }
+          if (data.surahs && data.surahs.length > 0) {
+            this.selectSurah(data.surahs[0].surah_number);
+          }
           this.currentTab.value = 'studio';
           return true;
         }
         return false;
       }
-      const data = await loadProject(fileName);
+      let data = await loadProject(fileName);
+      if (!data && !/\.qproj$/i.test(fileName)) {
+        data = await loadProject(`${fileName}.qproj`);
+      }
       if (data) {
         data.file_name = fileName;
         this.loadProject(data);
+        if (data.surahs && data.surahs.length > 0) {
+          this.selectSurah(data.surahs[0].surah_number);
+        }
         this.currentTab.value = 'studio';
         return true;
       }
