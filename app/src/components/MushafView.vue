@@ -30,6 +30,9 @@
               :class="getWordClasses(w)"
               @click="handleWordClick(w)"
               @contextmenu.prevent="handleContextMenu($event, w)"
+              @touchstart.passive="onWordTouchStart($event, w)"
+              @touchmove.passive="onWordTouchMove"
+              @touchend="onWordTouchEnd"
               :id="`word_el_${w.location}`"
             >
               {{ w.word }}
@@ -53,6 +56,9 @@
                 :class="getWordClasses(word)"
                 @click="handleWordClick(word)"
                 @contextmenu.prevent="handleContextMenu($event, word)"
+                @touchstart.passive="onWordTouchStart($event, word)"
+                @touchmove.passive="onWordTouchMove"
+                @touchend="onWordTouchEnd"
                 :id="`word_el_${word.location}`"
               >
                 {{ word.word }}
@@ -103,6 +109,9 @@
             :class="getWordClasses(word)"
             @click="handleWordClick(word)"
             @contextmenu.prevent="handleContextMenu($event, word)"
+            @touchstart.passive="onWordTouchStart($event, word)"
+            @touchmove.passive="onWordTouchMove"
+            @touchend="onWordTouchEnd"
             :id="`verse_word_el_${word.location}`"
           >
             {{ word.word }}
@@ -181,7 +190,7 @@ import {
 } from 'lucide-vue-next';
 
 const emit = defineEmits<{
-  (e: 'word-context-menu', event: MouseEvent, word: AlignedWord): void;
+  (e: 'word-context-menu', event: MouseEvent | TouchEvent, word: AlignedWord): void;
 }>();
 
 function getCrossHafsAyahLabel(ayahNum: number): string | null {
@@ -268,7 +277,38 @@ function seekTo(t: number) {
   projectStore.currentTime.value = t;
 }
 
-function handleContextMenu(event: MouseEvent, word: AlignedWord) {
+let longPressTimer: ReturnType<typeof setTimeout> | null = null;
+let touchDidMove = false;
+
+function onWordTouchStart(e: TouchEvent, word: AlignedWord) {
+  touchDidMove = false;
+  if (longPressTimer) clearTimeout(longPressTimer);
+  longPressTimer = setTimeout(() => {
+    if (!touchDidMove) {
+      if (typeof navigator !== 'undefined' && navigator.vibrate) {
+        try { navigator.vibrate(30); } catch {}
+      }
+      handleContextMenu(e, word);
+    }
+  }, 450);
+}
+
+function onWordTouchMove() {
+  touchDidMove = true;
+  if (longPressTimer) {
+    clearTimeout(longPressTimer);
+    longPressTimer = null;
+  }
+}
+
+function onWordTouchEnd() {
+  if (longPressTimer) {
+    clearTimeout(longPressTimer);
+    longPressTimer = null;
+  }
+}
+
+function handleContextMenu(event: MouseEvent | TouchEvent, word: AlignedWord) {
   projectStore.selectWord(word.location, false);
   emit('word-context-menu', event, word);
 }

@@ -18,7 +18,7 @@
       <!-- Drop Overlay -->
       <div v-if="isDraggingFile" class="drag-drop-overlay">
         <UploadCloud :size="30" class="drop-icon" />
-        <span class="drop-text">Drop recitation audio here</span>
+        <span class="drop-text">{{ isTauri ? 'Drop recitation audio here' : 'Tap to select recitation audio' }}</span>
       </div>
 
       <input
@@ -142,6 +142,9 @@
               }"
               @click="handleWordClick(w)"
               @contextmenu.prevent="handleContextMenu($event, w)"
+              @touchstart.passive="onWordTouchStart($event, w)"
+              @touchmove.passive="onWordTouchMove"
+              @touchend="onWordTouchEnd"
               :title="`Word: ${w.word} | [${w.start.toFixed(2)}s - ${w.end.toFixed(2)}s]`"
             >
               <!-- Left Outer Boundary Handle (First word of segment or facing silence) -->
@@ -428,8 +431,10 @@ import {
 import { usePlaybackTransport } from '../composables/usePlaybackTransport';
 import { useTimelineDrag, type SharedDivider } from '../composables/useTimelineDrag';
 
+const isTauri = isTauriEnvironment();
+
 const emit = defineEmits<{
-  (e: 'word-context-menu', event: MouseEvent, word: AlignedWord): void;
+  (e: 'word-context-menu', event: MouseEvent | TouchEvent, word: AlignedWord): void;
 }>();
 
 const waveformMount = ref<HTMLElement | null>(null);
@@ -644,7 +649,38 @@ function formatTimelineWord(text: string): string {
   return (text || '').replace(WBW_DISPLAY_STRIP_MARKERS, '');
 }
 
-function handleContextMenu(e: MouseEvent, w: AlignedWord) {
+let waveLongPressTimer: ReturnType<typeof setTimeout> | null = null;
+let waveTouchDidMove = false;
+
+function onWordTouchStart(e: TouchEvent, word: AlignedWord) {
+  waveTouchDidMove = false;
+  if (waveLongPressTimer) clearTimeout(waveLongPressTimer);
+  waveLongPressTimer = setTimeout(() => {
+    if (!waveTouchDidMove) {
+      if (typeof navigator !== 'undefined' && navigator.vibrate) {
+        try { navigator.vibrate(30); } catch {}
+      }
+      handleContextMenu(e, word);
+    }
+  }, 450);
+}
+
+function onWordTouchMove() {
+  waveTouchDidMove = true;
+  if (waveLongPressTimer) {
+    clearTimeout(waveLongPressTimer);
+    waveLongPressTimer = null;
+  }
+}
+
+function onWordTouchEnd() {
+  if (waveLongPressTimer) {
+    clearTimeout(waveLongPressTimer);
+    waveLongPressTimer = null;
+  }
+}
+
+function handleContextMenu(e: MouseEvent | TouchEvent, w: AlignedWord) {
   emit('word-context-menu', e, w);
 }
 

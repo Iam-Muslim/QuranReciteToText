@@ -52,19 +52,26 @@
     <EditWordModal ref="editWordModalRef" />
     <ExportModal ref="exportModalRef" />
     <AlignmentModal ref="alignmentModalRef" />
-    <UpdateModal ref="updateModalRef" />
-    <CommandPalette 
-      @open-export-modal="exportModalRef?.open()" 
-      @open-alignment-modal="alignmentModalRef?.open()" 
-      @open-update-modal="updateModalRef?.open('app_update')" 
-    />
-    <HotkeyCheatSheet />
+    <!-- Desktop-only overlays (unmounted on mobile browser) -->
+    <template v-if="isTauri">
+      <UpdateModal ref="updateModalRef" />
+      <CommandPalette 
+        @open-export-modal="exportModalRef?.open()" 
+        @open-alignment-modal="alignmentModalRef?.open()" 
+        @open-update-modal="updateModalRef?.open('app_update')" 
+      />
+      <HotkeyCheatSheet />
+    </template>
   </div>
 </template>
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue';
+import { isTauriEnvironment } from './services/api';
+
+const isTauri = isTauriEnvironment();
 
 function handleGlobalKeydown(e: KeyboardEvent) {
+  if (!isTauri) return;
   // Ctrl+B: Toggle Recitations Sidebar
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
     const target = e.target as HTMLElement | null;
@@ -96,8 +103,6 @@ const exportModalRef = ref<InstanceType<typeof ExportModal> | null>(null);
 const alignmentModalRef = ref<InstanceType<typeof AlignmentModal> | null>(null);
 const updateModalRef = ref<InstanceType<typeof UpdateModal> | null>(null);
 
-/* ---- (Split resizer removed — the timeline now sits at a fixed, full useful height) ---- */
-
 onMounted(async () => {
   projectStore.currentTab.value = 'projects';
 
@@ -106,42 +111,34 @@ onMounted(async () => {
     if (window.innerWidth <= 760) projectStore.sidebarCollapsed.value = true;
   } catch { /* no window */ }
 
-  const isTauri = typeof window !== 'undefined' && (('__TAURI__' in (window as any)) || ('__TAURI_INTERNALS__' in (window as any)));
   if (isTauri) {
     try {
       const { invoke } = await import('@tauri-apps/api/core');
       const isInstalled = await invoke<boolean>('is_engine_installed');
       if (!isInstalled) {
-        // Only open the setup dialog if it is a fresh machine missing Python or models!
         updateModalRef.value?.open('app_init');
       } else {
-        // Everything is already installed! DO NOT pop up any dialog. Run update check silently.
         versionService.init();
       }
     } catch {
       versionService.init();
     }
+    window.addEventListener('keydown', handleGlobalKeydown);
+
+    const openEngineSetup = () => updateModalRef.value?.open('app_init');
+    window.addEventListener('quran-open-setup', openEngineSetup);
+    (window as any).__quranRemoveEngineSetup = () => window.removeEventListener('quran-open-setup', openEngineSetup);
   }
-  // In Browser / Mobile: No desktop engine setup, no desktop updater
-
-  window.addEventListener('keydown', handleGlobalKeydown);
-
-  // AlignmentModal "Setup" button → only on desktop Tauri
-  const openEngineSetup = () => {
-    if (isTauri) {
-      updateModalRef.value?.open('app_init');
-    }
-  };
-  window.addEventListener('quran-open-setup', openEngineSetup);
-  (window as any).__quranRemoveEngineSetup = () => window.removeEventListener('quran-open-setup', openEngineSetup);
 });
 
 onUnmounted(() => {
-  try { (window as any).__quranRemoveEngineSetup?.(); } catch { /* noop */ }
-  window.removeEventListener('keydown', handleGlobalKeydown);
+  if (isTauri) {
+    try { (window as any).__quranRemoveEngineSetup?.(); } catch { /* noop */ }
+    window.removeEventListener('keydown', handleGlobalKeydown);
+  }
 });
 
-function handleWordContextMenu(e: MouseEvent, word: AlignedWord) {
+function handleWordContextMenu(e: MouseEvent | TouchEvent, word: AlignedWord) {
   contextMenuRef.value?.open(e, word);
 }
 
@@ -155,7 +152,9 @@ function handleOpenEditWord(word: AlignedWord) {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  height: 100dvh;
   width: 100vw;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
   overflow: hidden;
   background: var(--bg-base);
 }

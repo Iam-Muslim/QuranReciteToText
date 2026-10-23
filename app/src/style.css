@@ -573,3 +573,40 @@ html[data-theme='light'] .quran-word-item:hover:not(.active-karaoke):not(.is-sel
   color: var(--text-muted);
   line-height: 1.4;
 }
+
+/* ============================================================
+   Mobile Touch & Viewport Polish (Anti-Bloat, iOS Safe Areas)
+   ============================================================ */
+:root {
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+}
+
+/* Eliminate 300ms mobile tap delay and prevent double-tap zoom on UI elements */
+button, a, input, select, [role="button"], [role="tab"], .quran-word-item {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Prevent accidental text highlighting during mobile touch swipe / drag */
+.top-navbar,
+.hub-toolbar,
+.timeline-control-bar,
+.surah-sidebar,
+.card-header-row,
+.btn-card-action {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Smooth native momentum scrolling on mobile */
+.projects-container,
+.mushaf-container,
+.surah-list,
+.align-body,
+.modal-card {
+  -webkit-overflow-scrolling: touch;
+}
+

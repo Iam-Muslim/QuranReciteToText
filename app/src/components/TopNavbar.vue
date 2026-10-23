@@ -275,11 +275,11 @@ function requestClose() {
 
 <style scoped>
 .top-navbar {
-  height: var(--header-height);
+  height: calc(var(--header-height) + env(safe-area-inset-top, 0px));
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 10px 0 12px;
+  padding: env(safe-area-inset-top, 0px) 10px 0 12px;
   position: relative;
   z-index: 50;
   border-bottom: 1px solid var(--border-subtle);

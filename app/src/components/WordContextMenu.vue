@@ -1,11 +1,14 @@
 <template>
-  <div 
-    v-if="visible" 
-    class="word-context-menu glass-panel" 
-    :style="{ top: `${position.y}px`, left: `${position.x}px` }"
-    @click.stop
-  >
-    <div class="menu-header" v-if="targetWord">
+  <div v-if="visible">
+    <!-- Backdrop dismiss on mobile tap away -->
+    <div class="menu-backdrop" @click="close" aria-hidden="true"></div>
+    <div 
+      class="word-context-menu glass-panel" 
+      :style="{ top: `${position.y}px`, left: `${position.x}px` }"
+      @click.stop
+    >
+      <div class="bottom-sheet-handle-bar" aria-hidden="true"></div>
+      <div class="menu-header" v-if="targetWord">
       <span class="menu-word">{{ targetWord.word }}</span>
       <span class="menu-loc">{{ targetWord.location }} • [{{ targetWord.start.toFixed(2) }}s - {{ targetWord.end.toFixed(2) }}s]</span>
     </div>
@@ -52,6 +55,7 @@
       </button>
     </div>
   </div>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -73,15 +77,17 @@ const position = ref({ x: 0, y: 0 });
 const targetWord = ref<AlignedWord | null>(null);
 const confirmingDelete = ref(false);
 
-function open(e: MouseEvent, word: AlignedWord) {
+function open(e: MouseEvent | TouchEvent, word: AlignedWord) {
   targetWord.value = word;
   confirmingDelete.value = false;
   
   // Guard window bounds
   const menuWidth = 260;
   const menuHeight = 280;
-  const x = Math.min(window.innerWidth - menuWidth - 10, Math.max(10, e.clientX));
-  const y = Math.min(window.innerHeight - menuHeight - 10, Math.max(10, e.clientY));
+  const clientX = 'clientX' in e ? e.clientX : ((e as TouchEvent).touches?.[0]?.clientX ?? window.innerWidth / 2);
+  const clientY = 'clientY' in e ? e.clientY : ((e as TouchEvent).touches?.[0]?.clientY ?? window.innerHeight / 2);
+  const x = Math.min(window.innerWidth - menuWidth - 10, Math.max(10, clientX));
+  const y = Math.min(window.innerHeight - menuHeight - 10, Math.max(10, clientY));
 
   position.value = { x, y };
   visible.value = true;
@@ -317,5 +323,61 @@ defineExpose({
 .confirm-btn-cancel:hover {
   background: var(--bg-surface-hover);
   color: var(--text-main);
+}
+
+/* Mobile Bottom Sheet Adaptation */
+.menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 99;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+@media (min-width: 601px) {
+  .menu-backdrop {
+    background: transparent;
+  }
+  .bottom-sheet-handle-bar {
+    display: none;
+  }
+}
+
+@media (max-width: 600px) {
+  .word-context-menu {
+    top: auto !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    width: 100vw !important;
+    max-width: 100vw !important;
+    border-radius: 20px 20px 0 0 !important;
+    border-bottom: none !important;
+    padding: 10px 16px calc(20px + env(safe-area-inset-bottom, 0px)) !important;
+    box-shadow: 0 -8px 36px rgba(0, 0, 0, 0.75) !important;
+    animation: slide-up-sheet 0.22s cubic-bezier(0.16, 1, 0.3, 1) both !important;
+  }
+
+  @keyframes slide-up-sheet {
+    from { transform: translateY(100%); }
+    to { transform: translateY(0); }
+  }
+
+  .bottom-sheet-handle-bar {
+    width: 38px;
+    height: 4px;
+    border-radius: 999px;
+    background: var(--border-medium);
+    margin: 4px auto 12px;
+  }
+
+  .menu-action-item {
+    padding: 12px 14px;
+    font-size: 0.95rem;
+  }
+
+  .nudge-btn {
+    padding: 10px 8px;
+    font-size: 0.8rem;
+  }
 }
 </style>
