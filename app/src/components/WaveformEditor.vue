@@ -731,20 +731,17 @@ async function loadLocalFile(file: File) {
     if (nativePath && isTauriEnvironment()) {
       const assetUrl = getAudioStreamUrl(nativePath);
       projectStore.setLoadedAudio(nativePath, assetUrl);
-      const ws = transport.getWaveSurfer();
-      if (ws) ws.load(assetUrl);
+      await loadAudioUrl(assetUrl, nativePath);
     } else {
       const localBlobUrl = URL.createObjectURL(file);
       projectStore.setLoadedAudio(file.name, localBlobUrl);
-      const ws = transport.getWaveSurfer();
-      if (ws) ws.load(localBlobUrl);
+      await loadAudioUrl(localBlobUrl, file.name);
     }
   } catch (err: any) {
     console.warn('Audio load error, using blob fallback:', err);
     const localBlobUrl = URL.createObjectURL(file);
     projectStore.setLoadedAudio(file.name, localBlobUrl);
-    const ws = transport.getWaveSurfer();
-    if (ws) ws.load(localBlobUrl);
+    await loadAudioUrl(localBlobUrl, file.name);
   } finally {
     isUploadingAudio.value = false;
   }
@@ -919,11 +916,6 @@ onMounted(() => {
       syncTrackScroll();
     });
     resizeObserver.observe(waveformMount.value);
-  }
-
-  if (projectStore.activeAudioUrl.value) {
-    const s = projectStore.activeSurah.value;
-    loadAudioUrl(projectStore.activeAudioUrl.value, projectStore.activeAudioFilePath.value, s?.waveform_url, s?.audio_duration_seconds, s?.peaks);
   }
 
   watch(() => projectStore.activeAudioUrl.value, (newUrl) => {

@@ -283,6 +283,8 @@ export function usePlaybackTransport(
     });
   }
 
+  let inFlightLoadUrl: string | null = null;
+
   async function loadAudioUrl(
     url: string, 
     filePath?: string | null, 
@@ -307,128 +309,156 @@ export function usePlaybackTransport(
       }
     }
 
+    if (!streamUrl) return;
+
+    // Prevent duplicate concurrent loads of the same URL that would cancel WaveSurfer
     if (currentlyLoadedAudioUrl === streamUrl && hasAudioLoaded.value) return;
+    if (inFlightLoadUrl === streamUrl) return;
+    inFlightLoadUrl = streamUrl;
     currentlyLoadedAudioUrl = streamUrl;
 
-    // 0. Instant Zero-Bandwidth: Use precomputed peaks from active Surah or argument if available
-    const directPeaks = (precomputedPeaks && precomputedPeaks.length > 0) 
-      ? precomputedPeaks 
-      : projectStore.activeSurah.value?.peaks;
-
-    if (directPeaks && directPeaks.length > 0) {
-      const explicitDur = knownDuration || projectStore.activeSurah.value?.audio_duration_seconds || 0;
-      if (explicitDur > 0) duration.value = explicitDur;
-      peaksCache.set(streamUrl, { peaks: directPeaks, duration: explicitDur, url: streamUrl });
-      try {
-        wavesurfer.load(streamUrl, [directPeaks], explicitDur > 0 ? explicitDur : undefined);
-        hasAudioLoaded.value = true;
-        return;
-      } catch (err) {
-        console.debug('Direct precomputed peaks load fallback:', err);
-      }
-    }
-
-    // 1. Fetch remote precomputed peaks if provided and not yet cached (Bandwidth Saver)
-    if (waveformUrl && !peaksCache.has(waveformUrl) && !peaksCache.has(streamUrl)) {
-      try {
-        const res = await fetch(waveformUrl);
-        if (res.ok) {
-          const json = await res.json();
-          const remotePeaks: number[] = Array.isArray(json) 
-            ? json 
-            : (Array.isArray(json.data) ? json.data : (Array.isArray(json.peaks) ? json.peaks : []));
-          const remoteDur = Number(json.duration) || knownDuration || 0;
-          if (remotePeaks.length > 0) {
-            peaksCache.set(streamUrl, { peaks: remotePeaks, duration: remoteDur, url: streamUrl });
-            peaksCache.set(waveformUrl, { peaks: remotePeaks, duration: remoteDur, url: streamUrl });
-          }
-        }
-      } catch (e) {
-        console.debug('Failed to fetch remote waveform peaks:', e);
-      }
-    }
-
-    // 2. Check if peaks exist in in-memory cache
-    const cached = peaksCache.get(effectivePath) || peaksCache.get(streamUrl) || (waveformUrl ? peaksCache.get(waveformUrl) : null);
-    if (cached) {
-      try {
-        duration.value = cached.duration;
-        wavesurfer.load(cached.url || streamUrl, [cached.peaks], cached.duration);
-        hasAudioLoaded.value = true;
-        return;
-      } catch {}
-    }
-
-    let peaksData: number[] | null = null;
-    let dur: number | null = knownDuration || null;
-
-    if (isTauriEnvironment() && effectivePath && (effectivePath.includes(':') || effectivePath.startsWith('/'))) {
-      try {
-        const exactDurationMs = await getDuration(effectivePath);
-        if (exactDurationMs > 0) {
-          dur = exactDurationMs / 1000.0;
-          duration.value = dur;
-        }
-      } catch (e) {
-        console.debug('ffprobe exact duration fallback:', e);
-      }
-
-      try {
-        const backendPeaks = await getAudioWaveform(effectivePath);
-        if (backendPeaks && backendPeaks.length > 0) {
-          peaksData = backendPeaks;
-          const pcmDuration = backendPeaks.length / 100.0;
-          dur = pcmDuration;
-          duration.value = dur;
-          peaksCache.set(effectivePath, { peaks: backendPeaks, duration: dur, url: streamUrl });
-        }
-      } catch (e) {
-        console.debug('Fast peaks extraction fallback to client WebAudio:', e);
-      }
-    }
-
     try {
-      if (peaksData && dur) {
-        wavesurfer.load(streamUrl, [peaksData], dur);
-      } else {
-        wavesurfer.load(streamUrl);
+      // 0. Instant Zero-Bandwidth: Use precomputed peaks from active Surah or argument if available
+      const directPeaks = (precomputedPeaks && precomputedPeaks.length > 0) 
+        ? precomputedPeaks 
+        : projectStore.activeSurah.value?.peaks;
+
+      if (directPeaks && directPeaks.length > 0) {
+        const explicitDur = knownDuration || projectStore.activeSurah.value?.audio_duration_seconds || 0;
+        if (explicitDur > 0) duration.value = explicitDur;
+        peaksCache.set(streamUrl, { peaks: directPeaks, duration: explicitDur, url: streamUrl });
+        try {
+          await wavesurfer.load(streamUrl, [directPeaks], explicitDur > 0 ? explicitDur : undefined);
+          hasAudioLoaded.value = true;
+          return;
+        } catch (err) {
+          console.debug('Direct precomputed peaks load fallback:', err);
+        }
       }
-    } catch (loadErr) {
-      console.error('Failed to load streamUrl into WaveSurfer:', loadErr);
+
+      // 1. Fetch remote precomputed peaks if provided and not yet cached (Bandwidth Saver)
+      if (waveformUrl && !peaksCache.has(waveformUrl) && !peaksCache.has(streamUrl)) {
+        try {
+          const res = await fetch(waveformUrl);
+          if (res.ok) {
+            const json = await res.json();
+            const remotePeaks: number[] = Array.isArray(json) 
+              ? json 
+              : (Array.isArray(json.data) ? json.data : (Array.isArray(json.peaks) ? json.peaks : []));
+            const remoteDur = Number(json.duration) || knownDuration || 0;
+            if (remotePeaks.length > 0) {
+              peaksCache.set(streamUrl, { peaks: remotePeaks, duration: remoteDur, url: streamUrl });
+              peaksCache.set(waveformUrl, { peaks: remotePeaks, duration: remoteDur, url: streamUrl });
+            }
+          }
+        } catch (e) {
+          console.debug('Failed to fetch remote waveform peaks:', e);
+        }
+      }
+
+      // 2. Check if peaks exist in in-memory cache
+      const cached = peaksCache.get(effectivePath) || peaksCache.get(streamUrl) || (waveformUrl ? peaksCache.get(waveformUrl) : null);
+      if (cached) {
+        try {
+          duration.value = cached.duration;
+          await wavesurfer.load(cached.url || streamUrl, [cached.peaks], cached.duration);
+          hasAudioLoaded.value = true;
+          return;
+        } catch {}
+      }
+
+      let peaksData: number[] | null = null;
+      let dur: number | null = knownDuration || null;
+
+      // 3. In Tauri: Resolve actual local disk path (stripping asset:// or asset.localhost if present)
+      let diskPath = effectivePath;
+      if (diskPath.startsWith('http://asset.localhost/')) {
+        diskPath = decodeURIComponent(diskPath.replace('http://asset.localhost/', ''));
+      } else if (diskPath.startsWith('asset://localhost/')) {
+        diskPath = decodeURIComponent(diskPath.replace('asset://localhost/', ''));
+      } else if (diskPath.startsWith('asset://')) {
+        diskPath = decodeURIComponent(diskPath.replace('asset://', ''));
+      }
+
+      const isLocalDiskFile = isTauriEnvironment() && 
+        diskPath && 
+        !diskPath.startsWith('http://') && 
+        !diskPath.startsWith('https://') && 
+        !diskPath.startsWith('blob:') && 
+        !diskPath.startsWith('data:') && 
+        (diskPath.includes(':') || diskPath.startsWith('/'));
+
+      if (isLocalDiskFile) {
+        try {
+          const exactDurationMs = await getDuration(diskPath);
+          if (exactDurationMs > 0) {
+            dur = exactDurationMs / 1000.0;
+            duration.value = dur;
+          }
+        } catch (e) {
+          console.debug('ffprobe exact duration fallback:', e);
+        }
+
+        try {
+          const backendPeaks = await getAudioWaveform(diskPath);
+          if (backendPeaks && backendPeaks.length > 0) {
+            peaksData = backendPeaks;
+            const pcmDuration = backendPeaks.length / 100.0;
+            dur = pcmDuration;
+            duration.value = dur;
+            peaksCache.set(effectivePath, { peaks: backendPeaks, duration: dur, url: streamUrl });
+            peaksCache.set(diskPath, { peaks: backendPeaks, duration: dur, url: streamUrl });
+          }
+        } catch (e) {
+          console.debug('Fast peaks extraction fallback to client WebAudio:', e);
+        }
+      }
+
+      if (peaksData && dur) {
+        await wavesurfer.load(streamUrl, [peaksData], dur);
+      } else {
+        await wavesurfer.load(streamUrl);
+      }
+      hasAudioLoaded.value = true;
+    } catch (loadErr: any) {
+      if (loadErr?.name !== 'AbortError') {
+        console.error('Failed to load streamUrl into WaveSurfer:', loadErr);
+      }
+    } finally {
+      if (inFlightLoadUrl === streamUrl) {
+        inFlightLoadUrl = null;
+      }
     }
   }
 
   function togglePlay() {
     if (!wavesurfer) return;
-    // Resume suspended AudioContext on mobile user touch
-    try {
-      const media = (wavesurfer as any).getMediaElement?.();
-      if (media && media.paused) {
-        media.play().catch(() => {});
-      }
-    } catch {}
-    if (!hasAudioLoaded.value && wavesurfer.getDuration() > 0) {
-      hasAudioLoaded.value = true;
-    }
-    if (!hasAudioLoaded.value) {
-      console.warn('Playback paused: audio is still loading or URL failed to load:', currentlyLoadedAudioUrl);
+    const media = (wavesurfer as any).getMediaElement?.();
+    const hasSource = !!(media?.src || currentlyLoadedAudioUrl);
+    if (!hasSource) {
+      console.warn('Playback paused: no audio source loaded');
       return;
     }
-    wavesurfer.playPause();
+
+    if (!hasAudioLoaded.value && (wavesurfer.getDuration() > 0 || duration.value > 0)) {
+      hasAudioLoaded.value = true;
+    }
+
+    try {
+      wavesurfer.playPause();
+    } catch (err) {
+      console.warn('Playback playPause failed:', err);
+    }
   }
 
   function skipBackward(amount: number) {
     if (!wavesurfer) return;
-    if (!hasAudioLoaded.value && wavesurfer.getDuration() > 0) hasAudioLoaded.value = true;
-    if (!hasAudioLoaded.value) return;
     wavesurfer.setTime(Math.max(0, wavesurfer.getCurrentTime() - amount));
   }
 
   function skipForward(amount: number) {
     if (!wavesurfer) return;
-    if (!hasAudioLoaded.value && wavesurfer.getDuration() > 0) hasAudioLoaded.value = true;
-    if (!hasAudioLoaded.value) return;
-    wavesurfer.setTime(Math.min(duration.value, wavesurfer.getCurrentTime() + amount));
+    wavesurfer.setTime(Math.min(duration.value || wavesurfer.getDuration() || 0, wavesurfer.getCurrentTime() + amount));
   }
 
   function adjustZoom(delta: number, clientX?: number) {
