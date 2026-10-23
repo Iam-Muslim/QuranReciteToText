@@ -10,11 +10,17 @@
 
     <!-- Second Tab: Main Studio Workspace (Cached in Memory for 0% CPU & Disk Spikes) -->
     <div v-show="projectStore.currentTab.value === 'studio'" class="workspace-body">
-      <!-- Mobile drawer backdrop -->
+      <!-- Mobile drawer backdrops -->
       <div
         class="sidebar-backdrop"
         :class="{ visible: !projectStore.sidebarCollapsed.value }"
         @click="projectStore.sidebarCollapsed.value = true"
+        aria-hidden="true"
+      ></div>
+      <div
+        class="sidebar-backdrop issues-backdrop"
+        :class="{ visible: projectStore.issuesDrawerOpen.value }"
+        @click="projectStore.issuesDrawerOpen.value = false"
         aria-hidden="true"
       ></div>
 
@@ -34,7 +40,7 @@
         </div>
       </main>
 
-      <!-- Right: Automated Confidence Auditor Drawer -->
+      <!-- Right: Automated Quality Check Panel (In-flow layout, does NOT cover segments) -->
       <IssuesDrawer />
     </div>
 
@@ -115,14 +121,17 @@ onMounted(async () => {
     } catch {
       versionService.init();
     }
-  } else {
-    versionService.init();
   }
+  // In Browser / Mobile: No desktop engine setup, no desktop updater
 
   window.addEventListener('keydown', handleGlobalKeydown);
 
-  // AlignmentModal "Setup" button → open the engine setup dialog
-  const openEngineSetup = () => updateModalRef.value?.open('app_init');
+  // AlignmentModal "Setup" button → only on desktop Tauri
+  const openEngineSetup = () => {
+    if (isTauri) {
+      updateModalRef.value?.open('app_init');
+    }
+  };
   window.addEventListener('quran-open-setup', openEngineSetup);
   (window as any).__quranRemoveEngineSetup = () => window.removeEventListener('quran-open-setup', openEngineSetup);
 });

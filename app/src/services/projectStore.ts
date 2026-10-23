@@ -99,10 +99,7 @@ class ProjectStore {
 
   constructor() {
     this.autosave = new AutosaveService({
-      saveFn: () => this.saveActiveProject(),
-      canSavePredicate: () => {
-        return !this.isPlaying.value;
-      }
+      saveFn: () => this.saveActiveProject()
     });
     this.isDirty = this.autosave.isDirty;
     this.isSaving = this.autosave.isSaving;
@@ -475,7 +472,7 @@ class ProjectStore {
       const word = this.findWordByLocation(issue.location, issue.timestamp);
       if (word) {
         word.is_verified = isNowResolved;
-        this.isDirty.value = true;
+        this.autosave.markDirty();
       }
     }
   }
@@ -494,7 +491,7 @@ class ProjectStore {
       const word = this.findWordByLocation(issue.location, issue.timestamp);
       if (word) {
         word.is_verified = resolved;
-        this.isDirty.value = true;
+        this.autosave.markDirty();
       }
     }
   }
@@ -598,7 +595,7 @@ class ProjectStore {
       if (duration && duration > 0) {
         this.activeSurah.value.audio_duration_seconds = duration;
       }
-      this.isDirty.value = true;
+      this.autosave.markDirty();
     }
   }
 
@@ -1236,6 +1233,8 @@ class ProjectStore {
     const s = this.project.surahs.find(item => item.surah_number === surahNum);
     if (s) {
       s.status = s.status === 'verified' ? 'needs_review' : 'verified';
+      this.autosave.markDirty();
+      this.flushAutosave().catch(() => {});
     }
   }
 
@@ -1392,6 +1391,8 @@ class ProjectStore {
         this.activeAudioFilePath.value = null;
         this.currentTime.value = 0;
       }
+      this.autosave.markDirty();
+      this.flushAutosave().catch(() => {});
     }
   }
 
@@ -1477,11 +1478,39 @@ class ProjectStore {
     return false;
   }
 
+  // Reset in-memory project to clean empty slate
+  public resetProject() {
+    this.history.clear();
+    this.autosave.clearSchedule();
+    this.autosave.markClean();
+    for (const key of Object.keys(this.project)) {
+      delete (this.project as any)[key];
+    }
+    Object.assign(this.project, JSON.parse(JSON.stringify(EMPTY_PROJECT)));
+    delete (this.project as any).file_name;
+    this.activeSurahNumber.value = null;
+    this.activeAyahNumber.value = null;
+    this.activeWordLocation.value = null;
+    this.activeAudioUrl.value = null;
+    this.activeAudioFilePath.value = null;
+    this.currentTime.value = 0;
+    this.isPlaying.value = false;
+    this.resolvedIssueIds.value = new Set();
+    try {
+      localStorage.removeItem('quran_last_project_file');
+    } catch {}
+  }
+
   // Delete project file on disk (desktop) or in the browser vault
   public async deleteProjectFile(fileName: string): Promise<boolean> {
     try {
       if (!isTauriEnvironment()) await vaultDelete(fileName);
       else await deleteProject(fileName);
+
+      const activeFileName = this.project.file_name || `${this.project.project_name}.qproj`;
+      if (this.project.file_name === fileName || activeFileName === fileName) {
+        this.resetProject();
+      }
       return true;
     } catch (err) {
       console.error('Failed to delete project file:', err);
@@ -1506,7 +1535,10 @@ class ProjectStore {
 
   // Load Entire Project
   public loadProject(newProject: AlignerProject) {
-    Object.assign(this.project, JSON.parse(JSON.stringify(newProject)));
+    for (const key of Object.keys(this.project)) {
+      delete (this.project as any)[key];
+    }
+    Object.assign(this.project, JSON.parse(JSON.stringify(EMPTY_PROJECT)), JSON.parse(JSON.stringify(newProject)));
     this.history.clear();
 
     // Hydrate embedded (portable) audio: data URLs are valid everywhere,

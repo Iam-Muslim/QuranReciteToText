@@ -192,88 +192,88 @@
    LIGHT THEME
    ============================================================ */
 html[data-theme='light'] {
-  --bg-base: #f3f4f6;
+  --bg-base: #f8fafc;
   --bg-surface: #ffffff;
   --bg-surface-elevated: #ffffff;
-  --bg-surface-hover: #ebeef1;
-  --bg-input: #ffffff;
+  --bg-surface-hover: #f1f5f9;
+  --bg-input: #f8fafc;
 
-  --border-subtle: rgba(0, 0, 0, 0.09);
-  --border-medium: rgba(0, 0, 0, 0.15);
-  --border-focus: #5e6ad2;
+  --border-subtle: #e2e8f0;
+  --border-medium: #cbd5e1;
+  --border-focus: #2563eb;
 
-  --text-main: #181a1f;
-  --text-secondary: #4d5058;
-  --text-muted: #6d707a;
-  --text-dim: #9ca0a8;
+  --text-main: #0f172a;
+  --text-secondary: #334155;
+  --text-muted: #64748b;
+  --text-dim: #94a3b8;
 
-  --accent-primary: #5e6ad2;
-  --accent-hover: #4c56b8;
-  --accent-deep: #3f48a2;
-  --accent-subtle: rgba(94, 106, 210, 0.10);
-  --accent-border: rgba(94, 106, 210, 0.40);
-  --accent-rgb: 94, 106, 210;
+  --accent-primary: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-deep: #1e40af;
+  --accent-subtle: rgba(37, 99, 235, 0.08);
+  --accent-border: rgba(37, 99, 235, 0.28);
+  --accent-rgb: 37, 99, 235;
 
-  --gold-primary: #a67c20;
-  --gold-hover: #8a671a;
-  --gold-deep: #745412;
-  --gold-subtle: rgba(166, 124, 32, 0.10);
-  --gold-border: rgba(166, 124, 32, 0.35);
-  --gold-rgb: 166, 124, 32;
+  --gold-primary: #92691b;
+  --gold-hover: #785514;
+  --gold-deep: #5e430f;
+  --gold-subtle: rgba(146, 105, 27, 0.08);
+  --gold-border: rgba(146, 105, 27, 0.26);
+  --gold-rgb: 146, 105, 27;
 
-  --emerald-primary: #2e7d54;
-  --emerald-bg: rgba(46, 125, 84, 0.10);
-  --emerald-border: rgba(46, 125, 84, 0.30);
+  --emerald-primary: #059669;
+  --emerald-bg: rgba(5, 150, 105, 0.08);
+  --emerald-border: rgba(5, 150, 105, 0.24);
 
-  --amber-primary: #9a7320;
-  --amber-bg: rgba(154, 115, 32, 0.10);
-  --amber-border: rgba(154, 115, 32, 0.30);
+  --amber-primary: #d97706;
+  --amber-bg: rgba(217, 119, 6, 0.08);
+  --amber-border: rgba(217, 119, 6, 0.24);
 
-  --ruby-primary: #c0413d;
-  --ruby-bg: rgba(192, 65, 61, 0.10);
-  --ruby-border: rgba(192, 65, 61, 0.30);
+  --ruby-primary: #e11d48;
+  --ruby-bg: rgba(225, 29, 72, 0.08);
+  --ruby-border: rgba(225, 29, 72, 0.24);
 
-  --sky-primary: #36739a;
-  --sky-bg: rgba(54, 115, 154, 0.10);
-  --sky-rgb: 54, 115, 154;
+  --sky-primary: #0284c7;
+  --sky-bg: rgba(2, 132, 199, 0.08);
+  --sky-rgb: 2, 132, 199;
 
-  /* Timeline & wave (daylight) */
-  --minimap-bg: #eef0f3;
-  --lane-bg: #f5f6f8;
-  --lane-bg-soft: #f0f2f4;
-  --lanesheet-bg: #e8eaee;
-  --hover-overlay: rgba(0, 0, 0, 0.04);
-  --playhead-color: #c0382f;
-  --playhead-glow: rgba(192, 56, 47, 0.35);
-  --contrast-line: rgba(0, 0, 0, 0.18);
+  /* Timeline & wave (daylight soft canvas) */
+  --minimap-bg: #edf2f7;
+  --lane-bg: #f8fafc;
+  --lane-bg-soft: #f1f5f9;
+  --lanesheet-bg: #e2e8f0;
+  --hover-overlay: rgba(15, 23, 42, 0.04);
+  --playhead-color: #e11d48;
+  --playhead-glow: rgba(225, 29, 72, 0.30);
+  --contrast-line: rgba(15, 23, 42, 0.12);
   --on-contrast: #ffffff;
-  --scroll-thumb: rgba(0, 0, 0, 0.16);
-  --scroll-thumb-hover: rgba(0, 0, 0, 0.30);
-  --wave-base: #7c828e;
-  --wave-base-dim: #aab0b9;
-  --wave-rest: #aab0b9;
+  --scroll-thumb: rgba(15, 23, 42, 0.16);
+  --scroll-thumb-hover: rgba(15, 23, 42, 0.30);
+  --wave-base: #94a3b8;
+  --wave-base-dim: #cbd5e1;
+  --wave-rest: #cbd5e1;
 
-  /* Elevation */
-  --shadow-e1: 0 1px 2px rgba(0, 0, 0, 0.06);
-  --shadow-e2: 0 3px 10px rgba(0, 0, 0, 0.07);
-  --shadow-e3: 0 8px 24px rgba(0, 0, 0, 0.10);
-  --shadow-e4: 0 16px 40px rgba(0, 0, 0, 0.14);
+  /* Elevation: soft, diffuse, eye-pleasing shadows */
+  --shadow-e1: 0 1px 3px 0 rgba(15, 23, 42, 0.04), 0 1px 2px -1px rgba(15, 23, 42, 0.04);
+  --shadow-e2: 0 4px 6px -1px rgba(15, 23, 42, 0.05), 0 2px 4px -2px rgba(15, 23, 42, 0.04);
+  --shadow-e3: 0 10px 15px -3px rgba(15, 23, 42, 0.06), 0 4px 6px -4px rgba(15, 23, 42, 0.04);
+  --shadow-e4: 0 20px 25px -5px rgba(15, 23, 42, 0.08), 0 8px 10px -6px rgba(15, 23, 42, 0.04);
 
-  --glass-bg: rgba(255, 255, 255, 0.95);
-  --glass-border: rgba(0, 0, 0, 0.09);
-  --backdrop-bg: rgba(24, 26, 31, 0.35);
+  --glass-bg: rgba(255, 255, 255, 0.90);
+  --glass-border: rgba(226, 232, 240, 0.90);
+  --backdrop-bg: rgba(15, 23, 42, 0.30);
 
   /* Legacy aliases */
   --qc-bg-primary: #ffffff;
-  --qc-bg-secondary: #f5f6f8;
-  --qc-bg-accent: #eef0f3;
-  --qc-border: rgba(0, 0, 0, 0.09);
-  --qc-blue: #5e6ad2;
-  --qc-blue-hover: #4c56b8;
-  --qc-emerald: #2e7d54;
-  --qc-amber: #9a7320;
-  --qc-purple: #7e22ce;
-  --qc-danger: #c0413d;
+  --qc-bg-secondary: #f8fafc;
+  --qc-bg-accent: #f1f5f9;
+  --qc-border: #e2e8f0;
+  --qc-blue: #2563eb;
+  --qc-blue-hover: #1d4ed8;
+  --qc-emerald: #059669;
+  --qc-amber: #d97706;
+  --qc-purple: #7c3aed;
+  --qc-danger: #e11d48;
 }
 
 /* ============================================================
@@ -547,17 +547,18 @@ html[data-theme='light'] .arabic-quran-text::selection {
   border-radius: var(--radius-xs);
 }
 
-/* Light mode word highlight */
+/* Light mode word highlight — soft warm amber illumination */
 html[data-theme='light'] .quran-word-item.active-karaoke,
 html[data-theme='light'] .quran-word-item.is-selected {
-  background: #dfe5f4 !important;
-  color: #1a1c1f !important;
+  background: rgba(217, 119, 6, 0.14) !important;
+  color: #78350f !important;
+  border-color: rgba(217, 119, 6, 0.28) !important;
   font-weight: 600;
 }
 
 html[data-theme='light'] .quran-word-item:hover:not(.active-karaoke):not(.is-selected) {
-  background: #e2e8f0;
-  border-color: rgba(0, 0, 0, 0.14);
+  background: #f1f5f9;
+  border-color: #cbd5e1;
   color: var(--text-main);
 }
 

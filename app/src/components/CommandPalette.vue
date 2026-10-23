@@ -157,11 +157,11 @@ function buildCommands(): Command[] {
       action: () => { emit('open-alignment-modal'); },
     },
     {
-      id: 'auditor',
-      label: 'Toggle Confidence Auditor',
+      id: 'revise',
+      label: 'Toggle Revise Panel',
       section: 'Review',
       icon: AlertCircle,
-      keywords: 'auditor issues drawer confidence panel toggle',
+      keywords: 'revise check auditor issues drawer confidence panel review verify toggle',
       action: () => { projectStore.issuesDrawerOpen.value = !projectStore.issuesDrawerOpen.value; },
     },
     {

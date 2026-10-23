@@ -24,7 +24,7 @@ export class AutosaveService {
   private isFlushing: boolean = false;
 
   constructor(options: AutosaveOptions) {
-    this.debounceMs = options.debounceMs ?? 2500;
+    this.debounceMs = options.debounceMs ?? 1500;
     this.saveFn = options.saveFn;
     this.canSavePredicate = options.canSavePredicate;
 
@@ -36,10 +36,21 @@ export class AutosaveService {
 
     window.addEventListener('beforeunload', (e) => {
       if (this.isDirty.value) {
-        // Trigger save before close
         void this.flush();
         e.preventDefault();
         e.returnValue = '';
+      }
+    });
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden' && this.isDirty.value) {
+        void this.flush();
+      }
+    });
+
+    window.addEventListener('blur', () => {
+      if (this.isDirty.value) {
+        void this.flush();
       }
     });
   }

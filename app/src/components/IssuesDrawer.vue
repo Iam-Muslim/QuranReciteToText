@@ -4,7 +4,7 @@
     <div class="drawer-header">
       <div class="header-left">
         <AlertCircle :size="15" class="text-accent" />
-        <span class="drawer-title">Auditor</span>
+        <span class="drawer-title">Revise</span>
         <span class="issue-count" :class="{ 'all-resolved': pendingCount === 0 }" v-if="totalCount > 0">
           {{ pendingCount > 0 ? pendingCount : '✓ Done' }}
         </span>
@@ -337,30 +337,55 @@ function getIssueBadgeClass(type: IssueType): string {
 
 <style scoped>
 .issues-drawer {
-  width: var(--drawer-width);
-  height: calc(100vh - var(--header-height));
-  position: fixed;
-  right: 0;
-  top: var(--header-height);
-  background: var(--glass-bg);
-  backdrop-filter: blur(12px) saturate(1.4);
-  -webkit-backdrop-filter: blur(12px) saturate(1.4);
-  border-left: 1px solid var(--glass-border);
+  width: var(--drawer-width, 340px);
+  height: 100%;
+  position: relative;
+  background: var(--bg-surface);
+  border-left: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
-  z-index: 40;
-  transform: translateX(100%);
-  transition: transform var(--dur-over) var(--ease-spring);
-  box-shadow: -8px 0 32px rgba(0, 0, 0, 0.55);
+  flex-shrink: 0;
+  transition: width var(--dur-base) var(--ease-spring),
+              opacity var(--dur-fast) var(--ease-out),
+              border-color var(--dur-fast) var(--ease-out);
+  overflow: hidden;
+  z-index: 20;
 }
 
-.issues-drawer.drawer-open {
-  transform: translateX(0);
+.issues-drawer:not(.drawer-open) {
+  width: 0 !important;
+  border-left-color: transparent !important;
+  opacity: 0;
+  pointer-events: none;
+  overflow: hidden;
 }
 
 @media (max-width: 760px) {
   .issues-drawer {
-    width: min(92vw, var(--drawer-width));
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    height: 100%;
+    z-index: 60;
+    transform: translateX(100%);
+    transition: transform var(--dur-over) var(--ease-spring), opacity var(--dur-fast) var(--ease-out);
+    box-shadow: var(--shadow-e4);
+    border-left: 1px solid var(--border-medium);
+  }
+
+  .issues-drawer:not(.drawer-open) {
+    width: min(88vw, 360px) !important;
+    transform: translateX(100%);
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .issues-drawer.drawer-open {
+    width: min(88vw, 360px) !important;
+    transform: translateX(0);
+    opacity: 1;
+    pointer-events: auto;
   }
 }
 

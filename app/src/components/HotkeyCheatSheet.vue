@@ -58,7 +58,7 @@ const groups = [
     rows: [
       { label: 'Toggle Sidebar', keys: ['Ctrl', 'B'] },
       { label: 'Command Palette', keys: ['Ctrl', 'P'] },
-      { label: 'Confidence Auditor', keys: ['Tab'] },
+      { label: 'Revise / Next Issue', keys: ['Tab'] },
       { label: 'Zoom Timeline', keys: ['Ctrl', 'Wheel'] },
       { label: 'This Cheatsheet', keys: ['?'] },
     ],

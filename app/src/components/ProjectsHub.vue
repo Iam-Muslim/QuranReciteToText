@@ -3,19 +3,34 @@
     <input 
       type="file" 
       ref="fileInputRef" 
-      accept=".qproj,.json" 
+      accept=".qproj,.json,application/json,*/*" 
       style="display: none" 
       @change="handleFileInputChange" 
     />
 
-    <!-- Modern Minimalist Toolbar -->
+    <!-- 1. Sacred Ayah Banner on Top -->
+    <div class="hub-hero-banner">
+      <div v-if="loadError" class="error-banner anim-rise">
+        <span>{{ loadError }}</span>
+        <button class="error-dismiss" @click="loadError = ''">✕</button>
+      </div>
+
+      <div class="hero-inner">
+        <div class="hero-calligraphy-frame">
+          <h1 class="hero-title arabic-quran-text" dir="rtl">
+            وما اسالكم عليه من اجر ان اجري الا على رب العالمين
+          </h1>
+        </div>
+      </div>
+    </div>
+
+    <!-- 2. Modern Minimalist Toolbar UNDER the Ayah Banner -->
     <header class="hub-toolbar">
       <div class="toolbar-left">
         <!-- Quick Search -->
         <div class="search-wrap">
           <Search :size="13" class="search-icon" />
           <input 
-            ref="searchInputRef"
             type="text" 
             v-model="searchQuery" 
             placeholder="Search projects…" 
@@ -23,7 +38,6 @@
             spellcheck="false"
           />
           <button v-if="searchQuery" class="clear-btn" @click="searchQuery = ''" title="Clear">✕</button>
-          <span v-else class="kbd-hint search-kbd">/</span>
         </div>
 
         <!-- Filter Segmented Tabs -->
@@ -58,7 +72,7 @@
         <!-- Sort Control -->
         <div class="sort-select-wrap">
           <SlidersHorizontal :size="12" class="sort-icon" />
-          <select v-model="sortKey" class="sort-select">
+          <select v-model="sortKey" class="sort-select" title="Sort Projects">
             <option value="updated">Recent</option>
             <option value="review">Needs Review First</option>
             <option value="surahs">Surah Count</option>
@@ -77,21 +91,11 @@
       </div>
     </header>
 
-    <!-- Welcome -->
-    <div class="hub-hero-banner">
-      <div v-if="loadError" class="error-banner anim-rise">
-        <span>{{ loadError }}</span>
-        <button class="error-dismiss" @click="loadError = ''">✕</button>
-      </div>
-
-      <h1 class="hero-title arabic-quran-text" dir="rtl">وَمَا أَسْأَلُكُمْ عَلَيْهِ مِنْ أَجْرٍ ۖ إِنْ أَجْرِيَ إِلَّا عَلَىٰ رَبِّ الْعَالَمِينَ</h1>
-    </div>
-
     <!-- Main Workspace -->
     <main class="hub-main">
       <!-- Loading Shimmer -->
       <div v-if="isFetching && projectsList.length === 0" class="projects-grid">
-        <div v-for="i in 6" :key="i" class="skeleton-card">
+        <div v-for="i in 4" :key="i" class="skeleton-card">
           <div class="skeleton-thumb shimmer"></div>
           <div class="skeleton-body">
             <div class="skeleton-line shimmer" style="width: 70%"></div>
@@ -100,116 +104,97 @@
         </div>
       </div>
 
-      <!-- Empty State -->
-      <div v-else-if="filteredProjects.length === 0" class="empty-state anim-rise">
-        <div class="empty-orb">
-          <FolderKanban :size="28" class="empty-icon" />
-        </div>
-        <h3 class="empty-title">{{ searchQuery ? 'No matching projects' : 'No projects found' }}</h3>
-        <p class="empty-desc">
-          {{ searchQuery
-            ? 'Try a different search query or filter.'
-            : (isTauriEnv
-              ? 'Create a recitation project or import an existing .qproj archive.'
-              : 'Open your portable .qproj — timings and audio travel inside the file.') }}
-        </p>
-        <div class="empty-actions" v-if="!searchQuery">
-          <button class="btn-primary" @click="showNewModal = true">
-            <Plus :size="14" />
-            <span>Create Project</span>
-          </button>
-          <button class="btn-secondary" @click="triggerFileInput">
-            <FolderOpen :size="14" />
-            <span>Import .qproj</span>
-          </button>
-        </div>
+      <!-- No search results state -->
+      <div v-else-if="searchQuery && filteredProjects.length === 0" class="no-search-results anim-rise">
+        <FolderKanban :size="28" class="empty-icon" />
+        <h3 class="empty-title">No matching projects</h3>
+        <p class="empty-desc">No project matching "{{ searchQuery }}".</p>
+        <button class="btn-secondary" @click="searchQuery = ''">Clear Search</button>
       </div>
 
-      <!-- Project Card Grid -->
+      <!-- Project Cards Grid -->
       <div v-else class="projects-grid stagger">
-        <!-- New Project Tile -->
-        <button class="create-tile" @click="showNewModal = true">
-          <span class="create-orb">
-            <Plus :size="18" />
-          </span>
+        <!-- The SAME Square New Project Tile -->
+        <button class="create-tile" @click="showNewModal = true" title="Create New Recitation Project">
+          <div class="create-orb">
+            <Plus :size="22" />
+          </div>
           <span class="create-label">New Project</span>
+          <span class="create-sub">Start alignment workspace</span>
         </button>
 
-        <!-- Project Cards -->
+        <!-- Modern Project Card -->
+        <!-- Clean Modern Project Card -->
         <div 
           v-for="p in filteredProjects" 
           :key="p.file_name"
           class="project-card"
           @click="openProject(p)"
         >
-          <!-- Card Header / Watermark -->
-          <div class="card-thumbnail">
-            <div class="watermark-layer">
-              <span class="surah-watermark-ar" v-if="p.primary_surah?.surah_name_arabic" dir="rtl">
-                {{ p.primary_surah.surah_name_arabic }}
-              </span>
-              <span class="surah-num-pill">Surah {{ getSurahWatermark(p) }}</span>
-            </div>
-
-            <!-- Review Toggle (same as the sidebar's ✓ button — one click marks reviewed) -->
+          <!-- Top Row: Status Chip on Left + Quick Actions Dock on Right -->
+          <div class="card-header-row">
             <button
               class="card-status-chip"
               :class="[getStatusClass(p.status), { 'is-done': isVerified(p) }]"
               @click.stop="toggleReview(p)"
-              :title="isVerified(p) ? 'Reviewed — click to send back to review' : 'Click to mark reviewed'"
+              :title="isVerified(p) ? 'Reviewed — click to mark needs review' : 'Click to mark reviewed'"
             >
               <CircleCheck :size="11" v-if="isVerified(p)" />
               <Circle :size="11" v-else />
               <span class="status-chip-label">{{ isVerified(p) ? 'Verified' : 'Review' }}</span>
             </button>
 
-            <!-- Duration Badge -->
-            <div class="thumbnail-duration" v-if="p.total_duration > 0">
-              <span>{{ formatDuration(p.total_duration) }}</span>
+            <!-- Quick Action Icons -->
+            <div class="card-actions-dock" @click.stop>
+              <button class="btn-card-action" @click="duplicateProject(p)" title="Duplicate">
+                <Copy :size="12" />
+              </button>
+              <button v-if="isTauriEnv" class="btn-card-action" @click="revealProjectInExplorer(p)" title="Open in Explorer">
+                <Folder :size="12" />
+              </button>
+              <button class="btn-card-action" @click="exportProject(p)" title="Download .qproj">
+                <Download :size="12" />
+              </button>
+              <button
+                class="btn-card-action btn-delete"
+                @click="requestDelete(p)"
+                title="Delete Project"
+              >
+                <Trash2 :size="12" />
+              </button>
             </div>
           </div>
 
-          <!-- Card Info -->
-          <div class="card-details">
+          <!-- Card Body: Clear, Prominent Project Name -->
+          <div class="card-body">
             <h3 class="card-name" :title="p.project_name">{{ p.project_name }}</h3>
-            
-            <div class="card-meta-line">
-              <span class="meta-tag surah-count-pill" :title="`${p.surahs_count} Surah(s)`">
-                <BookOpen :size="11" />
+
+            <div class="card-meta-line" v-if="p.surahs_count > 0 || p.reciter || (p.riwayah && p.riwayah !== 'Hafs')">
+              <!-- Surah count ONLY if surahs_count > 0, NO Mushaf icon -->
+              <span v-if="p.surahs_count > 0" class="meta-tag surah-count-pill">
                 <span>{{ p.surahs_count }} {{ p.surahs_count === 1 ? 'Surah' : 'Surahs' }}</span>
               </span>
-              <span v-if="p.reciter" class="meta-tag">
+
+              <!-- Reciter tag if present -->
+              <span v-if="p.reciter" class="meta-tag reciter-pill" :title="p.reciter">
+                <Mic :size="10" />
                 <span>{{ p.reciter }}</span>
               </span>
-              <span v-if="p.total_ayahs > 0" class="meta-tag dim">
-                <span>{{ p.total_ayahs }} ayahs</span>
-              </span>
-            </div>
 
-            <div class="card-time-row">
-              <span class="time-text">{{ formatDateRelative(p.updated_at) }}</span>
+              <!-- Riwayah tag if customized -->
+              <span v-if="p.riwayah && p.riwayah !== 'Hafs'" class="meta-tag riwayah-pill">
+                <span>{{ p.riwayah }}</span>
+              </span>
             </div>
           </div>
 
-          <!-- Hover-Action Floating Dock -->
-          <div class="card-actions-dock" @click.stop>
-            <button class="btn-card-action" @click="duplicateProject(p)" title="Duplicate">
-              <Copy :size="12" />
-            </button>
-            <button v-if="isTauriEnv" class="btn-card-action" @click="revealProjectInExplorer(p)" title="Open in Explorer">
-              <Folder :size="12" />
-            </button>
-            <button class="btn-card-action" @click.stop="exportProject(p)" title="Download .qproj">
-              <Download :size="12" />
-            </button>
-            <button
-              class="btn-card-action btn-delete"
-              :class="{ 'armed-danger': confirmDeleteFile === p.file_name }"
-              @click="requestDelete(p)"
-              :title="confirmDeleteFile === p.file_name ? 'Click again to confirm delete' : 'Delete Project'"
-            >
-              <Trash2 :size="12" />
-            </button>
+          <!-- Card Footer: Relative date & Open hint on hover -->
+          <div class="card-footer-row">
+            <span class="time-text">{{ formatDateRelative(p.updated_at) }}</span>
+            <span class="open-hint">
+              <span>Open</span>
+              <ArrowRight :size="11" />
+            </span>
           </div>
         </div>
       </div>
@@ -296,13 +281,46 @@
         </div>
       </div>
     </div>
+
+    <!-- Approval / Delete Confirmation Dialog -->
+    <div v-if="projectToDelete" class="modal-backdrop" @click.self="cancelDelete">
+      <div class="modal-card modal-confirm glass-float anim-scale" @click.stop>
+        <div class="confirm-content">
+          <div class="confirm-icon-orb">
+            <Trash2 :size="22" />
+          </div>
+          <div class="confirm-text">
+            <h3 class="confirm-title">Delete Project?</h3>
+            <p class="confirm-desc">
+              Are you sure you want to delete <strong class="confirm-name">"{{ projectToDelete.project_name }}"</strong>?
+            </p>
+            <p class="confirm-sub">This action cannot be undone.</p>
+          </div>
+        </div>
+
+        <div class="confirm-actions-row">
+          <button type="button" class="btn-secondary" @click="cancelDelete" :disabled="isDeleting">
+            Cancel
+          </button>
+          <button 
+            type="button" 
+            class="btn-confirm-delete" 
+            @click="confirmAndExecuteDelete" 
+            :disabled="isDeleting"
+          >
+            <span v-if="isDeleting">Deleting…</span>
+            <span v-else>Delete Project</span>
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue';
 import { projectStore } from '../services/projectStore';
-import { listProjects, loadProject, revealInExplorer, isTauriEnvironment } from '../services/api';
+import { listProjects, loadProject, revealInExplorer, isTauriEnvironment, saveFileToPath } from '../services/api';
 import { vaultList, vaultLoad } from '../services/projectVault';
 import type { ProjectSummary } from '../types/aligner';
 import { 
@@ -318,7 +336,8 @@ import {
   Circle,
   CircleCheck,
   SlidersHorizontal,
-  BookOpen
+  Mic,
+  ArrowRight
 } from 'lucide-vue-next';
 
 const CACHE_KEY = 'quran_studio_projects_cache';
@@ -335,34 +354,36 @@ const isCreating = ref(false);
 const isFetching = ref(false);
 const projectsList = ref<ProjectSummary[]>([]);
 const fileInputRef = ref<HTMLInputElement | null>(null);
-const searchInputRef = ref<HTMLInputElement | null>(null);
 
 /** Desktop app vs shared-link/browser mode (vault storage, no folder reveal). */
 const isTauriEnv = isTauriEnvironment();
 
-const confirmDeleteFile = ref<string | null>(null);
+const projectToDelete = ref<ProjectSummary | null>(null);
+const isDeleting = ref(false);
 const loadError = ref('');
-let deleteArmTimer: ReturnType<typeof setTimeout> | null = null;
 
 function requestDelete(p: ProjectSummary) {
-  const fname = getProjectFileName(p) || '';
-  if (!fname) return;
-  (p as any).file_name = fname;
-  if (confirmDeleteFile.value === fname) {
-    deleteProject(p);
-    return;
-  }
-  confirmDeleteFile.value = fname;
-  if (deleteArmTimer) clearTimeout(deleteArmTimer);
-  deleteArmTimer = setTimeout(() => { confirmDeleteFile.value = null; }, 3200);
+  projectToDelete.value = p;
 }
 
-watch(showNewModal, (open) => {
-  if (!open) return;
-  const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') showNewModal.value = false; };
-  window.addEventListener('keydown', onKey);
-  watch(showNewModal, () => window.removeEventListener('keydown', onKey), { once: true });
-});
+function cancelDelete() {
+  projectToDelete.value = null;
+}
+
+async function confirmAndExecuteDelete() {
+  if (!projectToDelete.value) return;
+  const target = projectToDelete.value;
+  isDeleting.value = true;
+  try {
+    await deleteProject(target);
+    projectToDelete.value = null;
+  } catch (err: any) {
+    loadError.value = `Failed to delete project: ${err?.message || err}`;
+    setTimeout(() => { loadError.value = ''; }, 4000);
+  } finally {
+    isDeleting.value = false;
+  }
+}
 
 onMounted(() => {
   try {
@@ -374,11 +395,19 @@ onMounted(() => {
 
   fetchProjects();
 
+  const handleGlobalKey = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      if (projectToDelete.value) {
+        projectToDelete.value = null;
+      } else if (showNewModal.value) {
+        showNewModal.value = false;
+      }
+    }
+  };
   window.addEventListener('keydown', handleGlobalKey);
-});
-
-onUnmounted(() => {
-  window.removeEventListener('keydown', handleGlobalKey);
+  onUnmounted(() => {
+    window.removeEventListener('keydown', handleGlobalKey);
+  });
 });
 
 watch(() => projectStore.currentTab.value, (newTab) => {
@@ -386,14 +415,6 @@ watch(() => projectStore.currentTab.value, (newTab) => {
     fetchProjects();
   }
 });
-
-function handleGlobalKey(e: KeyboardEvent) {
-  if (e.key !== '/' || projectStore.currentTab.value !== 'projects') return;
-  const t = e.target as HTMLElement | null;
-  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
-  e.preventDefault();
-  searchInputRef.value?.focus();
-}
 
 function normalizeProjectSummary(p: any): ProjectSummary {
   const surahs: any[] = Array.isArray(p.surahs) ? p.surahs : [];
@@ -429,7 +450,11 @@ function normalizeProjectSummary(p: any): ProjectSummary {
   }
 
   const fileName = getProjectFileName(p);
-  const projectName = String(p.project_name || p.name || fileName.replace(/\.qproj$/i, '') || 'Recitation Project');
+  const rawProjectName = String(p.project_name || p.name || '').trim();
+  const cleanBase = fileName.replace(/\.qproj$/i, '').replace(/^[.\s]+|[.\s]+$/g, '');
+  const projectName = (rawProjectName && rawProjectName !== '.') 
+    ? rawProjectName 
+    : (cleanBase || 'Recitation Project');
 
   return {
     ...p,
@@ -493,7 +518,12 @@ const filteredProjects = computed(() => {
 });
 
 function getProjectFileName(p: any): string {
-  return p?.file_name || p?._file || p?.file || (p?.project_name ? `${p.project_name}.qproj` : '');
+  const raw = p?.file_name || p?._file || p?.file;
+  if (raw) {
+    return /\.qproj$/i.test(raw) ? raw : `${raw}.qproj`;
+  }
+  const name = String(p?.project_name || '').trim().replace(/^\.+|\.+$/g, '');
+  return `${name || 'Recitation Project'}.qproj`;
 }
 
 async function fetchProjects(retries?: number | Event) {
@@ -511,12 +541,18 @@ async function fetchProjects(retries?: number | Event) {
     let list = rawList.map(normalizeProjectSummary);
 
     // CRITICAL: Ensure currently active project in store is represented,
-    // even if it was just aligned in memory or Tauri file write is still finishing:
+    // including brand new projects with 0 surahs or unsaved in-memory changes:
     if (projectStore.project && projectStore.project.project_name) {
-      const activeSurahs = projectStore.project.surahs || [];
-      if (activeSurahs.length > 0 || projectStore.isDirty.value) {
-        const activeFileName = projectStore.project.file_name || `${projectStore.project.project_name}.qproj`;
-        const existingIdx = list.findIndex(p => getProjectFileName(p) === activeFileName || p.project_name === projectStore.project.project_name);
+      const activeFileName = getProjectFileName(projectStore.project);
+      const isActualProject = Boolean(projectStore.project.file_name) || 
+        (projectStore.project.surahs && projectStore.project.surahs.length > 0) || 
+        projectStore.isDirty.value;
+
+      if (isActualProject) {
+        const existingIdx = list.findIndex(p => 
+          getProjectFileName(p) === activeFileName || 
+          p.project_name === projectStore.project.project_name
+        );
         if (existingIdx === -1) {
           list.unshift(normalizeProjectSummary({
             ...projectStore.project,
@@ -525,8 +561,9 @@ async function fetchProjects(retries?: number | Event) {
           // Trigger immediate disk write if not yet saved
           projectStore.saveActiveProject().catch(() => {});
         } else {
-          // If in-memory copy has more surahs than disk scan, upgrade it:
-          if (activeSurahs.length > (list[existingIdx].surahs_count || 0)) {
+          // If in-memory copy has more surahs or newer updates, upgrade it:
+          const activeSurahs = projectStore.project.surahs || [];
+          if (activeSurahs.length >= (list[existingIdx].surahs_count || 0)) {
             list[existingIdx] = normalizeProjectSummary({
               ...projectStore.project,
               file_name: activeFileName,
@@ -645,7 +682,6 @@ async function deleteProject(p: ProjectSummary) {
   const fname = getProjectFileName(p);
   if (!fname) return;
   const ok = await projectStore.deleteProjectFile(fname);
-  confirmDeleteFile.value = null;
   if (ok) {
     projectsList.value = projectsList.value.filter(item => getProjectFileName(item) !== fname);
     try {
@@ -688,11 +724,36 @@ async function exportProject(p: ProjectSummary) {
       setTimeout(() => { loadError.value = ''; }, 3000);
       return;
     }
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+
+    const content = JSON.stringify(data, null, 2);
+    const defaultExportName = fname.endsWith('.qproj') ? fname : `${fname}.qproj`;
+
+    if (isTauriEnvironment()) {
+      try {
+        const { save } = await import('@tauri-apps/plugin-dialog');
+        const selectedPath = await save({
+          defaultPath: defaultExportName,
+          filters: [
+            { name: 'Quran Recitation Project (*.qproj)', extensions: ['qproj'] },
+            { name: 'All Files', extensions: ['*'] }
+          ]
+        });
+        if (selectedPath) {
+          await saveFileToPath(selectedPath, content);
+          return;
+        } else {
+          return; // User cancelled
+        }
+      } catch (dialogErr) {
+        console.warn('Native save dialog failed or unavailable, using browser download:', dialogErr);
+      }
+    }
+
+    const blob = new Blob([content], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = fname.endsWith('.qproj') ? fname : `${fname}.qproj`;
+    a.download = defaultExportName;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -725,24 +786,6 @@ function getStatusClass(status?: string): string {
   const st = (status || '').toLowerCase();
   if (st === 'verified' || st === 'completed' || st === 'done') return 'status-verified';
   return 'status-review';
-}
-
-function getSurahWatermark(p: ProjectSummary): string {
-  if (p.primary_surah?.surah_number) {
-    return String(p.primary_surah.surah_number).padStart(3, '0');
-  }
-  return '001';
-}
-
-function formatDuration(secs: number): string {
-  if (isNaN(secs) || secs <= 0) return '—';
-  const mins = Math.floor(secs / 60);
-  const remainingSecs = Math.floor(secs % 60);
-  if (mins >= 60) {
-    const hrs = Math.floor(mins / 60);
-    return `${hrs}h ${mins % 60}m`;
-  }
-  return `${mins}:${remainingSecs.toString().padStart(2, '0')}`;
 }
 
 function formatDateRelative(dateStr: string): string {

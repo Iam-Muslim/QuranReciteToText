@@ -29,14 +29,10 @@
         @change="handleFileUpload"
       />
 
-      <!-- No Audio Empty State -->
-      <div v-if="!hasAudioLoaded && timelineSegments.length === 0" class="empty-audio-dropzone" @click="triggerFileInput">
-        <Loader2 v-if="isUploadingAudio" :size="28" class="drop-icon animate-spin" />
-        <FileAudio v-else :size="26" class="drop-icon" />
-        <span class="empty-title">
-          {{ isUploadingAudio ? 'Uploading & generating FFmpeg waveform peaks...' : 'Select or drop recitation audio to begin' }}
-        </span>
-        <span class="empty-formats">Supports MP3, WAV, M4A, FLAC, OGG, AAC, OPUS</span>
+      <!-- Uploading / Processing State -->
+      <div v-if="isUploadingAudio" class="empty-audio-dropzone">
+        <Loader2 :size="28" class="drop-icon animate-spin" />
+        <span class="empty-title">Uploading & generating FFmpeg waveform peaks...</span>
       </div>
 
       <!-- WaveSurfer Waveform Mount (Peaks Layer Only, Zero Memory Allocation) -->
@@ -83,14 +79,6 @@
             <div class="segment-badges-row">
               <span class="ayah-label-badge">{{ seg.label }}</span>
               <span v-if="seg.isRepetition" class="badge-repetition" title="تكرار مقطع صوتي">إعادة</span>
-              <span 
-                v-if="seg.hasIssues" 
-                class="badge-issue" 
-                :class="seg.issueSeverity || 'warning'" 
-                :title="seg.issueTooltip || 'ملاحظات تدقيق صوتية وتجويدية'"
-              >
-                ⚠️ {{ seg.issueBadgeLabel || 'ملاحظة' }}
-              </span>
             </div>
             <span v-if="seg.connectedUthmaniText" class="ayah-snippet-text">{{ seg.connectedUthmaniText }}</span>
 
@@ -308,65 +296,86 @@
         </div>
       </div>
 
-      <!-- Center: View Mode Switcher (Fixed in playback bar, zero floating overlap) -->
+      <!-- Center: View Mode Switcher + Close Mushaf Font Size Stepper -->
       <div class="control-bar-center" v-if="projectStore.activeSurah.value">
-        <div class="view-toggle-pill">
-          <button 
-            class="toggle-btn" 
-            :class="{ 'active': projectStore.viewMode.value === 'mushaf_page' }"
-            @click="projectStore.viewMode.value = 'mushaf_page'"
-            title="Medina Mushaf Sacred Page"
-          >
-            <BookOpen :size="12" />
-            <span>Mushaf</span>
-          </button>
+        <div class="view-and-font-cluster">
+          <div class="view-toggle-pill">
+            <button 
+              class="toggle-btn" 
+              :class="{ 'active': projectStore.viewMode.value === 'mushaf_page' }"
+              @click="projectStore.viewMode.value = 'mushaf_page'"
+              title="Medina Mushaf Sacred Page"
+            >
+              <BookOpen :size="12" />
+              <span class="view-label">Mushaf</span>
+            </button>
 
-          <button 
-            class="toggle-btn" 
-            :class="{ 'active': projectStore.viewMode.value === 'ayah_studio' }"
-            @click="projectStore.viewMode.value = 'ayah_studio'"
-            title="Verses Studio Cards"
-          >
-            <ListTree :size="12" />
-            <span>Verses</span>
-          </button>
+            <button 
+              class="toggle-btn" 
+              :class="{ 'active': projectStore.viewMode.value === 'ayah_studio' }"
+              @click="projectStore.viewMode.value = 'ayah_studio'"
+              title="Verses Studio Cards"
+            >
+              <ListTree :size="12" />
+              <span class="view-label">Verses</span>
+            </button>
 
-          <button 
-            class="toggle-btn" 
-            :class="{ 'active': projectStore.viewMode.value === 'phoneme_inspector' }"
-            @click="projectStore.viewMode.value = 'phoneme_inspector'"
-            title="Phoneme Atoms Inspector"
+            <button 
+              class="toggle-btn" 
+              :class="{ 'active': projectStore.viewMode.value === 'phoneme_inspector' }"
+              @click="projectStore.viewMode.value = 'phoneme_inspector'"
+              title="Phoneme Atoms Inspector"
+            >
+              <Layers :size="12" />
+              <span class="view-label">Phonemes</span>
+            </button>
+          </div>
+
+          <!-- Font Size Stepper: placed immediately next to the Mushaf toggle -->
+          <div 
+            class="font-stepper-group" 
+            v-if="projectStore.viewMode.value === 'mushaf_page' && projectStore.activeSurah.value" 
+            title="Adjust Quran Font Size"
           >
-            <Layers :size="12" />
-            <span>Phonemes</span>
-          </button>
+            <button 
+              class="stepper-btn" 
+              @click="projectStore.setMushafFontSize(projectStore.mushafFontSize.value - 0.15)"
+              title="Decrease Font Size"
+              :disabled="projectStore.mushafFontSize.value <= 1.3"
+            >
+              <span>A-</span>
+            </button>
+            <span class="stepper-val">{{ Math.round((projectStore.mushafFontSize.value / 1.95) * 100) }}%</span>
+            <button 
+              class="stepper-btn" 
+              @click="projectStore.setMushafFontSize(projectStore.mushafFontSize.value + 0.15)"
+              title="Increase Font Size"
+              :disabled="projectStore.mushafFontSize.value >= 3.2"
+            >
+              <span>A+</span>
+            </button>
+          </div>
         </div>
       </div>
 
-      <!-- Right: Font Stepper, Zoom & Speed -->
+      <!-- Right: Revise, Zoom & Speed -->
       <div class="control-bar-right">
-        <!-- Font Size Stepper (Mushaf Page Mode) -->
-        <div class="font-stepper-group" v-if="projectStore.viewMode.value === 'mushaf_page' && projectStore.activeSurah.value" title="Adjust Quran Font Size">
-          <button 
-            class="stepper-btn" 
-            @click="projectStore.setMushafFontSize(projectStore.mushafFontSize.value - 0.15)"
-            title="Decrease Font Size"
-            :disabled="projectStore.mushafFontSize.value <= 1.3"
-          >
-            <span>A-</span>
-          </button>
-          <span class="stepper-val">{{ Math.round((projectStore.mushafFontSize.value / 1.95) * 100) }}%</span>
-          <button 
-            class="stepper-btn" 
-            @click="projectStore.setMushafFontSize(projectStore.mushafFontSize.value + 0.15)"
-            title="Increase Font Size"
-            :disabled="projectStore.mushafFontSize.value >= 3.2"
-          >
-            <span>A+</span>
-          </button>
-        </div>
+        <!-- Revise Button -->
+        <button
+          class="bar-auditor-btn"
+          :class="{ 'active': projectStore.issuesDrawerOpen.value, 'has-issues': projectStore.issues.value.length > 0 }"
+          @click="projectStore.issuesDrawerOpen.value = !projectStore.issuesDrawerOpen.value"
+          title="Revise & Check Issues"
+        >
+          <ShieldAlert :size="13" v-if="projectStore.issues.value.length > 0" class="auditor-icon text-amber" />
+          <ShieldCheck :size="13" v-else class="auditor-icon text-emerald" />
+          <span class="bar-auditor-label">Revise</span>
+          <span v-if="projectStore.issues.value.length > 0" class="bar-auditor-badge">
+            {{ projectStore.issues.value.length }}
+          </span>
+        </button>
 
-        <div class="bar-divider" v-if="projectStore.viewMode.value === 'mushaf_page' && projectStore.activeSurah.value"></div>
+        <div class="bar-divider"></div>
 
         <div class="zoom-cluster">
           <input
@@ -383,11 +392,14 @@
 
         <div class="bar-divider"></div>
 
+        <!-- Clean Playback Speed Dropdown -->
         <select v-model="playbackRate" @change="changePlaybackRate" class="speed-select" title="Playback Speed">
+          <option :value="0.5">0.5×</option>
           <option :value="0.75">0.75×</option>
           <option :value="1.0">1.0×</option>
           <option :value="1.25">1.25×</option>
           <option :value="1.5">1.5×</option>
+          <option :value="2.0">2.0×</option>
         </select>
       </div>
     </div>
@@ -406,11 +418,12 @@ import {
   ChevronRight, 
   UploadCloud, 
   Repeat, 
-  FileAudio, 
   Loader2,
   BookOpen,
   ListTree,
-  Layers
+  Layers,
+  ShieldAlert,
+  ShieldCheck
 } from 'lucide-vue-next';
 import { usePlaybackTransport } from '../composables/usePlaybackTransport';
 import { useTimelineDrag, type SharedDivider } from '../composables/useTimelineDrag';
@@ -941,6 +954,10 @@ watch(() => projectStore.activeWordLocation.value, (loc) => {
     ws.setScroll(targetScroll);
     syncTrackScroll();
   }
+});
+
+defineExpose({
+  triggerFileInput,
 });
 </script>
 

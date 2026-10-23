@@ -79,4 +79,15 @@ describe('normalizeProjectSummary', () => {
     expect(summary.total_duration).toBe(0);
     expect(summary.primary_surah).toBeUndefined();
   });
+
+  it('sanitizes "." project names to fallback gracefully', () => {
+    const dotProj = {
+      project_name: '.',
+      file_name: 'My Recitation.qproj',
+      surahs: []
+    };
+
+    const summary = normalizeProjectSummary(dotProj);
+    expect(summary.project_name).toBeDefined();
+  });
 });

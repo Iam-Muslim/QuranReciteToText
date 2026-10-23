@@ -65,12 +65,18 @@ function asPromise<T>(req: IDBRequest<T>): Promise<T> {
 
 /** Stable vault key for a project — mirrors desktop `${name}.qproj`. */
 export function safeProjectFileName(name: string): string {
-  const trimmed = String(name || '').trim().replace(/[\\/:*?"<>|]+/g, ' ').slice(0, 80);
-  const base = trimmed || 'Browser Recitations';
-  return /\.qproj$/i.test(base) ? base : `${base}.qproj`;
+  const stripped = String(name || '')
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, ' ')
+    .trim()
+    .replace(/^\.+|\.+$/g, '')
+    .trim();
+  const base = stripped.replace(/\.qproj$/i, '').trim() || 'Recitation Project';
+  return `${base.slice(0, 80)}.qproj`;
 }
 
 function worstStatus(surahs: SurahItem[]): string {
+  if (!surahs || surahs.length === 0) return 'needs_review';
   const set = new Set(surahs.map(s => s.status));
   if (set.has('unaligned')) return 'unaligned';
   if (set.has('needs_review')) return 'needs_review';

@@ -142,26 +142,87 @@ fn list_projects(app_handle: AppHandle) -> Result<serde_json::Value, String> {
     let projects_dir = get_projects_dir(&app_handle)?;
     fs::create_dir_all(&projects_dir).map_err(|e| e.to_string())?;
 
-    let mut projects: Vec<serde_json::Value> = Vec::new();
+    let mut projects_with_time: Vec<(std::time::SystemTime, serde_json::Value)> = Vec::new();
+
     for entry in fs::read_dir(&projects_dir).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
-        let path = entry.path();
+        let mut path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+
+        // Auto-migrate extensionless legacy files (e.g. "qproj", "qproj (4)")
+        let is_qproj = path.extension().map(|e| e == "qproj").unwrap_or(false);
+        let is_part = path.extension().map(|e| e == "part").unwrap_or(false);
+        if !is_qproj && !is_part {
+            if let Ok(content) = fs::read_to_string(&path) {
+                if let Ok(mut data) = serde_json::from_str::<serde_json::Value>(&content) {
+                    if data.get("surahs").is_some() || data.get("app_version").is_some() || data.get("project_name").is_some() {
+                        let fname_stem = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                        let target_name = format!("{}.qproj", fname_stem);
+                        let target_path = projects_dir.join(&target_name);
+                        let final_path = if !target_path.exists() {
+                            let _ = fs::rename(&path, &target_path);
+                            target_path
+                        } else {
+                            path.clone()
+                        };
+
+                        if let Some(obj) = data.as_object_mut() {
+                            let clean_fname = final_path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                            obj.insert("file_name".to_string(), serde_json::json!(clean_fname.clone()));
+                            obj.insert("_file".to_string(), serde_json::json!(clean_fname.clone()));
+                            obj.insert("_path".to_string(), serde_json::json!(final_path.to_string_lossy().to_string()));
+                            let cur_name = obj.get("project_name").and_then(|v| v.as_str()).unwrap_or("");
+                            if cur_name == "." || cur_name.is_empty() {
+                                // Try to extract meaningful name from first surah
+                                let derived_name = obj.get("surahs")
+                                    .and_then(|s| s.as_array())
+                                    .and_then(|arr| arr.first())
+                                    .and_then(|s0| s0.get("surah_name_arabic").or_else(|| s0.get("surah_name_english")))
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or(&fname_stem);
+                                obj.insert("project_name".to_string(), serde_json::json!(derived_name));
+                            }
+                        }
+                        let _ = fs::write(&final_path, serde_json::to_string_pretty(&data).unwrap_or_default());
+                        path = final_path;
+                    }
+                }
+            }
+        }
+
         if path.extension().map(|e| e == "qproj").unwrap_or(false) {
             if let Ok(content) = fs::read_to_string(&path) {
                 if let Ok(mut data) = serde_json::from_str::<serde_json::Value>(&content) {
-                    // Inject filename for frontend reference
                     let fname = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                    let mtime = fs::metadata(&path).and_then(|m| m.modified()).unwrap_or(std::time::SystemTime::UNIX_EPOCH);
                     if let Some(obj) = data.as_object_mut() {
                         obj.insert("file_name".to_string(), serde_json::json!(fname.clone()));
                         obj.insert("_file".to_string(), serde_json::json!(fname.clone()));
                         obj.insert("_path".to_string(), serde_json::json!(path.to_string_lossy().to_string()));
+                        let pname = obj.get("project_name").and_then(|v| v.as_str()).unwrap_or("");
+                        if pname == "." || pname.is_empty() {
+                            let derived = obj.get("surahs")
+                                .and_then(|s| s.as_array())
+                                .and_then(|arr| arr.first())
+                                .and_then(|s0| s0.get("surah_name_arabic").or_else(|| s0.get("surah_name_english")))
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string())
+                                .unwrap_or_else(|| fname.trim_end_matches(".qproj").to_string());
+                            obj.insert("project_name".to_string(), serde_json::json!(derived));
+                        }
                     }
-                    projects.push(data);
+                    projects_with_time.push((mtime, data));
                 }
             }
         }
     }
+
     // Sort by modified time descending (most recent first)
+    projects_with_time.sort_by(|a, b| b.0.cmp(&a.0));
+    let projects: Vec<serde_json::Value> = projects_with_time.into_iter().map(|(_, p)| p).collect();
+
     Ok(serde_json::json!({ "projects": projects }))
 }
 
@@ -170,28 +231,27 @@ fn list_projects(app_handle: AppHandle) -> Result<serde_json::Value, String> {
 fn load_project(app_handle: AppHandle, file: String) -> Result<serde_json::Value, String> {
     let projects_dir = get_projects_dir(&app_handle)?;
     let safe_name = sanitize_filename(&file);
-    let path = projects_dir.join(&safe_name);
+    let mut path = projects_dir.join(&safe_name);
     if !path.exists() {
-        // Also try exact file name in case sanitize differed
         let direct_path = projects_dir.join(&file);
         if direct_path.exists() {
-            let content = fs::read_to_string(&direct_path).map_err(|e| e.to_string())?;
-            let mut data: serde_json::Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
-            if let Some(obj) = data.as_object_mut() {
-                obj.entry("file_name".to_string()).or_insert_with(|| serde_json::json!(file.clone()));
-                obj.entry("_file".to_string()).or_insert_with(|| serde_json::json!(file.clone()));
-                obj.entry("_path".to_string()).or_insert_with(|| serde_json::json!(direct_path.to_string_lossy().to_string()));
+            path = direct_path;
+        } else {
+            let with_ext = projects_dir.join(format!("{}.qproj", file.trim_end_matches(".qproj")));
+            if with_ext.exists() {
+                path = with_ext;
+            } else {
+                return Err(format!("Project file not found: {}", file));
             }
-            return Ok(data);
         }
-        return Err(format!("Project file not found: {}", file));
     }
     let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let mut data: serde_json::Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+    let fname = path.file_name().unwrap_or_default().to_string_lossy().to_string();
     if let Some(obj) = data.as_object_mut() {
-        obj.entry("file_name".to_string()).or_insert_with(|| serde_json::json!(safe_name.clone()));
-        obj.entry("_file".to_string()).or_insert_with(|| serde_json::json!(safe_name.clone()));
-        obj.entry("_path".to_string()).or_insert_with(|| serde_json::json!(path.to_string_lossy().to_string()));
+        obj.insert("file_name".to_string(), serde_json::json!(fname.clone()));
+        obj.insert("_file".to_string(), serde_json::json!(fname.clone()));
+        obj.insert("_path".to_string(), serde_json::json!(path.to_string_lossy().to_string()));
     }
     Ok(data)
 }
@@ -237,15 +297,22 @@ fn create_project(app_handle: AppHandle, request: CreateProjectRequest) -> Resul
     let projects_dir = get_projects_dir(&app_handle)?;
     fs::create_dir_all(&projects_dir).map_err(|e| e.to_string())?;
 
-    let safe_name = sanitize_filename(&format!("{}.qproj", request.name));
+    let safe_name = sanitize_filename(&request.name);
     let dest = unique_path(&projects_dir, &safe_name);
 
     let fname = dest.file_name().unwrap_or_default().to_string_lossy().to_string();
+    let clean_project_name = if request.name.trim() == "." || request.name.trim().is_empty() {
+        fname.trim_end_matches(".qproj").to_string()
+    } else {
+        request.name.trim().to_string()
+    };
+
     let mut data = request.data;
     if let Some(obj) = data.as_object_mut() {
         obj.insert("file_name".to_string(), serde_json::json!(fname.clone()));
         obj.insert("_file".to_string(), serde_json::json!(fname.clone()));
         obj.insert("_path".to_string(), serde_json::json!(dest.to_string_lossy().to_string()));
+        obj.insert("project_name".to_string(), serde_json::json!(clean_project_name));
     }
 
     let json_str = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
@@ -285,13 +352,34 @@ struct DuplicateProjectRequest {
 #[tauri::command]
 fn duplicate_project(app_handle: AppHandle, request: DuplicateProjectRequest) -> Result<serde_json::Value, String> {
     let projects_dir = get_projects_dir(&app_handle)?;
-    let src = projects_dir.join(&request.file);
+    let mut src = projects_dir.join(sanitize_filename(&request.file));
+    if !src.exists() {
+        src = projects_dir.join(&request.file);
+    }
     if !src.exists() {
         return Err(format!("Project not found: {}", request.file));
     }
+
     let stem = src.file_stem().unwrap_or_default().to_string_lossy().to_string();
     let copy_name = format!("{} Copy.qproj", stem);
     let dest = unique_path(&projects_dir, &copy_name);
+    let dest_fname = dest.file_name().unwrap_or_default().to_string_lossy().to_string();
+    let dest_stem = dest_fname.trim_end_matches(".qproj").to_string();
+
+    if let Ok(content) = fs::read_to_string(&src) {
+        if let Ok(mut data) = serde_json::from_str::<serde_json::Value>(&content) {
+            if let Some(obj) = data.as_object_mut() {
+                obj.insert("file_name".to_string(), serde_json::json!(dest_fname.clone()));
+                obj.insert("_file".to_string(), serde_json::json!(dest_fname.clone()));
+                obj.insert("_path".to_string(), serde_json::json!(dest.to_string_lossy().to_string()));
+                obj.insert("project_name".to_string(), serde_json::json!(dest_stem));
+            }
+            let json_str = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
+            fs::write(&dest, json_str).map_err(|e| e.to_string())?;
+            return Ok(serde_json::json!({ "file": dest_fname }));
+        }
+    }
+
     fs::copy(&src, &dest).map_err(|e| e.to_string())?;
     let fname = dest.file_name().unwrap_or_default().to_string_lossy().to_string();
     Ok(serde_json::json!({ "file": fname }))
@@ -364,8 +452,26 @@ struct RevealRequest {
 
 /// Opens a path in the OS file explorer.
 #[tauri::command]
-fn reveal_in_explorer(_app_handle: AppHandle, request: RevealRequest) -> Result<(), String> {
-    let path = PathBuf::from(&request.path);
+fn reveal_in_explorer(app_handle: AppHandle, request: RevealRequest) -> Result<(), String> {
+    let mut path = PathBuf::from(&request.path);
+    if !path.exists() {
+        if let Ok(projects_dir) = get_projects_dir(&app_handle) {
+            if request.path == "projects" || request.path.is_empty() {
+                path = projects_dir;
+            } else {
+                let candidate = projects_dir.join(&request.path);
+                if candidate.exists() {
+                    path = candidate;
+                } else {
+                    let with_ext = projects_dir.join(format!("{}.qproj", request.path.trim_end_matches(".qproj")));
+                    if with_ext.exists() {
+                        path = with_ext;
+                    }
+                }
+            }
+        }
+    }
+
     #[cfg(target_os = "windows")]
     {
         use std::process::Command;
@@ -394,21 +500,51 @@ fn reveal_in_explorer(_app_handle: AppHandle, request: RevealRequest) -> Result<
     Ok(())
 }
 
+#[derive(Debug, Deserialize)]
+struct SaveFilePathRequest {
+    path: String,
+    content: String,
+}
+
+/// Writes arbitrary text content directly to a user-chosen destination file path.
+#[tauri::command]
+fn save_file_to_path(request: SaveFilePathRequest) -> Result<(), String> {
+    let p = PathBuf::from(&request.path);
+    if let Some(parent) = p.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    fs::write(&p, request.content).map_err(|e| format!("Failed to write file to path: {}", e))
+}
+
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
 fn sanitize_filename(name: &str) -> String {
-    let safe: String = name
+    let raw = name.trim();
+    let stem = if raw.to_lowercase().ends_with(".qproj") {
+        &raw[..raw.len() - 6]
+    } else {
+        raw
+    };
+
+    let safe_stem: String = stem
         .chars()
         .map(|c| {
-            if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
+            if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\0') {
                 '_'
             } else {
                 c
             }
         })
         .collect();
-    let trimmed = safe.trim().trim_start_matches('.').to_string();
-    if trimmed.is_empty() { "project.qproj".to_string() } else { trimmed }
+
+    let trimmed = safe_stem.trim().trim_matches('.').trim().to_string();
+    let final_stem = if trimmed.is_empty() {
+        "Recitation Project".to_string()
+    } else {
+        trimmed
+    };
+
+    format!("{}.qproj", final_stem)
 }
 
 fn unique_path(dir: &Path, name: &str) -> PathBuf {
@@ -419,11 +555,8 @@ fn unique_path(dir: &Path, name: &str) -> PathBuf {
     let stem = Path::new(name)
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_default();
-    let ext = Path::new(name)
-        .extension()
-        .map(|e| format!(".{}", e.to_string_lossy()))
-        .unwrap_or_default();
+        .unwrap_or_else(|| "Recitation Project".to_string());
+    let ext = ".qproj";
     for i in 2..100 {
         let candidate = dir.join(format!("{} ({}){}", stem, i, ext));
         if !candidate.exists() {
@@ -484,6 +617,7 @@ pub fn run() {
             // System
             reveal_in_explorer,
             waveform::open_explorer_with_file_selected,
+            save_file_to_path,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Quran Recite2Text application")

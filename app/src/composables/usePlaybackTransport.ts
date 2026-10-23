@@ -336,10 +336,24 @@ export function usePlaybackTransport(
     syncTrackScroll();
   }
 
+  const SPEED_PRESETS = [0.5, 0.65, 0.75, 0.85, 1.0, 1.15, 1.25, 1.5, 1.75, 2.0];
+
   function changePlaybackRate() {
     if (!wavesurfer) return;
     wavesurfer.setPlaybackRate(playbackRate.value);
     projectStore.playbackRate.value = playbackRate.value;
+  }
+
+  function stepPlaybackRate(delta: number) {
+    const current = playbackRate.value;
+    let idx = SPEED_PRESETS.findIndex((s) => Math.abs(s - current) < 0.02);
+    if (idx === -1) {
+      idx = SPEED_PRESETS.findIndex((s) => s >= current);
+      if (idx === -1) idx = SPEED_PRESETS.length - 1;
+    }
+    const nextIdx = Math.max(0, Math.min(SPEED_PRESETS.length - 1, idx + delta));
+    playbackRate.value = SPEED_PRESETS[nextIdx];
+    changePlaybackRate();
   }
 
   function auditionSelectedWord(word: AlignedWord | undefined | null) {
@@ -387,6 +401,8 @@ export function usePlaybackTransport(
     adjustZoom,
     updateZoom,
     changePlaybackRate,
+    stepPlaybackRate,
+    SPEED_PRESETS,
     auditionSelectedWord,
     syncTrackScroll,
     onTrackViewportScroll,

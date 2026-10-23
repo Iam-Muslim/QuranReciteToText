@@ -77,8 +77,8 @@
       <!-- Empty State -->
       <div v-if="projectStore.project.surahs.length === 0" class="empty-sidebar" @click="$emit('add-surah')">
         <UploadCloud :size="20" class="empty-icon" />
-        <span class="empty-prompt">Add Recitation Audio</span>
-        <span class="empty-sub">Automatic alignment & word timestamps</span>
+        <span class="empty-prompt">{{ isTauri ? 'Add Recitation Audio' : 'Import Recitation Timings' }}</span>
+        <span class="empty-sub">{{ isTauri ? 'Automatic alignment & word timestamps' : 'Import JSON timings and audio files' }}</span>
       </div>
     </div>
   </aside>
@@ -87,7 +87,10 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue';
 import { projectStore } from '../services/projectStore';
+import { isTauriEnvironment } from '../services/api';
 import { Plus, Trash2, UploadCloud, Search, CircleCheck, Circle, Download } from 'lucide-vue-next';
+
+const isTauri = isTauriEnvironment();
 
 defineEmits<{
   (e: 'add-surah'): void;

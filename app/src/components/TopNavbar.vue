@@ -42,9 +42,9 @@
         <PanelLeft :size="14" />
       </button>
 
-      <!-- Subtle Update Badge -->
+      <!-- Subtle Update Badge (Desktop Only) -->
       <button
-        v-if="versionService.hasUpdate.value"
+        v-if="isTauri && versionService.hasUpdate.value"
         class="update-nav-btn"
         @click="$emit('open-update-modal')"
         title="Update Available"
@@ -56,55 +56,53 @@
 
     <!-- Center: Ayah (Quran font, always visible, window drag area) -->
     <div class="nav-center-ayah" dir="rtl" lang="ar" aria-hidden="true" data-tauri-drag-region>
-      و ما اسالكم عليه من اجر ان اجري الا على رب العالمين
+      الحمد لله رب العالمين
     </div>
 
     <!-- Right: Tool Cluster & Window Controls -->
     <div class="right-actions">
-      <!-- History Group -->
-      <div class="btn-group">
+      <!-- Edit / History Group with clear labels -->
+      <div class="nav-btn-group" role="group" aria-label="History actions">
         <button
-          class="btn-icon btn-group-item"
+          class="nav-tool-btn"
           @click="projectStore.undo()"
           :disabled="!projectStore.canUndo.value"
           title="Undo (Ctrl+Z)"
+          aria-label="Undo last change"
         >
-          <Undo2 :size="14" />
+          <Undo2 :size="13" />
+          <span class="nav-btn-label">Undo</span>
         </button>
         <button
-          class="btn-icon btn-group-item"
+          class="nav-tool-btn"
           @click="projectStore.redo()"
           :disabled="!projectStore.canRedo.value"
           title="Redo (Ctrl+Y)"
+          aria-label="Redo last change"
         >
-          <Redo2 :size="14" />
+          <Redo2 :size="13" />
+          <span class="nav-btn-label">Redo</span>
         </button>
       </div>
 
-      <!-- Minimalist Save Status Indicator -->
+      <!-- Clear, Intuitive Save Button & Status -->
       <button
-        class="save-chip"
-        :class="projectStore.saveStatus.value"
+        class="nav-save-btn"
+        :class="[`status-${projectStore.saveStatus.value}`, { 'is-saving': projectStore.isSaving.value }]"
         @click="saveProject"
         :disabled="projectStore.isSaving.value"
         :title="autosaveTooltip"
       >
         <span v-if="projectStore.saveStatus.value === 'saving'" class="saving-spinner"></span>
-        <span v-else-if="projectStore.saveStatus.value === 'unsaved'" class="unsaved-dot"></span>
-        <span v-else-if="projectStore.saveStatus.value === 'error'" class="error-dot"></span>
-        <Check v-else :size="12" class="saved-icon" />
-      </button>
+        <Save v-else-if="projectStore.saveStatus.value === 'unsaved'" :size="13" class="save-icon unsaved" />
+        <AlertCircle v-else-if="projectStore.saveStatus.value === 'error'" :size="13" class="save-icon error" />
+        <Check v-else :size="13" class="save-icon saved" />
 
-      <!-- Confidence Auditor Drawer Toggle -->
-      <button
-        class="btn-icon auditor-btn"
-        :class="{ 'active': projectStore.issuesDrawerOpen.value }"
-        @click="projectStore.issuesDrawerOpen.value = !projectStore.issuesDrawerOpen.value"
-        title="Confidence Auditor"
-      >
-        <AlertCircle :size="14" />
-        <span v-if="projectStore.issues.value.length > 0" class="issue-pill">
-          {{ projectStore.issues.value.length }}
+        <span class="save-btn-text">
+          <template v-if="projectStore.saveStatus.value === 'saving'">Saving…</template>
+          <template v-else-if="projectStore.saveStatus.value === 'unsaved'">Save</template>
+          <template v-else-if="projectStore.saveStatus.value === 'error'">Retry</template>
+          <template v-else>Saved</template>
         </span>
       </button>
 
@@ -118,8 +116,6 @@
       >
         <Lightbulb :size="15" />
       </button>
-
-      <!-- Export moved to the Recitations sidebar -->
 
       <!-- Window Controls (Desktop Only) -->
       <template v-if="isTauri">
@@ -163,6 +159,7 @@ import {
   Redo2,
   AlertCircle,
   Check,
+  Save,
   Minus,
   Square,
   Copy,
@@ -410,63 +407,112 @@ function requestClose() {
 .right-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
-.btn-group {
-  display: flex;
-  align-items: center;
-  background: var(--bg-base);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  padding: 1px;
-}
-.btn-group-item {
-  border-radius: var(--radius-xs);
-  padding: 4px;
-}
-
-/* Minimalist Save Icon Button */
-.save-chip {
-  width: 28px;
-  height: 28px;
+/* History / Undo-Redo Tool Group */
+.nav-btn-group {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
+  padding: 2px;
+  gap: 2px;
+}
+
+.nav-tool-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: var(--radius-xs);
+  border: none;
   background: transparent;
-  border: 1px solid transparent;
-  color: var(--text-muted);
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-weight: 500;
   cursor: pointer;
   transition: all var(--dur-fast) var(--ease-out);
 }
-.save-chip:hover:not(:disabled) {
+.nav-tool-btn:hover:not(:disabled) {
   background: var(--bg-surface-hover);
-  border-color: var(--border-subtle);
+  color: var(--text-main);
 }
-.save-chip:disabled {
-  opacity: 0.6;
+.nav-tool-btn:disabled {
+  opacity: 0.35;
   cursor: default;
 }
-.save-chip.saved .saved-icon {
+
+/* Clear, Self-Explanatory Save Button */
+.nav-save-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface-elevated);
+  color: var(--text-secondary);
+  transition: all var(--dur-fast) var(--ease-out);
+  box-shadow: var(--shadow-e1);
+}
+.nav-save-btn:hover:not(:disabled) {
+  background: var(--bg-surface-hover);
+  border-color: var(--border-medium);
+  transform: translateY(-1px);
+}
+.nav-save-btn:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+
+.nav-save-btn.status-saved {
+  color: var(--emerald-primary);
+  background: var(--emerald-bg);
+  border-color: var(--emerald-border);
+}
+.nav-save-btn.status-saved:hover:not(:disabled) {
+  border-color: var(--emerald-primary);
+}
+
+.nav-save-btn.status-unsaved {
+  color: var(--amber-primary);
+  background: var(--amber-bg);
+  border-color: var(--amber-border);
+  box-shadow: 0 0 8px rgba(217, 119, 6, 0.18);
+}
+.nav-save-btn.status-unsaved:hover:not(:disabled) {
+  border-color: var(--amber-primary);
+}
+
+.nav-save-btn.status-error {
+  color: var(--ruby-primary);
+  background: var(--ruby-bg);
+  border-color: var(--ruby-border);
+}
+
+.save-icon {
+  flex-shrink: 0;
+}
+.save-icon.saved {
   color: var(--emerald-primary);
 }
-.save-chip.unsaved {
-  border-color: var(--amber-border);
-  background: var(--amber-bg);
+.save-icon.unsaved {
+  color: var(--amber-primary);
 }
-.unsaved-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--amber-primary);
+.save-icon.error {
+  color: var(--ruby-primary);
 }
-.error-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--ruby-primary);
+
+.save-btn-text {
+  line-height: 1;
 }
+
 .saving-spinner {
   width: 12px;
   height: 12px;
@@ -474,6 +520,7 @@ function requestClose() {
   border: 2px solid var(--accent-subtle);
   border-top-color: var(--accent-primary);
   animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
 }
 
 @keyframes spin {
@@ -486,13 +533,13 @@ function requestClose() {
   left: 50%;
   transform: translateX(-50%);
   font-family: var(--font-quran);
-  font-size: 14px;
+  font-size: 14.5px;
   line-height: 1;
   color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 46%;
+  max-width: 44%;
   pointer-events: auto;
   -webkit-app-region: drag;
 }
@@ -500,6 +547,22 @@ function requestClose() {
 @media (max-width: 980px) {
   .nav-center-ayah {
     display: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .top-navbar {
+    padding: 0 8px;
+    gap: 6px;
+  }
+  .nav-btn-label {
+    display: none;
+  }
+  .tab-btn {
+    padding: 0 8px;
+  }
+  .nav-save-btn {
+    padding: 4px 8px;
   }
 }
 
@@ -512,30 +575,6 @@ function requestClose() {
   filter: drop-shadow(0 0 5px rgba(var(--gold-rgb), 0.55));
 }
 
-.auditor-btn {
-  position: relative;
-}
-.auditor-btn.active {
-  background: var(--bg-surface-elevated);
-  color: var(--text-main);
-  border-color: var(--border-medium);
-}
-.issue-pill {
-  position: absolute;
-  top: 1px;
-  right: 1px;
-  background: var(--ruby-primary);
-  color: #ffffff;
-  font-size: 9px;
-  font-weight: 700;
-  min-width: 13px;
-  height: 13px;
-  padding: 0 3px;
-  border-radius: var(--radius-pill);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
 
 .window-controls-divider {
   width: 1px;

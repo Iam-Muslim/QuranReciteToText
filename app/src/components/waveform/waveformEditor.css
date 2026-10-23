@@ -39,6 +39,12 @@
   justify-content: center;
 }
 
+.view-and-font-cluster {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .view-toggle-pill {
   display: flex;
   align-items: center;
@@ -593,24 +599,24 @@ html[data-theme='light'] .badge-issue.critical {
   background: var(--accent-subtle) !important;
 }
 
-/* Light Mode Word Highlighting */
+/* Light Mode Word Highlighting — soothing warm illumination */
 html[data-theme='light'] .word-karaoke-active {
-  background: #dfe5f4 !important;
-  border-color: var(--accent-primary) !important;
+  background: rgba(217, 119, 6, 0.14) !important;
+  border-color: #d97706 !important;
 }
 
 html[data-theme='light'] .word-karaoke-active .word-uthmani-text {
-  color: #181a1f !important;
+  color: #78350f !important;
   font-weight: 600;
 }
 
 html[data-theme='light'] .word-selected {
   border-color: var(--accent-primary) !important;
-  background: #eaedf6 !important;
+  background: rgba(37, 99, 235, 0.10) !important;
 }
 
 html[data-theme='light'] .word-selected .word-uthmani-text {
-  color: #181a1f !important;
+  color: #1e3a8a !important;
   font-weight: 600;
 }
 
@@ -891,44 +897,95 @@ html[data-theme='light'] .word-selected .word-uthmani-text {
   animation: fade-in var(--dur-fast) var(--ease-out) both;
 }
 
-/* Light Theme High-Contrast Overrides */
+/* Auditor Tool Button in Timeline Control Bar */
+.bar-auditor-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface-elevated);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+.bar-auditor-btn:hover {
+  background: var(--bg-surface-hover);
+  color: var(--text-main);
+  border-color: var(--border-medium);
+}
+.bar-auditor-btn.active {
+  background: var(--bg-input);
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+}
+.bar-auditor-btn.has-issues {
+  border-color: var(--amber-border);
+}
+.bar-auditor-badge {
+  background: var(--ruby-primary);
+  color: #ffffff;
+  font-size: 9px;
+  font-weight: 700;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: var(--radius-pill);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+.auditor-icon.text-amber {
+  color: var(--amber-primary);
+}
+.auditor-icon.text-emerald {
+  color: var(--emerald-primary);
+}
+
+/* Light Theme Eye-Soothing Segment Styling — Zero Glare, Soft Slate & Warm Amber */
 html[data-theme='light'] .timeline-ayah-block {
-  background: rgba(2, 132, 199, 0.08);
-  border-color: rgba(2, 132, 199, 0.30);
+  background: #ffffff;
+  border-color: #cbd5e1;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
 }
 html[data-theme='light'] .timeline-ayah-block:hover {
-  background: rgba(2, 132, 199, 0.16);
-  border-color: rgba(2, 132, 199, 0.55);
+  background: #f8fafc;
+  border-color: #94a3b8;
 }
 html[data-theme='light'] .timeline-ayah-block.ayah-active {
-  background: #e6edf9;
-  border-color: var(--sky-primary);
+  background: rgba(217, 119, 6, 0.09);
+  border-color: #d97706;
+}
+html[data-theme='light'] .timeline-ayah-block.ayah-active .ayah-label-badge {
+  color: #92400e;
+  background: rgba(217, 119, 6, 0.15);
 }
 html[data-theme='light'] .timeline-ayah-block.ayah-selected {
-  background: #f1e9fb;
-  border-color: var(--qc-purple);
+  background: rgba(37, 99, 235, 0.07);
+  border-color: #2563eb;
 }
 html[data-theme='light'] .timeline-ayah-block.ayah-selected .ayah-label-badge {
-  color: var(--qc-purple);
+  color: #1e40af;
+  background: rgba(37, 99, 235, 0.12);
 }
 html[data-theme='light'] .ayah-snippet-text {
-  color: #334155;
-  opacity: 0.95;
+  color: #1e293b;
+  opacity: 0.92;
 }
 html[data-theme='light'] .badge-repetition {
-  background: #f3e8ff;
-  border-color: #d8b4fe;
-  color: var(--qc-purple);
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+  color: #475569;
 }
-html[data-theme='light'] .badge-issue.warning {
-  background: #fef3c7;
-  border-color: #fcd34d;
-  color: #b45309;
-}
-html[data-theme='light'] .badge-issue.critical {
-  background: #fee2e2;
-  border-color: var(--ruby-primary);
-  color: #b91c1c;
+html[data-theme='light'] .ayah-label-badge {
+  background: #f1f5f9;
+  border-color: #e2e8f0;
+  color: #475569;
 }
 html[data-theme='light'] .boundary-time-tooltip {
   background: #ffffff;
@@ -939,4 +996,62 @@ html[data-theme='light'] .divider-time-tooltip {
   background: #ffffff;
   color: #0369a1;
   border-color: #0284c7;
+}
+
+/* Mobile & Touch Viewport Rules — Anti-Bloat, High-Density Fluid Bar */
+@media (max-width: 768px) {
+  .timeline-control-bar {
+    height: 36px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    padding: 3px 8px;
+    gap: 6px;
+  }
+  .timeline-control-bar::-webkit-scrollbar {
+    display: none;
+  }
+  .control-bar-left,
+  .control-bar-center,
+  .control-bar-right {
+    flex-shrink: 0;
+    gap: 4px;
+  }
+  .zoom-cluster,
+  .bar-divider:has(+ .zoom-cluster),
+  .zoom-cluster + .bar-divider {
+    display: none !important;
+  }
+  .bar-auditor-label {
+    display: none;
+  }
+  .bar-auditor-btn {
+    padding: 3px 7px;
+    height: 26px;
+  }
+  .view-label {
+    display: none;
+  }
+  .toggle-btn {
+    padding: 4px 8px;
+  }
+  .track-viewport {
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-x pan-y;
+  }
+}
+
+@media (max-width: 480px) {
+  .total-time,
+  .time-sep {
+    display: none;
+  }
+  .time-readout {
+    font-size: 10px;
+    padding: 0 2px;
+  }
+  .stepper-val {
+    min-width: 24px;
+    font-size: 9px;
+  }
 }

@@ -18,12 +18,13 @@
               <AudioWaveform :size="19" />
             </div>
             <div class="brand-text">
-              <h2 id="alignment-dialog-title">Add Recitation</h2>
+              <h2 id="alignment-dialog-title">{{ isTauri ? 'Add Recitation' : 'Import Recitation Timings' }}</h2>
             </div>
           </div>
 
           <div class="header-controls">
-            <div v-if="!isRunning && !isComplete" class="mode-switch" role="tablist" aria-label="Input mode">
+            <!-- Mode switch only on Desktop Tauri where Alignment speech engine is available -->
+            <div v-if="isTauri && !isRunning && !isComplete" class="mode-switch" role="tablist" aria-label="Input mode">
               <button
                 type="button"
                 role="tab"
@@ -67,8 +68,8 @@
 
         <!-- Body -->
         <div class="align-body">
-          <!-- Session configuration -->
-          <div v-if="!isRunning && !isComplete" class="settings-row">
+          <!-- Session configuration (Desktop Speech Engine only) -->
+          <div v-if="isTauri && !isRunning && !isComplete" class="settings-row">
             <label class="setting-field">
               <span class="setting-label">Riwayah</span>
               <div class="select-shell">
@@ -141,8 +142,8 @@
             </div>
           </div>
 
-          <!-- Engine missing: calm notice, Import Timing still works -->
-          <div v-if="missingEngineBanner" class="engine-note">
+          <!-- Engine missing: calm notice, only on Desktop Tauri -->
+          <div v-if="isTauri && missingEngineBanner" class="engine-note">
             <TriangleAlert :size="14" />
             <p>
               Alignment needs the local engine (Python + models) and it is not installed yet.
@@ -221,8 +222,8 @@
             </div>
           </div>
 
-          <!-- Import Timing: Individual / Batch folder -->
-          <div v-if="activeMode === 'timings' && !isRunning && !isComplete" class="pane-option-bar">
+          <!-- Import Timing: Individual / Batch folder (Batch only on Desktop) -->
+          <div v-if="isTauri && activeMode === 'timings' && !isRunning && !isComplete" class="pane-option-bar">
             <div class="opt-tabs" role="tablist" aria-label="Import format">
               <button
                 type="button"
@@ -714,9 +715,10 @@ import {
   Save
 } from 'lucide-vue-next';
 
+const isTauri = isTauriEnvironment();
 const visible = ref(false);
 const isMinimized = ref(false);
-const activeMode = ref<'align' | 'timings'>('align');
+const activeMode = ref<'align' | 'timings'>(isTauri ? 'align' : 'timings');
 const alignInput = ref<'files' | 'dir'>('files');
 const timingInput = ref<'single' | 'batch'>('single');
 const isDragging = ref(false);
@@ -868,9 +870,12 @@ function open() {
   filesQueue.value = [];
   timingPairs.value = [];
   showFormatHelp.value = false;
+  if (!isTauri) {
+    activeMode.value = 'timings';
+  }
 
   engineMissing.value = false;
-  if (isTauriEnvironment()) {
+  if (isTauri) {
     isEngineInstalled()
       .then((ok) => { engineMissing.value = !ok; })
       .catch(() => {});

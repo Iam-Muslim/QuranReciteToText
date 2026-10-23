@@ -92,6 +92,11 @@ export async function duplicateProject(file: string): Promise<{ file: string }> 
   return invoke('duplicate_project', { request: { file } });
 }
 
+export async function saveFileToPath(path: string, content: string): Promise<void> {
+  const invoke = await getInvoke();
+  await invoke('save_file_to_path', { request: { path, content } });
+}
+
 // ── Audio / Media ─────────────────────────────────────────────────────────────
 
 export async function scanAudioDir(dir_path: string): Promise<any> {
