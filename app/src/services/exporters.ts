@@ -67,42 +67,98 @@ export function preserveRawWordBoundaries<T extends { start: number; end: number
   }));
 }
 
+function extractWordIndex(w: any, fallbackIdx: number): number {
+  if (typeof w.w === 'number' && w.w > 0) return w.w;
+  if (typeof w.word_index === 'number' && w.word_index > 0) return w.word_index;
+  if (typeof w.location === 'string') {
+    const parts = w.location.trim().split(':');
+    if (parts.length >= 3) {
+      const parsed = parseInt(parts[2], 10);
+      if (!isNaN(parsed) && parsed > 0) return parsed;
+    }
+  }
+  if (typeof w.ref === 'string') {
+    const parts = w.ref.trim().split(':');
+    if (parts.length >= 3) {
+      const parsed = parseInt(parts[2], 10);
+      if (!isNaN(parsed) && parsed > 0) return parsed;
+    }
+  }
+  return fallbackIdx + 1;
+}
+
+function cleanWordItem(w: any, fallbackIdx: number) {
+  const text = w.word || w.text || w.text_arabic || '';
+  const wStart = typeof w.start === 'number' ? w.start : (typeof w.start_ms === 'number' ? w.start_ms / 1000 : 0);
+  const wEnd = typeof w.end === 'number' ? w.end : (typeof w.end_ms === 'number' ? w.end_ms / 1000 : 0);
+  return {
+    w: extractWordIndex(w, fallbackIdx),
+    text,
+    start: Number(wStart.toFixed(3)),
+    end: Number(wEnd.toFixed(3)),
+    ...(w.is_repetition ? { is_repetition: true } : {}),
+    ...(typeof w.score === 'number' ? { score: Number(w.score.toFixed(3)) } : {}),
+    ...(Array.isArray(w.phonemes) && w.phonemes.length > 0 ? { phonemes: w.phonemes } : {}),
+  };
+}
+
 /**
- * Builds canonical Ayahs hierarchy ensuring edited word boundaries are 100% synchronized
- * into segment and ayah boundaries.
+ * Builds canonical clean Ayahs hierarchy:
+ * Hierarchy: Surah -> Ayah -> Word (with optional Phrases for multi-take / breath-group repeats)
+ * Preserves canonical mushaf word indices, phrase/subsegment bounds, and repetition flags.
  */
-function buildSynchronizedAyahs(surah: SurahItem) {
-  return surah.ayahs.map(a => {
-    const segments = a.segments.map(s => {
-      const segStart = s.words.length > 0 ? s.words[0].start : s.start;
-      const segEnd = s.words.length > 0 ? s.words[s.words.length - 1].end : s.end;
+export function buildCleanAyahs(surah: SurahItem) {
+  return (surah.ayahs || []).map((a) => {
+    const hasSegments = Array.isArray(a.segments) && a.segments.length > 0;
+    const segmentsList = hasSegments ? a.segments : [];
+
+    const cleanPhrases = segmentsList.map((seg, sIdx) => {
+      const segWords = seg.words || [];
+      const pStart = segWords.length > 0 && typeof segWords[0].start === 'number' ? segWords[0].start : (seg.start ?? 0);
+      const pEnd = segWords.length > 0 && typeof segWords[segWords.length - 1].end === 'number' ? segWords[segWords.length - 1].end : (seg.end ?? 0);
       return {
-        segment: s.segment,
-        start: Number(segStart.toFixed(3)),
-        end: Number(segEnd.toFixed(3)),
-        transcribed_text: s.words.map(w => w.word).join(' '),
-        words: s.words.map(w => ({
-          word: w.word,
-          location: w.location,
-          start: Number(w.start.toFixed(3)),
-          end: Number(w.end.toFixed(3)),
-          score: Number((w.score ?? 1).toFixed(3)),
-          phonemes: w.phonemes || [],
-          ...(w.is_edited ? { is_edited: true } : {})
-        }))
+        phrase: seg.segment || sIdx + 1,
+        start: Number(pStart.toFixed(3)),
+        end: Number(pEnd.toFixed(3)),
+        ...(seg.is_repetition ? { is_repetition: true } : {}),
+        ...(seg.words_range ? { words_range: seg.words_range } : {}),
       };
     });
 
-    const ayahStart = segments.length > 0 ? segments[0].start : a.start;
-    const ayahEnd = segments.length > 0 ? segments[segments.length - 1].end : a.end;
+    let wordsList: any[] = [];
+    if (hasSegments) {
+      wordsList = segmentsList.flatMap((s) => s.words || []);
+    } else if (Array.isArray((a as any).words)) {
+      wordsList = (a as any).words;
+    }
 
-    return {
-      ayah: a.ayah,
+    const cleanWords = wordsList.map((w: any, idx: number) => cleanWordItem(w, idx));
+
+    const ayahStart = cleanWords.length > 0 ? cleanWords[0].start : (a.start ?? 0);
+    const ayahEnd = cleanWords.length > 0 ? cleanWords[cleanWords.length - 1].end : (a.end ?? 0);
+
+    const isAyahRep = !!(
+      a.is_repetition || 
+      (cleanPhrases.length > 0 && cleanPhrases.every(p => p.is_repetition))
+    );
+
+    const hasMultiPhrasesOrRepeats = cleanPhrases.length > 1 || cleanPhrases.some(p => p.is_repetition);
+
+    const cleanAyah: any = {
+      ayah: a.ayah || (a as any).ayah_number || 1,
       start: Number(ayahStart.toFixed(3)),
       end: Number(ayahEnd.toFixed(3)),
-      matched_ref: a.matched_ref || `${surah.surah_number}:${a.ayah}:1`,
-      segments,
+      ...(isAyahRep ? { is_repetition: true } : {}),
+      ...(Array.isArray(a.repeated_ranges) && a.repeated_ranges.length > 0 ? { repeated_ranges: a.repeated_ranges } : {}),
+      ...(Array.isArray(a.repeated_text) && a.repeated_text.length > 0 ? { repeated_text: a.repeated_text } : {}),
     };
+
+    if (hasMultiPhrasesOrRepeats) {
+      cleanAyah.phrases = cleanPhrases;
+    }
+    cleanAyah.words = cleanWords;
+
+    return cleanAyah;
   });
 }
 
@@ -110,21 +166,18 @@ function buildSynchronizedAyahs(surah: SurahItem) {
 // 1. SINGLE SURAH EXPORTERS
 // ==========================================
 
-export function exportCanonicalJson(surah: SurahItem): string {
-  const ayahs = buildSynchronizedAyahs(surah);
+export function exportCanonicalJson(surah: SurahItem, minify: boolean = false): string {
+  const ayahs = buildCleanAyahs(surah);
   const outDoc = {
-    total_surahs: 1,
-    surahs: [
-      {
-        surah: surah.surah_number,
-        surah_name_arabic: surah.surah_name_arabic,
-        surah_name_english: surah.surah_name_english,
-        ...(surah.intro ? { intro: surah.intro } : {}),
-        ayahs,
-      }
-    ]
+    surah: surah.surah_number,
+    surah_name_arabic: surah.surah_name_arabic,
+    surah_name_english: surah.surah_name_english,
+    duration: Number(surah.audio_duration_seconds) || 0,
+    status: surah.status || 'verified',
+    ...(surah.intro ? { intro: surah.intro } : {}),
+    ayahs,
   };
-  return JSON.stringify(outDoc, null, 2);
+  return minify ? JSON.stringify(outDoc) : JSON.stringify(outDoc, null, 2);
 }
 
 export function exportProjectFile(project: AlignerProject): string {
@@ -308,8 +361,6 @@ export function exportQuranCaption(surah: SurahItem): string {
         phoneme: p.phoneme,
         start: Number(Math.max(0, p.start - introStart).toFixed(3)),
         end: Number(Math.max(0, p.end - introStart).toFixed(3)),
-        ...(p.rule ? { rule: p.rule } : {}),
-        ...(p.golden_len ? { golden_len: p.golden_len } : {}),
       })),
     }));
 
@@ -349,8 +400,6 @@ export function exportQuranCaption(surah: SurahItem): string {
           phoneme: p.phoneme,
           start: Number(Math.max(0, p.start - segStart).toFixed(3)),
           end: Number(Math.max(0, p.end - segStart).toFixed(3)),
-          ...(p.rule ? { rule: p.rule } : {}),
-          ...(p.golden_len ? { golden_len: p.golden_len } : {}),
         })),
       }));
 
@@ -422,11 +471,17 @@ export function exportAllCanonicalJson(project: AlignerProject): string {
     surah: s.surah_number,
     surah_name_arabic: s.surah_name_arabic,
     surah_name_english: s.surah_name_english,
+    duration: Number(s.audio_duration_seconds) || 0,
+    status: s.status || 'verified',
     ...(s.intro ? { intro: s.intro } : {}),
-    ayahs: buildSynchronizedAyahs(s),
+    ayahs: buildCleanAyahs(s),
   }));
 
   return JSON.stringify({
+    project_name: project.project_name,
+    reciter: project.reciter,
+    riwayah: project.settings?.riwayah || 'Hafs',
+    app_version: project.app_version || '2.0.0',
     total_surahs: surahs.length,
     surahs,
   }, null, 2);
@@ -562,8 +617,6 @@ export function exportAllQuranCaption(project: AlignerProject): string {
           phoneme: p.phoneme,
           start: Number(Math.max(0, p.start - introStart).toFixed(3)),
           end: Number(Math.max(0, p.end - introStart).toFixed(3)),
-          ...(p.rule ? { rule: p.rule } : {}),
-          ...(p.golden_len ? { golden_len: p.golden_len } : {}),
         })),
       }));
 
@@ -595,8 +648,6 @@ export function exportAllQuranCaption(project: AlignerProject): string {
             phoneme: p.phoneme,
             start: Number(Math.max(0, p.start - segStart).toFixed(3)),
             end: Number(Math.max(0, p.end - segStart).toFixed(3)),
-            ...(p.rule ? { rule: p.rule } : {}),
-            ...(p.golden_len ? { golden_len: p.golden_len } : {}),
           })),
         }));
 
@@ -670,13 +721,45 @@ export function exportAllPremiereMarkers(project: AlignerProject): string {
 
 export async function exportSurahsAsZip(
   project: AlignerProject,
-  format: ExportFormatId,
+  format: ExportFormatId = 'json',
   wordLevel: boolean = false
 ): Promise<Blob> {
   const zip = new JSZip();
-  const projFolder = zip.folder(sanitizeBatchExportFileName(project.project_name || 'quran_recitations')) || zip;
+  const rawName = project.reciter || project.settings?.reciter_name || project.project_name || 'reciter';
+  const safeReciter = sanitizeBatchExportFileName(rawName);
 
-  // qproj exports are portable: audio is embedded when reachable
+  if (format === 'json') {
+    // Generate dataset standard structure:
+    // reciters/[Reciter]/json/[001].json
+    // projects.json at root
+    const reciterFolder = zip.folder(`reciters/${safeReciter}/json`);
+    for (const surah of project.surahs) {
+      const num = String(surah.surah_number).padStart(3, '0');
+      const content = exportCanonicalJson(surah);
+      reciterFolder?.file(`${num}.json`, content);
+    }
+
+    const surahNumbers = project.surahs.map(s => s.surah_number).sort((a, b) => a - b);
+    const manifest = [
+      {
+        id: safeReciter,
+        project_name: project.project_name,
+        reciter: rawName,
+        reciter_english: project.settings?.reciter_name || rawName,
+        riwayah: project.settings?.riwayah || 'Hafs',
+        folder: `reciters/${safeReciter}`,
+        audio_format: 'mp3',
+        available_surahs: surahNumbers,
+        total_surahs: surahNumbers.length,
+        description: 'Quran recitation timing dataset package.',
+        updated_at: new Date().toISOString(),
+      }
+    ];
+    zip.file('projects.json', JSON.stringify(manifest, null, 2));
+    return await zip.generateAsync({ type: 'blob' });
+  }
+
+  const projFolder = zip.folder(sanitizeBatchExportFileName(project.project_name || 'quran_recitations')) || zip;
   const portable = format === 'qproj' ? await buildPortableProject(project) : project;
 
   for (const surah of project.surahs) {
@@ -686,10 +769,6 @@ export async function exportSurahsAsZip(
     let ext = '';
 
     switch (format) {
-      case 'json':
-        content = exportCanonicalJson(surah);
-        ext = 'json';
-        break;
       case 'srt':
         content = exportSrt(surah, wordLevel);
         ext = 'srt';
@@ -723,7 +802,6 @@ export async function exportSurahsAsZip(
     projFolder.file(`${num}_${safeName}.${ext}`, content);
   }
 
-  // Also include the project file in root of zip
   projFolder.file('project_specification.qproj', exportProjectFile(portable));
 
   return await zip.generateAsync({ type: 'blob' });

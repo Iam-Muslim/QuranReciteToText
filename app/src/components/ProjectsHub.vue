@@ -27,13 +27,35 @@
     <!-- 2. Modern Minimalist Toolbar UNDER the Ayah Banner -->
     <header class="hub-toolbar">
       <div class="toolbar-left">
+        <!-- Segmented Workspace Source: Local vs Cloud -->
+        <div class="workspace-tabs">
+          <button 
+            class="workspace-tab" 
+            :class="{ 'active': activeViewMode === 'local' }"
+            @click="activeViewMode = 'local'"
+          >
+            <HardDrive :size="13" />
+            <span>Local</span>
+            <span class="tab-badge">{{ projectsList.length }}</span>
+          </button>
+          <button 
+            class="workspace-tab" 
+            :class="{ 'active': activeViewMode === 'cloud' }"
+            @click="activeViewMode = 'cloud'; fetchCloudProjects()"
+          >
+            <Cloud :size="13" />
+            <span>Cloud</span>
+            <span class="tab-badge tab-badge-cloud">{{ cloudProjects.length }}</span>
+          </button>
+        </div>
+
         <!-- Quick Search -->
         <div class="search-wrap">
           <Search :size="13" class="search-icon" />
           <input 
             type="text" 
             v-model="searchQuery" 
-            placeholder="Search projects…" 
+            :placeholder="activeViewMode === 'local' ? 'Search local projects…' : 'Search cloud dataset…'" 
             class="search-input"
             spellcheck="false"
           />
@@ -47,7 +69,7 @@
             :class="{ 'active': activeStatusFilter === 'all' }"
             @click="activeStatusFilter = 'all'"
           >
-            All <span class="tab-badge">{{ projectsList.length }}</span>
+            All <span class="tab-badge">{{ activeViewMode === 'local' ? projectsList.length : cloudProjects.length }}</span>
           </button>
           <button 
             class="tab-btn" 
@@ -69,8 +91,19 @@
       </div>
 
       <div class="toolbar-right">
-        <!-- Sort Control -->
-        <div class="sort-select-wrap">
+        <!-- Cloud Dataset Settings -->
+        <button 
+          v-if="activeViewMode === 'cloud'"
+          class="btn-hf-settings" 
+          @click="showHfSettingsModal = true"
+          title="Configure Hugging Face Dataset"
+        >
+          <Settings2 :size="12" />
+          <span>Dataset Config</span>
+        </button>
+
+        <!-- Sort Control (local projects) -->
+        <div v-if="activeViewMode === 'local'" class="sort-select-wrap">
           <SlidersHorizontal :size="12" class="sort-icon" />
           <select v-model="sortKey" class="sort-select" title="Sort Projects">
             <option value="updated">Recent</option>
@@ -83,118 +116,256 @@
         <!-- Refresh Button -->
         <button 
           class="btn-icon" 
-          @click="fetchProjects" 
+          @click="activeViewMode === 'local' ? fetchProjects() : fetchCloudProjects()" 
           title="Refresh projects list"
         >
-          <RefreshCw :size="13" :class="{ 'spin': isFetching }" />
+          <RefreshCw :size="13" :class="{ 'spin': isFetching || isFetchingCloud }" />
         </button>
       </div>
     </header>
 
     <!-- Main Workspace -->
     <main class="hub-main">
-      <!-- Loading Shimmer -->
-      <div v-if="isFetching && projectsList.length === 0" class="projects-grid">
-        <div v-for="i in 4" :key="i" class="skeleton-card">
-          <div class="skeleton-thumb shimmer"></div>
-          <div class="skeleton-body">
-            <div class="skeleton-line shimmer" style="width: 70%"></div>
-            <div class="skeleton-line shimmer" style="width: 40%"></div>
+      <!-- Toast feedback -->
+      <div v-if="toastMessage" class="toast-popup anim-rise">
+        <Check :size="14" />
+        <span>{{ toastMessage }}</span>
+      </div>
+
+      <!-- ═══════════ CLOUD VIEW ═══════════ -->
+      <div v-if="activeViewMode === 'cloud'" class="cloud-view-wrap">
+        <!-- Subheader Info Banner -->
+        <div class="cloud-dataset-banner">
+          <div class="cloud-banner-left">
+            <span class="cloud-hf-icon" style="font-size: 18px;">🤗</span>
+            <div>
+              <span class="cloud-banner-title">Hugging Face Dataset: </span>
+              <a :href="`https://huggingface.co/datasets/${currentHfRepo}`" target="_blank" rel="noopener" class="cloud-banner-repo">
+                <span>{{ currentHfRepo }}</span>
+                <ExternalLink :size="10" />
+              </a>
+            </div>
+          </div>
+          <div class="cloud-banner-right">
+            <span class="badge-low-bandwidth">
+              ⚡ Lowest Bandwidth · On-Demand HTTP Range Streaming
+            </span>
+            <button class="btn-hf-settings" @click="showGuideModal = true" title="View professional dataset layout guide">
+              <BookOpen :size="11" />
+              <span>Dataset Guide</span>
+            </button>
+            <button class="btn-hf-settings" @click="showHfSettingsModal = true" title="Configure repository and access token">
+              <Settings2 :size="11" />
+              <span>Connect Repo</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Loading State for Cloud -->
+        <div v-if="isFetchingCloud && cloudProjects.length === 0" class="projects-grid">
+          <div v-for="i in 4" :key="i" class="skeleton-card">
+            <div class="skeleton-thumb shimmer"></div>
+            <div class="skeleton-body">
+              <div class="skeleton-line shimmer" style="width: 70%"></div>
+              <div class="skeleton-line shimmer" style="width: 40%"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Empty Results -->
+        <div v-else-if="filteredCloudProjects.length === 0" class="no-search-results anim-rise">
+          <Cloud :size="28" class="empty-icon" />
+          <h3 class="empty-title">No cloud projects found</h3>
+          <p class="empty-desc">No recitation projects matched your query in {{ currentHfRepo }}.</p>
+          <button class="btn-secondary" @click="searchQuery = ''; activeStatusFilter = 'all'">Reset Filter</button>
+        </div>
+
+        <!-- Cloud Projects Grid -->
+        <div v-else class="projects-grid stagger">
+          <div 
+            v-for="item in filteredCloudProjects" 
+            :key="item.id"
+            class="cloud-card"
+          >
+            <div class="cloud-card-top">
+              <span class="cloud-surah-chip" :title="`Dataset folder: ${item.folder || item.id}`">
+                <Folder :size="10" />
+                <span>{{ item.folder || item.id }}</span>
+              </span>
+              <span 
+                class="card-status-chip"
+                :class="getStatusClass(item.status)"
+              >
+                <CircleCheck :size="11" v-if="item.status === 'verified'" />
+                <Circle :size="11" v-else />
+                <span class="status-chip-label">{{ item.status === 'verified' ? 'Verified' : 'Review' }}</span>
+              </span>
+            </div>
+
+            <div class="cloud-card-body">
+              <div class="cloud-arabic-name" dir="rtl">{{ item.project_name }}</div>
+              <div class="cloud-english-name" v-if="item.reciter_english && item.reciter_english !== item.project_name">
+                {{ item.reciter_english }}
+              </div>
+
+              <div class="cloud-meta-row">
+                <span class="meta-tag reciter-pill">
+                  <Mic :size="10" />
+                  <span>{{ item.reciter }}</span>
+                </span>
+                <span class="meta-tag riwayah-pill" v-if="item.riwayah">
+                  <span>{{ item.riwayah }}</span>
+                </span>
+                <span class="meta-tag surah-count-pill">
+                  <span>{{ item.available_surahs?.length || item.total_surahs || 114 }} Surahs</span>
+                </span>
+              </div>
+
+              <p class="cloud-desc" v-if="item.description">{{ item.description }}</p>
+
+              <!-- Quick Surah Selector -->
+              <div class="cloud-surah-picker-wrap">
+                <span class="cloud-surah-picker-label">Surah:</span>
+                <select 
+                  :value="getSelectedSurah(item)" 
+                  @change="setSelectedSurah(item.id, Number(($event.target as HTMLSelectElement).value))"
+                  class="cloud-surah-picker-select"
+                  title="Select Surah to Stream or Import"
+                >
+                  <option 
+                    v-for="sNum in getProjectSurahs(item)" 
+                    :key="sNum" 
+                    :value="sNum"
+                  >
+                    {{ String(sNum).padStart(3, '0') }} · {{ getSurahMeta(sNum).arabic }} ({{ getSurahMeta(sNum).english }})
+                  </option>
+                </select>
+              </div>
+            </div>
+
+            <div class="cloud-card-footer">
+              <button 
+                class="btn-cloud-stream" 
+                @click="handleStreamCloudProject(item)"
+                :title="`Stream Surah ${getSelectedSurah(item)} directly in Studio with on-demand audio`"
+              >
+                <Play :size="13" />
+                <span>Stream Surah {{ getSelectedSurah(item) }}</span>
+              </button>
+              <button 
+                class="btn-cloud-import" 
+                @click="handleImportCloudProject(item)"
+                :title="`Clone Surah ${getSelectedSurah(item)} into Local Projects`"
+              >
+                <BookmarkPlus :size="13" />
+                <span>Import</span>
+              </button>
+            </div>
           </div>
         </div>
       </div>
 
-      <!-- No search results state -->
-      <div v-else-if="searchQuery && filteredProjects.length === 0" class="no-search-results anim-rise">
-        <FolderKanban :size="28" class="empty-icon" />
-        <h3 class="empty-title">No matching projects</h3>
-        <p class="empty-desc">No project matching "{{ searchQuery }}".</p>
-        <button class="btn-secondary" @click="searchQuery = ''">Clear Search</button>
-      </div>
-
-      <!-- Project Cards Grid -->
-      <div v-else class="projects-grid stagger">
-        <!-- The SAME Square New Project Tile -->
-        <button class="create-tile" @click="showNewModal = true" title="Create New Recitation Project">
-          <div class="create-orb">
-            <Plus :size="22" />
+      <!-- ═══════════ LOCAL VIEW ═══════════ -->
+      <div v-else>
+        <!-- Loading Shimmer -->
+        <div v-if="isFetching && projectsList.length === 0" class="projects-grid">
+          <div v-for="i in 4" :key="i" class="skeleton-card">
+            <div class="skeleton-thumb shimmer"></div>
+            <div class="skeleton-body">
+              <div class="skeleton-line shimmer" style="width: 70%"></div>
+              <div class="skeleton-line shimmer" style="width: 40%"></div>
+            </div>
           </div>
-          <span class="create-label">New Project</span>
-          <span class="create-sub">Start alignment workspace</span>
-        </button>
+        </div>
 
-        <!-- Modern Project Card -->
-        <!-- Clean Modern Project Card -->
-        <div 
-          v-for="p in filteredProjects" 
-          :key="p.file_name"
-          class="project-card"
-          @click="openProject(p)"
-        >
-          <!-- Top Row: Status Chip on Left + Quick Actions Dock on Right -->
-          <div class="card-header-row">
-            <button
-              class="card-status-chip"
-              :class="[getStatusClass(p.status), { 'is-done': isVerified(p) }]"
-              @click.stop="toggleReview(p)"
-              :title="isVerified(p) ? 'Reviewed — click to mark needs review' : 'Click to mark reviewed'"
-            >
-              <CircleCheck :size="11" v-if="isVerified(p)" />
-              <Circle :size="11" v-else />
-              <span class="status-chip-label">{{ isVerified(p) ? 'Verified' : 'Review' }}</span>
-            </button>
+        <!-- No search results state -->
+        <div v-else-if="searchQuery && filteredProjects.length === 0" class="no-search-results anim-rise">
+          <FolderKanban :size="28" class="empty-icon" />
+          <h3 class="empty-title">No matching projects</h3>
+          <p class="empty-desc">No project matching "{{ searchQuery }}".</p>
+          <button class="btn-secondary" @click="searchQuery = ''">Clear Search</button>
+        </div>
 
-            <!-- Quick Action Icons -->
-            <div class="card-actions-dock" @click.stop>
-              <button class="btn-card-action" @click="duplicateProject(p)" title="Duplicate">
-                <Copy :size="12" />
-              </button>
-              <button v-if="isTauriEnv" class="btn-card-action" @click="revealProjectInExplorer(p)" title="Open in Explorer">
-                <Folder :size="12" />
-              </button>
-              <button class="btn-card-action" @click="exportProject(p)" title="Download .qproj">
-                <Download :size="12" />
-              </button>
+        <!-- Project Cards Grid -->
+        <div v-else class="projects-grid stagger">
+          <!-- The SAME Square New Project Tile -->
+          <button class="create-tile" @click="showNewModal = true" title="Create New Recitation Project">
+            <div class="create-orb">
+              <Plus :size="22" />
+            </div>
+            <span class="create-label">New Project</span>
+            <span class="create-sub">Start alignment workspace</span>
+          </button>
+
+          <!-- Modern Project Card -->
+          <div 
+            v-for="p in filteredProjects" 
+            :key="p.file_name"
+            class="project-card"
+            @click="openProject(p)"
+          >
+            <!-- Top Row: Status Chip on Left + Quick Actions Dock on Right -->
+            <div class="card-header-row">
               <button
-                class="btn-card-action btn-delete"
-                @click="requestDelete(p)"
-                title="Delete Project"
+                class="card-status-chip"
+                :class="[getStatusClass(p.status), { 'is-done': isVerified(p) }]"
+                @click.stop="toggleReview(p)"
+                :title="isVerified(p) ? 'Reviewed — click to mark needs review' : 'Click to mark reviewed'"
               >
-                <Trash2 :size="12" />
+                <CircleCheck :size="11" v-if="isVerified(p)" />
+                <Circle :size="11" v-else />
+                <span class="status-chip-label">{{ isVerified(p) ? 'Verified' : 'Review' }}</span>
               </button>
+
+              <!-- Quick Action Icons -->
+              <div class="card-actions-dock" @click.stop>
+                <button class="btn-card-action" @click="duplicateProject(p)" title="Duplicate">
+                  <Copy :size="12" />
+                </button>
+                <button v-if="isTauriEnv" class="btn-card-action" @click="revealProjectInExplorer(p)" title="Open in Explorer">
+                  <Folder :size="12" />
+                </button>
+                <button class="btn-card-action" @click="exportProject(p)" title="Download .qproj">
+                  <Download :size="12" />
+                </button>
+                <button
+                  class="btn-card-action btn-delete"
+                  @click="requestDelete(p)"
+                  title="Delete Project"
+                >
+                  <Trash2 :size="12" />
+                </button>
+              </div>
             </div>
-          </div>
 
-          <!-- Card Body: Clear, Prominent Project Name -->
-          <div class="card-body">
-            <h3 class="card-name" :title="p.project_name">{{ p.project_name }}</h3>
+            <!-- Card Body: Clear, Prominent Project Name -->
+            <div class="card-body">
+              <h3 class="card-name" :title="p.project_name">{{ p.project_name }}</h3>
 
-            <div class="card-meta-line" v-if="p.surahs_count > 0 || p.reciter || (p.riwayah && p.riwayah !== 'Hafs')">
-              <!-- Surah count ONLY if surahs_count > 0, NO Mushaf icon -->
-              <span v-if="p.surahs_count > 0" class="meta-tag surah-count-pill">
-                <span>{{ p.surahs_count }} {{ p.surahs_count === 1 ? 'Surah' : 'Surahs' }}</span>
-              </span>
+              <div class="card-meta-line" v-if="p.surahs_count > 0 || p.reciter || (p.riwayah && p.riwayah !== 'Hafs')">
+                <span v-if="p.surahs_count > 0" class="meta-tag surah-count-pill">
+                  <span>{{ p.surahs_count }} {{ p.surahs_count === 1 ? 'Surah' : 'Surahs' }}</span>
+                </span>
 
-              <!-- Reciter tag if present -->
-              <span v-if="p.reciter" class="meta-tag reciter-pill" :title="p.reciter">
-                <Mic :size="10" />
-                <span>{{ p.reciter }}</span>
-              </span>
+                <span v-if="p.reciter" class="meta-tag reciter-pill" :title="p.reciter">
+                  <Mic :size="10" />
+                  <span>{{ p.reciter }}</span>
+                </span>
 
-              <!-- Riwayah tag if customized -->
-              <span v-if="p.riwayah && p.riwayah !== 'Hafs'" class="meta-tag riwayah-pill">
-                <span>{{ p.riwayah }}</span>
+                <span v-if="p.riwayah && p.riwayah !== 'Hafs'" class="meta-tag riwayah-pill">
+                  <span>{{ p.riwayah }}</span>
+                </span>
+              </div>
+            </div>
+
+            <!-- Card Footer: Relative date & Open hint on hover -->
+            <div class="card-footer-row">
+              <span class="time-text">{{ formatDateRelative(p.updated_at) }}</span>
+              <span class="open-hint">
+                <span>Open</span>
+                <ArrowRight :size="11" />
               </span>
             </div>
-          </div>
-
-          <!-- Card Footer: Relative date & Open hint on hover -->
-          <div class="card-footer-row">
-            <span class="time-text">{{ formatDateRelative(p.updated_at) }}</span>
-            <span class="open-hint">
-              <span>Open</span>
-              <ArrowRight :size="11" />
-            </span>
           </div>
         </div>
       </div>
@@ -314,15 +485,160 @@
         </div>
       </div>
     </div>
+
+    <!-- Hugging Face Dataset Configuration Modal -->
+    <div v-if="showHfSettingsModal" class="modal-backdrop" @click.self="showHfSettingsModal = false">
+      <div class="modal-card glass-float anim-scale" @click.stop>
+        <div class="modal-card-header">
+          <h3 class="modal-heading">Hugging Face Dataset Configuration</h3>
+          <button class="btn-icon" @click="showHfSettingsModal = false" title="Close">✕</button>
+        </div>
+
+        <form @submit.prevent="saveHfSettings" class="modal-form">
+          <div class="form-group">
+            <label class="form-label">Dataset Repository (URL or username/repo)</label>
+            <input 
+              type="text" 
+              v-model="hfRepoInput" 
+              placeholder="e.g. username/quran-dataset or https://huggingface.co/datasets/..." 
+              required
+              class="form-input"
+            />
+            <small style="font-size: 11px; color: var(--text-muted); margin-top: 4px; display: block;">
+              Accepts full Hugging Face dataset URLs or shorthand repository names.
+            </small>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Access Token (Optional — for Private Datasets)</label>
+            <input 
+              type="password" 
+              v-model="hfTokenInput" 
+              placeholder="hf_xxxxxxxxxxxxxxxxxxxx (optional)" 
+              class="form-input"
+            />
+            <small style="font-size: 11px; color: var(--text-muted); margin-top: 4px; display: block;">
+              Required only if your dataset is Private. Get a token at <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noopener" style="color: var(--accent-primary);">huggingface.co/settings/tokens</a>.
+            </small>
+          </div>
+
+          <div class="modal-card-footer">
+            <button type="button" class="btn-secondary" @click="showHfSettingsModal = false">Cancel</button>
+            <button type="submit" class="btn-primary">
+              <span>Save & Connect</span>
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Professional Quran Dataset Guide Modal -->
+    <div v-if="showGuideModal" class="modal-backdrop" @click.self="showGuideModal = false">
+      <div class="modal-card modal-guide glass-float anim-scale" @click.stop style="max-width: 620px; max-height: 85vh; overflow-y: auto;">
+        <div class="modal-card-header">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <BookOpen :size="18" style="color: var(--accent-primary);" />
+            <h3 class="modal-heading">How to Structure Your Quran Dataset</h3>
+          </div>
+          <button class="btn-icon" @click="showGuideModal = false" title="Close">✕</button>
+        </div>
+
+        <div class="modal-guide-body" style="font-size: 12.5px; line-height: 1.6; color: var(--text-muted); display: flex; flex-direction: column; gap: 16px; padding: 14px 0;">
+          <div>
+            <h4 style="font-size: 13.5px; font-weight: 600; color: var(--text-main); margin-bottom: 6px;">1. Standard Reciter Project Layout</h4>
+            <p>Organize your dataset into reciter project folders with distinct <code>json/</code> for word boundaries and <code>audio/</code> for recitations:</p>
+            <pre style="background: var(--bg-input); padding: 10px 14px; border-radius: var(--radius-md); font-family: monospace; font-size: 11px; border: 1px solid var(--border-subtle); color: var(--text-main); margin-top: 6px; overflow-x: auto;">
+my-quran-dataset/
+├── projects.json                      (Dataset manifest at repository root)
+└── reciters/
+    └── Mishary_Alafasy/               (Reciter Project folder)
+        ├── json/                      (Word & Ayah alignment timings)
+        │   ├── 001.json               (Surah 1 with precomputed peaks)
+        │   └── 002.json
+        └── audio/                     (Streamable recitation audio files)
+            ├── 001.mp3
+            └── 002.mp3</pre>
+          </div>
+
+          <div>
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+              <h4 style="font-size: 13.5px; font-weight: 600; color: var(--text-main); margin: 0;">2. Root Manifest (projects.json)</h4>
+              <button type="button" class="btn-secondary" style="font-size: 11px; padding: 2px 8px; cursor: pointer;" @click="copyManifestTemplate">
+                <Copy :size="11" />
+                <span>{{ copiedManifest ? 'Copied!' : 'Copy projects.json' }}</span>
+              </button>
+            </div>
+            <p>Describes reciters, recitation tradition (Riwayah), verification status, and folder pointers:</p>
+            <pre style="background: var(--bg-input); padding: 10px 14px; border-radius: var(--radius-md); font-family: monospace; font-size: 11px; border: 1px solid var(--border-subtle); color: var(--text-main); margin-top: 6px; overflow-x: auto;">
+[
+  {
+    "id": "mishary_alafasy_hafs",
+    "project_name": "مشاري راشد العفاسي",
+    "reciter_english": "Mishary Rashid Alafasy",
+    "riwayah": "Hafs",
+    "status": "verified",
+    "folder": "reciters/Mishary_Alafasy",
+    "audio_format": "mp3",
+    "available_surahs": [1, 2, 36, 67, 112, 113, 114],
+    "description": "Murattal recitation aligned with Medina Uthmani script."
+  }
+]</pre>
+          </div>
+
+          <div>
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+              <h4 style="font-size: 13.5px; font-weight: 600; color: var(--text-main); margin: 0;">3. Surah Timing File (json/001.json)</h4>
+              <button type="button" class="btn-secondary" style="font-size: 11px; padding: 2px 8px; cursor: pointer;" @click="copySurahJsonTemplate">
+                <Copy :size="11" />
+                <span>{{ copiedSurahJson ? 'Copied!' : 'Copy 001.json' }}</span>
+              </button>
+            </div>
+            <p>Include downsampled <code>peaks</code> in the JSON for <strong>instant 0-bandwidth waveform rendering</strong> without downloading the audio file:</p>
+            <pre style="background: var(--bg-input); padding: 10px 14px; border-radius: var(--radius-md); font-family: monospace; font-size: 11px; border: 1px solid var(--border-subtle); color: var(--text-main); margin-top: 6px; overflow-x: auto;">
+{
+  "surah_number": 1,
+  "duration_seconds": 42.5,
+  "status": "verified",
+  "peaks": [0.02, 0.15, 0.45, 0.88, 0.54, 0.22, 0.05],
+  "ayahs": [
+    {
+      "ayah": 1,
+      "start": 0.0,
+      "end": 3.85,
+      "words": [
+        { "word": "بِسْمِ", "location": "1:1:1", "start": 0.0, "end": 0.58 },
+        { "word": "ٱللَّهِ", "location": "1:1:2", "start": 0.58, "end": 1.35 }
+      ]
+    }
+  ]
+}</pre>
+          </div>
+
+          <div>
+            <h4 style="font-size: 13.5px; font-weight: 600; color: var(--text-main); margin-bottom: 6px;">4. Audio Optimization</h4>
+            <ul style="padding-left: 18px; margin: 0; display: flex; flex-direction: column; gap: 4px;">
+              <li><strong>Codec:</strong> Constant Bitrate (CBR) MP3 or AAC 64 kbps to 96 kbps.</li>
+              <li><strong>Fast Seeking:</strong> Encode with faststart headers (<code>ffmpeg -i ... -movflags +faststart</code>) for precision HTTP Range seeking.</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="modal-card-footer">
+          <button type="button" class="btn-primary" @click="showGuideModal = false">
+            <span>Got it</span>
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed, watch } from 'vue';
+import { ref, reactive, onMounted, onUnmounted, computed, watch } from 'vue';
 import { projectStore } from '../services/projectStore';
 import { listProjects, loadProject, revealInExplorer, isTauriEnvironment, saveFileToPath } from '../services/api';
 import { vaultList, vaultLoad } from '../services/projectVault';
-import type { ProjectSummary } from '../types/aligner';
+import type { ProjectSummary, CloudReciterProject } from '../types/aligner';
 import { 
   FolderKanban,
   FolderOpen, 
@@ -337,10 +653,41 @@ import {
   CircleCheck,
   SlidersHorizontal,
   Mic,
-  ArrowRight
+  ArrowRight,
+  Cloud,
+  HardDrive,
+  Play,
+  Settings2,
+  ExternalLink,
+  BookmarkPlus,
+  Check,
+  BookOpen
 } from 'lucide-vue-next';
+import { 
+  fetchCloudProjects as apiFetchCloudProjects, 
+  openCloudSurahInStudio, 
+  importCloudSurahToLocal, 
+  getHfRepo, 
+  setHfRepo,
+  getHfToken,
+  setHfToken,
+  getSurahMeta 
+} from '../services/cloudDataset';
 
 const CACHE_KEY = 'quran_studio_projects_cache';
+
+const activeViewMode = ref<'local' | 'cloud'>('local');
+const cloudProjects = ref<CloudReciterProject[]>([]);
+const isFetchingCloud = ref(false);
+const showHfSettingsModal = ref(false);
+const showGuideModal = ref(false);
+const currentHfRepo = ref(getHfRepo());
+const hfRepoInput = ref(getHfRepo());
+const hfTokenInput = ref(getHfToken());
+const toastMessage = ref('');
+const copiedManifest = ref(false);
+const copiedSurahJson = ref(false);
+const selectedSurahMap = reactive<Record<string, number>>({});
 
 const searchQuery = ref('');
 const activeStatusFilter = ref<'all' | 'verified' | 'needs_review'>('all');
@@ -361,6 +708,11 @@ const isTauriEnv = isTauriEnvironment();
 const projectToDelete = ref<ProjectSummary | null>(null);
 const isDeleting = ref(false);
 const loadError = ref('');
+
+function showToast(msg: string) {
+  toastMessage.value = msg;
+  setTimeout(() => { toastMessage.value = ''; }, 3500);
+}
 
 function requestDelete(p: ProjectSummary) {
   projectToDelete.value = p;
@@ -385,6 +737,140 @@ async function confirmAndExecuteDelete() {
   }
 }
 
+function getSelectedSurah(item: CloudReciterProject): number {
+  if (selectedSurahMap[item.id]) return selectedSurahMap[item.id];
+  return item.available_surahs?.[0] || 1;
+}
+
+function setSelectedSurah(id: string, num: number) {
+  selectedSurahMap[id] = num;
+}
+
+function getProjectSurahs(item: CloudReciterProject): number[] {
+  if (Array.isArray(item.available_surahs) && item.available_surahs.length > 0) {
+    return item.available_surahs;
+  }
+  return Array.from({ length: 114 }, (_, i) => i + 1);
+}
+
+async function fetchCloudProjects() {
+  isFetchingCloud.value = true;
+  try {
+    cloudProjects.value = await apiFetchCloudProjects();
+  } catch (err: any) {
+    loadError.value = `Failed to fetch cloud dataset: ${err?.message || err}`;
+    setTimeout(() => { loadError.value = ''; }, 4000);
+  } finally {
+    isFetchingCloud.value = false;
+  }
+}
+
+async function handleStreamCloudProject(item: CloudReciterProject) {
+  const surahNum = getSelectedSurah(item);
+  const ok = await openCloudSurahInStudio(item, surahNum);
+  if (!ok) {
+    loadError.value = `Unable to stream Surah ${surahNum} for "${item.project_name}".`;
+    setTimeout(() => { loadError.value = ''; }, 3000);
+  }
+}
+
+async function handleImportCloudProject(item: CloudReciterProject) {
+  const surahNum = getSelectedSurah(item);
+  const ok = await importCloudSurahToLocal(item, surahNum);
+  if (ok) {
+    showToast(`Surah ${surahNum} of "${item.project_name}" imported to Local Projects!`);
+    await fetchProjects();
+  } else {
+    loadError.value = `Failed to import Surah ${surahNum} of "${item.project_name}".`;
+    setTimeout(() => { loadError.value = ''; }, 3000);
+  }
+}
+
+function saveHfSettings() {
+  if (hfRepoInput.value.trim()) {
+    setHfRepo(hfRepoInput.value.trim());
+    setHfToken(hfTokenInput.value.trim());
+    currentHfRepo.value = getHfRepo();
+    showHfSettingsModal.value = false;
+    showToast('Hugging Face dataset connection updated!');
+    fetchCloudProjects();
+  }
+}
+
+function copyManifestTemplate() {
+  const template = `[
+  {
+    "id": "mishary_alafasy_hafs",
+    "project_name": "مشاري راشد العفاسي",
+    "reciter_english": "Mishary Rashid Alafasy",
+    "riwayah": "Hafs",
+    "status": "verified",
+    "folder": "reciters/Mishary_Alafasy",
+    "audio_format": "mp3",
+    "available_surahs": [1, 2, 36, 67, 112, 113, 114],
+    "description": "Murattal recitation aligned with Medina Uthmani script."
+  }
+]`;
+  if (typeof navigator !== 'undefined' && navigator.clipboard) {
+    navigator.clipboard.writeText(template).then(() => {
+      copiedManifest.value = true;
+      setTimeout(() => { copiedManifest.value = false; }, 2500);
+    });
+  }
+}
+
+function copySurahJsonTemplate() {
+  const template = `{
+  "surah_number": 1,
+  "duration_seconds": 42.5,
+  "status": "verified",
+  "peaks": [0.02, 0.15, 0.45, 0.88, 0.54, 0.22, 0.05],
+  "ayahs": [
+    {
+      "ayah": 1,
+      "start": 0.0,
+      "end": 3.85,
+      "words": [
+        { "word": "بِسْمِ", "location": "1:1:1", "start": 0.0, "end": 0.58 },
+        { "word": "ٱللَّهِ", "location": "1:1:2", "start": 0.58, "end": 1.35 }
+      ]
+    }
+  ]
+}`;
+  if (typeof navigator !== 'undefined' && navigator.clipboard) {
+    navigator.clipboard.writeText(template).then(() => {
+      copiedSurahJson.value = true;
+      setTimeout(() => { copiedSurahJson.value = false; }, 2500);
+    });
+  }
+}
+
+const filteredCloudProjects = computed(() => {
+  let list = cloudProjects.value;
+  const q = searchQuery.value.trim().toLowerCase();
+  if (q) {
+    list = list.filter(p => {
+      const matchName = String(p.project_name || '').toLowerCase().includes(q);
+      const matchReciter = p.reciter && String(p.reciter).toLowerCase().includes(q);
+      const matchReciterEn = p.reciter_english && String(p.reciter_english).toLowerCase().includes(q);
+      const matchRiwayah = p.riwayah && String(p.riwayah).toLowerCase().includes(q);
+      const matchFolder = p.folder && String(p.folder).toLowerCase().includes(q);
+      return matchName || matchReciter || matchReciterEn || matchRiwayah || matchFolder;
+    });
+  }
+
+  if (activeStatusFilter.value !== 'all') {
+    list = list.filter(p => {
+      const st = String(p.status || '').toLowerCase();
+      if (activeStatusFilter.value === 'verified') return st === 'verified' || st === 'completed';
+      if (activeStatusFilter.value === 'needs_review') return st === 'needs_review' || st === 'review' || !p.status;
+      return true;
+    });
+  }
+
+  return list;
+});
+
 onMounted(() => {
   try {
     const cached = localStorage.getItem(CACHE_KEY);
@@ -394,6 +880,7 @@ onMounted(() => {
   } catch {}
 
   fetchProjects();
+  fetchCloudProjects();
 
   const handleGlobalKey = (e: KeyboardEvent) => {
     if (e.key === 'Escape') {
@@ -401,6 +888,10 @@ onMounted(() => {
         projectToDelete.value = null;
       } else if (showNewModal.value) {
         showNewModal.value = false;
+      } else if (showHfSettingsModal.value) {
+        showHfSettingsModal.value = false;
+      } else if (showGuideModal.value) {
+        showGuideModal.value = false;
       }
     }
   };
@@ -442,11 +933,13 @@ function normalizeProjectSummary(p: any): ProjectSummary {
     totalDuration = surahs.reduce((sum: number, s: any) => sum + (Number(s.audio_duration_seconds) || 0), 0);
   }
 
-  // Derive status
-  let status = p.status;
-  if (!status && surahs.length > 0) {
-    const isAllVerified = surahs.every((s: any) => s.status === 'verified');
-    status = isAllVerified ? 'verified' : 'needs_review';
+  // Dynamically derive project status from constituent surahs:
+  // If all surahs inside are verified, the project is verified.
+  let status: string = 'needs_review';
+  if (surahs.length > 0) {
+    status = surahs.every((s: any) => s.status === 'verified') ? 'verified' : 'needs_review';
+  } else if (p.status) {
+    status = p.status;
   }
 
   const fileName = getProjectFileName(p);
@@ -672,10 +1165,15 @@ async function toggleReview(p: ProjectSummary) {
   const fname = getProjectFileName(p);
   if (!fname) return;
   const nowVerified = await projectStore.toggleProjectReview(fname);
-  p.status = nowVerified ? 'verified' : 'needs_review';
+  const targetStatus = nowVerified ? 'verified' : 'needs_review';
+  p.status = targetStatus;
+  if (Array.isArray((p as any).surahs)) {
+    (p as any).surahs.forEach((s: any) => { s.status = targetStatus; });
+  }
   try {
     localStorage.setItem(CACHE_KEY, JSON.stringify(projectsList.value));
   } catch {}
+  await fetchProjects();
 }
 
 async function deleteProject(p: ProjectSummary) {
@@ -726,7 +1224,7 @@ async function exportProject(p: ProjectSummary) {
     }
 
     const content = JSON.stringify(data, null, 2);
-    const defaultExportName = fname.endsWith('.qproj') ? fname : `${fname}.qproj`;
+    const defaultExportName = `${fname.replace(/\.(qproj|json)$/i, '')}.json`;
 
     if (isTauriEnvironment()) {
       try {
@@ -734,7 +1232,7 @@ async function exportProject(p: ProjectSummary) {
         const selectedPath = await save({
           defaultPath: defaultExportName,
           filters: [
-            { name: 'Quran Recitation Project (*.qproj)', extensions: ['qproj'] },
+            { name: 'Quran Recitation JSON (*.json)', extensions: ['json', 'qproj'] },
             { name: 'All Files', extensions: ['*'] }
           ]
         });

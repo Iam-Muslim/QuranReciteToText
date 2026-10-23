@@ -2,8 +2,6 @@ export interface PhonemeItem {
   phoneme: string;
   start: number;
   end: number;
-  rule?: string;
-  golden_len?: number;
 }
 
 export interface AlignedWord {
@@ -62,6 +60,7 @@ export interface AyahItem {
   segments: AyahSegment[];
   repeated_ranges?: string[];
   repeated_text?: string[];
+  is_repetition?: boolean;
 }
 
 export interface SurahIntro {
@@ -79,6 +78,8 @@ export interface SurahItem {
   surah_name_english: string;
   audio_file?: string;
   audio_url?: string;
+  waveform_url?: string;
+  peaks?: number[];
   audio_duration_seconds?: number;
   /** Audio embedded as base64 inside exported .qproj files (portable/cloud transfer). Not persisted by autosave. */
   audio_embedded?: { name: string; mime: string; base64: string };
@@ -87,12 +88,53 @@ export interface SurahItem {
   ayahs: AyahItem[];
 }
 
+export interface CloudReciterProject {
+  id: string;
+  project_name: string;
+  reciter: string;
+  reciter_english?: string;
+  riwayah: string;
+  status?: SurahStatus;
+  folder: string;
+  audio_format?: string;
+  available_surahs?: number[];
+  total_surahs?: number;
+  description?: string;
+  updated_at?: string;
+}
+
+export interface CloudProjectItem {
+  id: string;
+  project_name: string;
+  reciter: string;
+  reciter_english?: string;
+  riwayah: string;
+  surah_number?: number;
+  surah_name_arabic?: string;
+  surah_name_english?: string;
+  duration_seconds?: number;
+  total_ayahs?: number;
+  status?: SurahStatus;
+  folder?: string;
+  audio_format?: string;
+  available_surahs?: number[];
+  project_url?: string;
+  audio_url?: string;
+  waveform_url?: string;
+  description?: string;
+  size_bytes?: number;
+}
+
 export interface ProjectSettings {
   snapping_tolerance_ms: number;
   confidence_warning_threshold: number;
   auto_save_interval_s: number;
   reciter_name?: string;
   riwayah?: string;
+  cloud_repo?: string;
+  cloud_folder?: string;
+  cloud_id?: string;
+  cloud_origin?: boolean;
 }
 
 export interface AlignerProject {

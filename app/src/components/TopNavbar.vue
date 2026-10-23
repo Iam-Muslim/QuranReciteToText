@@ -633,10 +633,13 @@ function requestClose() {
     padding: 0 10px;
   }
 
-  /* Undo/redo and the save chip hide on phones (Ctrl+Z / autosave still work) */
-  .btn-group,
-  .save-chip {
+  /* Undo/redo and save button text hide on phones to keep top bar uncluttered */
+  .nav-btn-group,
+  .save-btn-text {
     display: none;
+  }
+  .nav-save-btn {
+    padding: 5px 6px;
   }
 
   .update-nav-text {

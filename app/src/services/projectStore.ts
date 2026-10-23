@@ -37,7 +37,7 @@ import {
   deleteProject, 
   duplicateProject 
 } from './api';
-import { vaultSave, vaultLoad, vaultDelete, vaultDuplicate, persistProjectAudio, safeProjectFileName } from './projectVault';
+import { vaultSave, vaultLoad, vaultDelete, vaultDuplicate, persistProjectAudio, safeProjectFileName, vaultList } from './projectVault';
 import { auditSurah } from './auditorEngine';
 import { historyManager } from './historyManager';
 import { AutosaveService, type SaveStatus } from './autosaveService';
@@ -1252,47 +1252,59 @@ class ProjectStore {
       surahs.forEach(s => { s.status = target; });
       return target === 'verified';
     };
+
+    let targetVerified = false;
+
     try {
       if (!isTauriEnvironment()) {
-        const vaultData = await vaultLoad(fileName);
+        let vaultData = await vaultLoad(fileName);
+        let actualKey = fileName;
+        if (!vaultData?.project) {
+          actualKey = safeProjectFileName(fileName);
+          vaultData = await vaultLoad(actualKey);
+        }
+        if (!vaultData?.project) {
+          const list = await vaultList();
+          const match = list.find((item: any) => item.file_name === fileName || item.project_name === fileName.replace(/\.qproj$/i, ''));
+          if (match) {
+            actualKey = match.file_name;
+            vaultData = await vaultLoad(actualKey);
+          }
+        }
         if (!vaultData?.project) return false;
-        const nowVerified = applyTarget(vaultData.project.surahs || []);
+
+        targetVerified = applyTarget(vaultData.project.surahs || []);
         vaultData.project.updated_at = new Date().toISOString();
-        await vaultSave(fileName, vaultData.project);
-        return nowVerified;
+        await vaultSave(actualKey, vaultData.project);
+      } else {
+        let data = await loadProject(fileName);
+        if (!data && !/\.qproj$/i.test(fileName)) {
+          data = await loadProject(`${fileName}.qproj`);
+        }
+        if (!data) return false;
+
+        targetVerified = applyTarget(data.surahs || []);
+        (data as any).updated_at = new Date().toISOString();
+        await saveProject(fileName, data);
       }
-      const data = await loadProject(fileName);
-      if (!data) return false;
-      const nowVerified = applyTarget(data.surahs || []);
-      (data as any).updated_at = new Date().toISOString();
-      await saveProject(fileName, data);
-      return nowVerified;
+
+      // Synchronize in-memory active project if it matches this project
+      const activeName = this.project?.project_name;
+      const activeFile = this.project?.file_name;
+      const isCurrentProject = 
+        (activeFile && (activeFile === fileName || safeProjectFileName(activeFile) === safeProjectFileName(fileName))) ||
+        (activeName && (activeName === fileName.replace(/\.qproj$/i, '') || safeProjectFileName(activeName) === safeProjectFileName(fileName)));
+
+      if (isCurrentProject && this.project?.surahs) {
+        const targetStatus: SurahStatus = targetVerified ? 'verified' : 'needs_review';
+        this.project.surahs.forEach(s => { s.status = targetStatus; });
+        this.isDirty.value = false;
+      }
+
+      return targetVerified;
     } catch (err) {
       console.error('Failed to toggle project review state:', err);
       return false;
-    } finally {
-      // If this project is open in the studio, mirror the change live
-      if (this.project.file_name === fileName && this.project.surahs?.length) {
-        const src = await this.readProjectStatuses(fileName);
-        if (src) this.project.surahs.forEach(s => { s.status = src; });
-        this.isDirty.value = true;
-        this.scheduleAutosave();
-      }
-    }
-  }
-
-  /** Status of every surah in a stored project ('verified' | 'needs_review'). */
-  private async readProjectStatuses(fileName: string): Promise<SurahStatus | null> {
-    try {
-      if (!isTauriEnvironment()) {
-        const vaultData = await vaultLoad(fileName);
-        if (!vaultData?.project) return null;
-        return vaultData.project.surahs?.[0]?.status ?? null;
-      }
-      const data = await loadProject(fileName);
-      return data?.surahs?.[0]?.status ?? null;
-    } catch {
-      return null;
     }
   }
 

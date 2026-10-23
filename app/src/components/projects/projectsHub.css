@@ -851,3 +851,310 @@
   }
 }
 
+/* ── Cloud Projects & Dataset Workspace Tabs ───────────────────────────── */
+.workspace-tabs {
+  display: flex;
+  align-items: center;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  padding: 3px;
+  gap: 2px;
+}
+
+.workspace-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: transparent;
+  border: none;
+  padding: 5px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+
+.workspace-tab:hover {
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.workspace-tab.active {
+  background: var(--accent-primary);
+  color: #ffffff;
+  font-weight: 600;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+}
+
+.workspace-tab .tab-badge-cloud {
+  background: rgba(255, 255, 255, 0.2);
+  color: inherit;
+}
+
+/* Cloud Dataset Sub-Header Info Banner */
+.cloud-dataset-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 20px;
+  padding: 12px 18px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-e1);
+}
+
+.cloud-banner-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.cloud-hf-icon {
+  color: #ff9d00;
+}
+
+.cloud-banner-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.cloud-banner-repo {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--accent-primary);
+  text-decoration: none;
+  background: var(--accent-subtle);
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+}
+
+.cloud-banner-repo:hover {
+  text-decoration: underline;
+}
+
+.cloud-banner-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.badge-low-bandwidth {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: #10b981;
+  background: rgba(16, 185, 129, 0.1);
+  border: 1px solid rgba(16, 185, 129, 0.2);
+  padding: 3px 9px;
+  border-radius: var(--radius-pill);
+}
+
+.btn-hf-settings {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-size: 11.5px;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+
+.btn-hf-settings:hover {
+  color: var(--text-main);
+  border-color: var(--accent-border);
+}
+
+/* Cloud Project Card Styles */
+.cloud-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+  transition: all var(--dur-fast) var(--ease-out);
+  box-shadow: var(--shadow-e1);
+}
+
+.cloud-card:hover {
+  border-color: var(--accent-border);
+  box-shadow: var(--shadow-e2);
+  transform: translateY(-2px);
+}
+
+.cloud-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.cloud-surah-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent-primary);
+  background: var(--accent-subtle);
+  padding: 3px 8px;
+  border-radius: var(--radius-pill);
+}
+
+.cloud-card-body {
+  flex: 1;
+  margin-bottom: 14px;
+}
+
+.cloud-arabic-name {
+  font-family: 'Amiri', 'Traditional Arabic', serif;
+  font-size: 1.45rem;
+  color: var(--text-main);
+  margin-bottom: 4px;
+  line-height: 1.2;
+}
+
+.cloud-english-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.cloud-meta-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.cloud-desc {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.cloud-card-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.btn-cloud-stream {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: var(--accent-primary);
+  color: #ffffff;
+  border: none;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 7px 12px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+
+.btn-cloud-stream:hover {
+  background: var(--accent-hover);
+  box-shadow: 0 2px 8px rgba(46, 124, 228, 0.35);
+}
+
+.btn-cloud-import {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-main);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 7px 12px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+
+.btn-cloud-import:hover {
+  border-color: var(--accent-border);
+  color: var(--accent-primary);
+}
+
+.cloud-surah-picker-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 4px 8px;
+  margin-top: 10px;
+  margin-bottom: 4px;
+}
+
+.cloud-surah-picker-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.cloud-surah-picker-select {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--text-main);
+  font-size: 11.5px;
+  outline: none;
+  cursor: pointer;
+  padding: 2px 0;
+}
+
+.cloud-surah-picker-select option {
+  background: var(--bg-card);
+  color: var(--text-main);
+}
+
+.toast-popup {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 999;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: #10b981;
+  color: #ffffff;
+  padding: 10px 18px;
+  border-radius: var(--radius-pill);
+  font-size: 12.5px;
+  font-weight: 500;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+

@@ -94,6 +94,18 @@ export function usePlaybackTransport(
     }
   }
 
+  function syncMediaSessionPosition() {
+    if (typeof navigator === 'undefined' || !('mediaSession' in navigator) || !navigator.mediaSession.setPositionState) return;
+    if (!duration.value || duration.value <= 0) return;
+    try {
+      navigator.mediaSession.setPositionState({
+        duration: Math.max(0, duration.value),
+        playbackRate: playbackRate.value || 1.0,
+        position: Math.min(duration.value, Math.max(0, currentTime.value)),
+      });
+    } catch {}
+  }
+
   function updateMediaSession() {
     if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
     const s = projectStore.activeSurah.value;
@@ -115,8 +127,18 @@ export function usePlaybackTransport(
       navigator.mediaSession.setActionHandler('pause', () => { togglePlay(); });
       navigator.mediaSession.setActionHandler('seekbackward', (details) => { skipBackward(details?.seekOffset || 3); });
       navigator.mediaSession.setActionHandler('seekforward', (details) => { skipForward(details?.seekOffset || 3); });
+      navigator.mediaSession.setActionHandler('seekto', (details) => {
+        if (details.seekTime !== undefined && wavesurfer) {
+          wavesurfer.setTime(details.seekTime);
+          currentTime.value = details.seekTime;
+          projectStore.updateCurrentTime(details.seekTime);
+          updatePlayheadDirect(details.seekTime);
+          syncMediaSessionPosition();
+        }
+      });
       navigator.mediaSession.setActionHandler('previoustrack', () => { projectStore.jumpToPrevAyah(); });
       navigator.mediaSession.setActionHandler('nexttrack', () => { projectStore.jumpToNextAyah(); });
+      syncMediaSessionPosition();
     } catch {}
   }
 
@@ -192,6 +214,7 @@ export function usePlaybackTransport(
       autoScroll: true,
       autoCenter: true,
       hideScrollbar: true,
+      dragToSeek: true,
       plugins: [minimapPlugin],
     });
 
@@ -201,6 +224,10 @@ export function usePlaybackTransport(
       projectStore.isPlaying.value = true;
       startPlaybackClock();
       updateMediaSession();
+      if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
+        try { navigator.mediaSession.playbackState = 'playing'; } catch {}
+      }
+      syncMediaSessionPosition();
       void requestWakeLock();
     });
 
@@ -209,6 +236,10 @@ export function usePlaybackTransport(
       projectStore.isPlaying.value = false;
       stopPlaybackClock();
       releaseWakeLock();
+      if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
+        try { navigator.mediaSession.playbackState = 'paused'; } catch {}
+      }
+      syncMediaSessionPosition();
     });
 
     wavesurfer.on('timeupdate', (t: number) => {
@@ -252,7 +283,13 @@ export function usePlaybackTransport(
     });
   }
 
-  async function loadAudioUrl(url: string, filePath?: string | null) {
+  async function loadAudioUrl(
+    url: string, 
+    filePath?: string | null, 
+    waveformUrl?: string | null, 
+    knownDuration?: number | null,
+    precomputedPeaks?: number[] | null
+  ) {
     if (!wavesurfer) return;
 
     const effectivePath = filePath || projectStore.activeAudioFilePath.value || url;
@@ -273,17 +310,57 @@ export function usePlaybackTransport(
     if (currentlyLoadedAudioUrl === streamUrl && hasAudioLoaded.value) return;
     currentlyLoadedAudioUrl = streamUrl;
 
-    if (peaksCache.has(effectivePath)) {
-      const cached = peaksCache.get(effectivePath)!;
+    // 0. Instant Zero-Bandwidth: Use precomputed peaks from active Surah or argument if available
+    const directPeaks = (precomputedPeaks && precomputedPeaks.length > 0) 
+      ? precomputedPeaks 
+      : projectStore.activeSurah.value?.peaks;
+
+    if (directPeaks && directPeaks.length > 0) {
+      const explicitDur = knownDuration || projectStore.activeSurah.value?.audio_duration_seconds || 0;
+      if (explicitDur > 0) duration.value = explicitDur;
+      peaksCache.set(streamUrl, { peaks: directPeaks, duration: explicitDur, url: streamUrl });
+      try {
+        wavesurfer.load(streamUrl, [directPeaks], explicitDur > 0 ? explicitDur : undefined);
+        hasAudioLoaded.value = true;
+        return;
+      } catch (err) {
+        console.debug('Direct precomputed peaks load fallback:', err);
+      }
+    }
+
+    // 1. Fetch remote precomputed peaks if provided and not yet cached (Bandwidth Saver)
+    if (waveformUrl && !peaksCache.has(waveformUrl) && !peaksCache.has(streamUrl)) {
+      try {
+        const res = await fetch(waveformUrl);
+        if (res.ok) {
+          const json = await res.json();
+          const remotePeaks: number[] = Array.isArray(json) 
+            ? json 
+            : (Array.isArray(json.data) ? json.data : (Array.isArray(json.peaks) ? json.peaks : []));
+          const remoteDur = Number(json.duration) || knownDuration || 0;
+          if (remotePeaks.length > 0) {
+            peaksCache.set(streamUrl, { peaks: remotePeaks, duration: remoteDur, url: streamUrl });
+            peaksCache.set(waveformUrl, { peaks: remotePeaks, duration: remoteDur, url: streamUrl });
+          }
+        }
+      } catch (e) {
+        console.debug('Failed to fetch remote waveform peaks:', e);
+      }
+    }
+
+    // 2. Check if peaks exist in in-memory cache
+    const cached = peaksCache.get(effectivePath) || peaksCache.get(streamUrl) || (waveformUrl ? peaksCache.get(waveformUrl) : null);
+    if (cached) {
       try {
         duration.value = cached.duration;
         wavesurfer.load(cached.url || streamUrl, [cached.peaks], cached.duration);
+        hasAudioLoaded.value = true;
         return;
       } catch {}
     }
 
     let peaksData: number[] | null = null;
-    let dur: number | null = null;
+    let dur: number | null = knownDuration || null;
 
     if (isTauriEnvironment() && effectivePath && (effectivePath.includes(':') || effectivePath.startsWith('/'))) {
       try {
@@ -410,26 +487,57 @@ export function usePlaybackTransport(
     changePlaybackRate();
   }
 
-  function auditionSelectedWord(word: AlignedWord | undefined | null) {
-    if (!wavesurfer || !word) return;
+  let activeRangeListener: ((t: number) => void) | null = null;
 
-    wavesurfer.setTime(word.start);
-    currentTime.value = word.start;
-    projectStore.updateCurrentTime(word.start);
-    updatePlayheadDirect(word.start);
+  function stopTimeRange() {
+    if (!wavesurfer) return;
+    if (activeRangeListener) {
+      wavesurfer.un('timeupdate', activeRangeListener);
+      activeRangeListener = null;
+    }
+  }
+
+  /**
+   * Plays ONLY the precise slice from startTime to endTime and halts immediately.
+   * Prevents wasteful forward buffering on large cloud audio files.
+   */
+  function playTimeRange(startTime: number, endTime: number, onComplete?: () => void) {
+    if (!wavesurfer) return;
+    stopTimeRange();
+
+    const clampStart = Math.max(0, startTime);
+    const clampEnd = Math.max(clampStart, endTime);
+
+    wavesurfer.setTime(clampStart);
+    currentTime.value = clampStart;
+    projectStore.updateCurrentTime(clampStart);
+    updatePlayheadDirect(clampStart);
     wavesurfer.play();
 
-    const targetEnd = word.end;
-    const onAuditionUpdate = (t: number) => {
-      if (t >= targetEnd) {
+    activeRangeListener = (t: number) => {
+      if (t >= clampEnd) {
         wavesurfer?.pause();
-        wavesurfer?.un('timeupdate', onAuditionUpdate);
+        stopTimeRange();
+        if (onComplete) onComplete();
       }
     };
-    wavesurfer.on('timeupdate', onAuditionUpdate);
+    wavesurfer.on('timeupdate', activeRangeListener);
+  }
+
+  function auditionSelectedWord(word: AlignedWord | undefined | null) {
+    if (!wavesurfer || !word) return;
+    playTimeRange(word.start, word.end);
+  }
+
+  function auditionAyah(ayahNumber: number) {
+    const s = projectStore.activeSurah.value;
+    const ayah = s?.ayahs.find(a => a.ayah === ayahNumber);
+    if (!ayah) return;
+    playTimeRange(ayah.start, ayah.end);
   }
 
   function destroy() {
+    stopTimeRange();
     releaseWakeLock();
     stopPlaybackClock();
     if (wavesurfer) {
@@ -459,6 +567,9 @@ export function usePlaybackTransport(
     stepPlaybackRate,
     SPEED_PRESETS,
     auditionSelectedWord,
+    auditionAyah,
+    playTimeRange,
+    stopTimeRange,
     syncTrackScroll,
     onTrackViewportScroll,
     updateViewportDimensions,

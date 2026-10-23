@@ -72,11 +72,6 @@ export function isMaddWord(w: AlignedWord): boolean {
     return true;
   }
 
-  // 3. Check phoneme token rule annotations if present
-  if (w.phonemes && w.phonemes.some(p => p.golden_len && p.golden_len >= 4)) {
-    return true;
-  }
-
   return false;
 }
 

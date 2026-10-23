@@ -107,33 +107,20 @@ export class Surah {
   }
 }
 
+import rawSurahs from '../data/surahs.json';
+
 export class Quran {
-  static surahs: Surah[] = [];
-  private static loadPromise: Promise<void> | null = null;
+  static surahs: Surah[] = (rawSurahs as RawSurah[]).map((s) => Surah.fromJson(s));
   private static surahPromises = new Map<number, Promise<Surah>>();
 
   /**
    * Loads the Quran surahs metadata list (singleton pattern matching QuranCaption)
    */
   static async load(): Promise<void> {
-    if (Quran.surahs.length > 0) return;
-    if (Quran.loadPromise) return Quran.loadPromise;
-
-    Quran.loadPromise = (async () => {
-      try {
-        const response = await fetch('/quran/surahs.json');
-        if (!response.ok) {
-          throw new Error(`Failed to load surahs metadata: ${response.status}`);
-        }
-        const data = (await response.json()) as RawSurah[];
-        Quran.surahs = data.map((surahData) => Surah.fromJson(surahData));
-      } catch (err) {
-        Quran.loadPromise = null;
-        throw err;
-      }
-    })();
-
-    return Quran.loadPromise;
+    if (Quran.surahs.length === 0) {
+      Quran.surahs = (rawSurahs as RawSurah[]).map((s) => Surah.fromJson(s));
+    }
+    return Promise.resolve();
   }
 
   static getSurahs(): Surah[] {

@@ -77,8 +77,6 @@ class MfaWord:
                     "phoneme": p.phone,
                     "start": round(p.start, 3),
                     "end": round(p.end, 3),
-                    **({"rule": p.rule} if p.rule else {}),
-                    **({"golden_len": p.golden_len} if p.golden_len else {}),
                 }
                 for p in self.phones
             ],
@@ -944,8 +942,6 @@ class QuranMfaAligner:
                             "phoneme": p.phone,
                             "start": p.start,
                             "end": p.end,
-                            **({"rule": p.rule} if p.rule else {}),
-                            **({"golden_len": p.golden_len} if p.golden_len else {}),
                         }
                         for p in refined_phones
                     ]

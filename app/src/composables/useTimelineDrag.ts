@@ -28,10 +28,35 @@ export function useTimelineDrag(
   const activeDraggingDividerId = ref<string | null>(null);
   const activeDraggingBoundary = ref<{ id: string; edge: 'start' | 'end'; time: number } | null>(null);
 
-  // Shared-Vertex Divider Drag Handler
-  function startDragDivider(divider: SharedDivider, e: MouseEvent) {
+  function getClientX(e: MouseEvent | TouchEvent): number {
+    if ('touches' in e && e.touches.length > 0) return e.touches[0].clientX;
+    if ('changedTouches' in e && e.changedTouches.length > 0) return e.changedTouches[0].clientX;
+    return (e as MouseEvent).clientX ?? 0;
+  }
+
+  function listenDrag(onMove: (clientX: number) => void, onEnd: () => void) {
+    function moveHandler(evt: MouseEvent | TouchEvent) {
+      onMove(getClientX(evt));
+    }
+    function endHandler() {
+      window.removeEventListener('mousemove', moveHandler as any);
+      window.removeEventListener('touchmove', moveHandler as any);
+      window.removeEventListener('mouseup', endHandler);
+      window.removeEventListener('touchend', endHandler);
+      window.removeEventListener('touchcancel', endHandler);
+      onEnd();
+    }
+    window.addEventListener('mousemove', moveHandler as any);
+    window.addEventListener('touchmove', moveHandler as any, { passive: true });
+    window.addEventListener('mouseup', endHandler);
+    window.addEventListener('touchend', endHandler);
+    window.addEventListener('touchcancel', endHandler);
+  }
+
+  // Shared-Vertex Divider Drag Handler (Mouse & Touch)
+  function startDragDivider(divider: SharedDivider, e: MouseEvent | TouchEvent) {
     activeDraggingDividerId.value = divider.id;
-    const startX = e.clientX;
+    const startX = getClientX(e);
     const initialTime = divider.time;
     const leftStart = divider.leftWord.start;
     const rightEnd = divider.rightWord.end;
@@ -43,40 +68,35 @@ export function useTimelineDrag(
     if (maxTime < initialTime) maxTime = initialTime;
     if (maxTime < minTime) maxTime = minTime;
 
-    function onMouseMove(moveEvent: MouseEvent) {
-      const deltaPx = moveEvent.clientX - startX;
-      const deltaTime = deltaPx / zoomLevel.value;
-      const rawTime = initialTime + deltaTime;
-      const clampedTime = Number(Math.max(minTime, Math.min(maxTime, rawTime)).toFixed(3));
+    listenDrag(
+      (currentX) => {
+        const deltaPx = currentX - startX;
+        const deltaTime = deltaPx / zoomLevel.value;
+        const rawTime = initialTime + deltaTime;
+        const clampedTime = Number(Math.max(minTime, Math.min(maxTime, rawTime)).toFixed(3));
 
-      divider.leftWord.end = clampedTime;
-      divider.rightWord.start = clampedTime;
-      divider.leftWord.is_edited = true;
-      divider.rightWord.is_edited = true;
-      divider.time = clampedTime;
-    }
+        divider.leftWord.end = clampedTime;
+        divider.rightWord.start = clampedTime;
+        divider.leftWord.is_edited = true;
+        divider.rightWord.is_edited = true;
+        divider.time = clampedTime;
+      },
+      () => {
+        activeDraggingDividerId.value = null;
+        projectStore.updateAyahBounds(divider.leftWord.location);
 
-    function onMouseUp() {
-      activeDraggingDividerId.value = null;
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
-
-      projectStore.updateAyahBounds(divider.leftWord.location);
-
-      const finalTime = divider.leftWord.end;
-      if (Math.abs(finalTime - initialTime) > 0.001) {
-        projectStore.recordDividerHistory(
-          divider.leftWord,
-          divider.rightWord,
-          initialTime,
-          initialTime,
-          finalTime
-        );
+        const finalTime = divider.leftWord.end;
+        if (Math.abs(finalTime - initialTime) > 0.001) {
+          projectStore.recordDividerHistory(
+            divider.leftWord,
+            divider.rightWord,
+            initialTime,
+            initialTime,
+            finalTime
+          );
+        }
       }
-    }
-
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
+    );
   }
 
   function isWordBoundaryStart(_seg: TimelineSegmentItem, w: AlignedWord, wIdx: number): boolean {
@@ -96,10 +116,10 @@ export function useTimelineDrag(
     w: AlignedWord,
     wIdx: number,
     edge: 'start' | 'end',
-    e: MouseEvent
+    e: MouseEvent | TouchEvent
   ) {
     const boundaryId = `${seg.id}_${wIdx}`;
-    const startX = e.clientX;
+    const startX = getClientX(e);
     const initialTime = edge === 'start' ? w.start : w.end;
     activeDraggingBoundary.value = { id: boundaryId, edge, time: initialTime };
 
@@ -140,47 +160,42 @@ export function useTimelineDrag(
       if (minTime > maxTime) minTime = maxTime;
     }
 
-    function onMouseMove(moveEvent: MouseEvent) {
-      const deltaPx = moveEvent.clientX - startX;
-      const deltaTime = deltaPx / zoomLevel.value;
-      const rawTime = initialTime + deltaTime;
-      const clampedTime = Number(Math.max(minTime, Math.min(maxTime, rawTime)).toFixed(3));
+    listenDrag(
+      (currentX) => {
+        const deltaPx = currentX - startX;
+        const deltaTime = deltaPx / zoomLevel.value;
+        const rawTime = initialTime + deltaTime;
+        const clampedTime = Number(Math.max(minTime, Math.min(maxTime, rawTime)).toFixed(3));
 
-      if (edge === 'start') {
-        w.start = clampedTime;
-        if (wIdx === 0) {
-          seg.start = clampedTime;
+        if (edge === 'start') {
+          w.start = clampedTime;
+          if (wIdx === 0) {
+            seg.start = clampedTime;
+          }
+        } else {
+          w.end = clampedTime;
+          if (wIdx === seg.words.length - 1) {
+            seg.end = clampedTime;
+          }
         }
-      } else {
-        w.end = clampedTime;
-        if (wIdx === seg.words.length - 1) {
-          seg.end = clampedTime;
+        w.is_edited = true;
+        if (activeDraggingBoundary.value) {
+          activeDraggingBoundary.value.time = clampedTime;
+        }
+      },
+      () => {
+        activeDraggingBoundary.value = null;
+        projectStore.updateAyahBounds(w.location);
+
+        const finalTime = edge === 'start' ? w.start : w.end;
+        if (Math.abs(finalTime - initialTime) > 0.001) {
+          projectStore.recordWordBoundaryHistory(w, edge, initialTime, finalTime);
         }
       }
-      w.is_edited = true;
-      if (activeDraggingBoundary.value) {
-        activeDraggingBoundary.value.time = clampedTime;
-      }
-    }
-
-    function onMouseUp() {
-      activeDraggingBoundary.value = null;
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
-
-      projectStore.updateAyahBounds(w.location);
-
-      const finalTime = edge === 'start' ? w.start : w.end;
-      if (Math.abs(finalTime - initialTime) > 0.001) {
-        projectStore.recordWordBoundaryHistory(w, edge, initialTime, finalTime);
-      }
-    }
-
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
+    );
   }
 
-  function startDragSegmentBoundary(seg: TimelineSegmentItem, edge: 'start' | 'end', e: MouseEvent) {
+  function startDragSegmentBoundary(seg: TimelineSegmentItem, edge: 'start' | 'end', e: MouseEvent | TouchEvent) {
     if (!seg.words || seg.words.length === 0) return;
     const targetWord = edge === 'start' ? seg.words[0] : seg.words[seg.words.length - 1];
     const initialTime = edge === 'start' ? targetWord.start : targetWord.end;
@@ -213,42 +228,37 @@ export function useTimelineDrag(
       if (minTime > maxTime) minTime = maxTime;
     }
 
-    const startX = e.clientX;
+    const startX = getClientX(e);
 
-    function onMouseMove(moveEvent: MouseEvent) {
-      const deltaPx = moveEvent.clientX - startX;
-      const deltaTime = deltaPx / zoomLevel.value;
-      const rawTime = initialTime + deltaTime;
-      const clampedTime = Number(Math.max(minTime, Math.min(maxTime, rawTime)).toFixed(3));
+    listenDrag(
+      (currentX) => {
+        const deltaPx = currentX - startX;
+        const deltaTime = deltaPx / zoomLevel.value;
+        const rawTime = initialTime + deltaTime;
+        const clampedTime = Number(Math.max(minTime, Math.min(maxTime, rawTime)).toFixed(3));
 
-      if (edge === 'start') {
-        targetWord.start = clampedTime;
-        seg.start = clampedTime;
-      } else {
-        targetWord.end = clampedTime;
-        seg.end = clampedTime;
+        if (edge === 'start') {
+          targetWord.start = clampedTime;
+          seg.start = clampedTime;
+        } else {
+          targetWord.end = clampedTime;
+          seg.end = clampedTime;
+        }
+        targetWord.is_edited = true;
+        if (activeDraggingBoundary.value) {
+          activeDraggingBoundary.value.time = clampedTime;
+        }
+      },
+      () => {
+        activeDraggingBoundary.value = null;
+        projectStore.updateAyahBounds(targetWord.location);
+
+        const finalTime = edge === 'start' ? targetWord.start : targetWord.end;
+        if (Math.abs(finalTime - initialTime) > 0.001) {
+          projectStore.recordWordBoundaryHistory(targetWord, edge, initialTime, finalTime);
+        }
       }
-      targetWord.is_edited = true;
-      if (activeDraggingBoundary.value) {
-        activeDraggingBoundary.value.time = clampedTime;
-      }
-    }
-
-    function onMouseUp() {
-      activeDraggingBoundary.value = null;
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
-
-      projectStore.updateAyahBounds(targetWord.location);
-
-      const finalTime = edge === 'start' ? targetWord.start : targetWord.end;
-      if (Math.abs(finalTime - initialTime) > 0.001) {
-        projectStore.recordWordBoundaryHistory(targetWord, edge, initialTime, finalTime);
-      }
-    }
-
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
+    );
   }
 
   function handleTimelineMouseDown(e: MouseEvent) {
@@ -295,10 +305,10 @@ export function useTimelineDrag(
     syncTrackScroll();
   }
 
-  function startDragScrollbarThumb(e: MouseEvent) {
+  function startDragScrollbarThumb(e: MouseEvent | TouchEvent) {
     const ws = getWaveSurfer();
     if (!scrollbarTrack.value || !ws) return;
-    const startX = e.clientX;
+    const startX = getClientX(e);
     const startScroll = ws.getScroll();
     const trackW = scrollbarTrack.value.clientWidth;
     const thumbW = scrollbarThumbWidth.value;
@@ -306,21 +316,16 @@ export function useTimelineDrag(
     const maxScroll = Math.max(0, totalTimelineWidth.value - viewportClientWidth.value);
     if (maxThumbLeft <= 0) return;
 
-    function onMouseMove(moveEvt: MouseEvent) {
-      const deltaX = moveEvt.clientX - startX;
-      const scrollDelta = (deltaX / maxThumbLeft) * maxScroll;
-      const targetScroll = Math.max(0, Math.min(maxScroll, startScroll + scrollDelta));
-      ws?.setScroll(targetScroll);
-      syncTrackScroll();
-    }
-
-    function onMouseUp() {
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
-    }
-
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
+    listenDrag(
+      (currentX) => {
+        const deltaX = currentX - startX;
+        const scrollDelta = (deltaX / maxThumbLeft) * maxScroll;
+        const targetScroll = Math.max(0, Math.min(maxScroll, startScroll + scrollDelta));
+        ws?.setScroll(targetScroll);
+        syncTrackScroll();
+      },
+      () => {}
+    );
   }
 
   function handleTimelineWheel(event: WheelEvent, hasAudio: boolean) {

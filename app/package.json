@@ -12,6 +12,7 @@
     "deploy:cf": "npm run build && npx wrangler pages deploy dist"
   },
   "dependencies": {
+    "@huggingface/hub": "^2.17.9",
     "@tauri-apps/api": "^2.12.1",
     "@tauri-apps/plugin-dialog": "^2.8.1",
     "@tauri-apps/plugin-process": "^2.4.0",

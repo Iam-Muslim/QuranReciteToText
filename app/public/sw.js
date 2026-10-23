@@ -1,9 +1,11 @@
 /**
  * Quran Recite2Text - Offline Progressive Web App Service Worker
- * Provides offline caching for static app shell, icons, and Quranic fonts.
+ * Provides complete offline caching for:
+ *  - Static app shell, icons, and Quranic fonts
+ *  - Canonical Quran mushaf word files (114 Surah JSONs + surahs metadata)
  */
 
-const CACHE_NAME = 'quran-recite2text-v1';
+const CACHE_NAME = 'quran-recite2text-v2';
 
 const STATIC_ASSETS = [
   '/',
@@ -19,12 +21,32 @@ const STATIC_ASSETS = [
   '/fonts/Hafs.ttf'
 ];
 
+const QURAN_MUSHAF_ASSETS = [
+  '/quran/surahs.json',
+  ...Array.from({ length: 114 }, (_, i) => `/quran/${i + 1}.json`)
+];
+
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(STATIC_ASSETS).catch((err) => {
-        console.debug('ServiceWorker cache addAll error:', err);
-      });
+    caches.open(CACHE_NAME).then(async (cache) => {
+      // 1. Cache critical app shell assets
+      try {
+        await cache.addAll(STATIC_ASSETS);
+      } catch (err) {
+        console.debug('ServiceWorker app shell precache warning:', err);
+      }
+
+      // 2. Pre-cache all 114 Quran Surah word JSONs for 100% offline mushaf operation
+      const mushafPromises = QURAN_MUSHAF_ASSETS.map((url) =>
+        fetch(url)
+          .then((res) => {
+            if (res.ok) return cache.put(url, res);
+          })
+          .catch((err) => {
+            console.debug(`Precache failed for ${url}:`, err);
+          })
+      );
+      await Promise.allSettled(mushafPromises);
     }).then(() => self.skipWaiting())
   );
 });
@@ -48,8 +70,11 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Cache-first for offline fonts, images, and static assets
-  if (req.destination === 'font' || req.destination === 'image' || req.url.includes('/fonts/')) {
+  // Cache-first for Quran mushaf JSONs, fonts, and static assets
+  const isMushaf = req.url.includes('/quran/');
+  const isFontOrAsset = req.destination === 'font' || req.destination === 'image' || req.url.includes('/fonts/');
+
+  if (isMushaf || isFontOrAsset) {
     event.respondWith(
       caches.match(req).then((cached) => {
         if (cached) return cached;

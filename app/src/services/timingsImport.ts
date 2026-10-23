@@ -170,7 +170,7 @@ export function normalizeTimedJson(data: any, audioDurSec?: number, stemHint?: s
       const aNum = num(pick(a, ['ayah', 'ayah_number', 'verse', 'n', 'i']));
       let words: any[] = [];
       const direct = pick(a, ['words', 'tokens']);
-      const segs = pick(a, ['segments']);
+      const segs = pick(a, ['segments', 'phrases']);
       if (Array.isArray(direct)) {
         words = direct;
       } else if (Array.isArray(segs)) {
@@ -196,7 +196,7 @@ export function normalizeTimedJson(data: any, audioDurSec?: number, stemHint?: s
       }
     }
     if (!asSurah) {
-      const isAyahList = data.some(item => item && typeof item === 'object' && Array.isArray(pick(item, ['words', 'tokens', 'segments'])));
+      const isAyahList = data.some(item => item && typeof item === 'object' && Array.isArray(pick(item, ['words', 'tokens', 'segments', 'phrases'])));
       if (isAyahList) {
         const bucket: RawAyah[] = [];
         let locSurah: number | undefined;
@@ -206,7 +206,7 @@ export function normalizeTimedJson(data: any, audioDurSec?: number, stemHint?: s
           locSurah = num(pick(a, ['surah', 'surah_number'])) ?? locSurah;
           let words: any[] = [];
           const direct = pick(a, ['words', 'tokens']);
-          const segs = pick(a, ['segments']);
+          const segs = pick(a, ['segments', 'phrases']);
           if (Array.isArray(direct)) {
             words = direct;
           } else if (Array.isArray(segs)) {
@@ -323,12 +323,13 @@ export function normalizeTimedJson(data: any, audioDurSec?: number, stemHint?: s
           // Empty when only the position was given — the mushaf hydrate
           // step fills it in before the word reaches the studio.
           word: text ?? '',
-          location: `${sNum}:${aNum}:${words.length + 1}`,
+          location: `${sNum}:${aNum}:${declaredIdx || words.length + 1}`,
           ref: String(pick(w, ['ref']) ?? text ?? ''),
           start: Number(segStart.toFixed(3)),
           end: Number(Math.max(segEnd, segStart + 0.01).toFixed(3)),
           score: num(pick(w, ['score', 'confidence'])) ?? 1.0,
           is_edited: false,
+          is_repetition: !!w.is_repetition,
           phonemes,
         };
         (aw as any)._wIndex = declaredIdx;
@@ -336,8 +337,11 @@ export function normalizeTimedJson(data: any, audioDurSec?: number, stemHint?: s
       }
       if (words.length === 0) continue;
       words.sort((a, b) => a.start - b.start);
-      // re-index after sort
-      words.forEach((w, i) => { w.location = `${sNum}:${aNum}:${i + 1}`; });
+      // Preserve declared word index if provided, otherwise sequential
+      words.forEach((w, i) => { 
+        const wi = (w as any)._wIndex || (i + 1);
+        w.location = `${sNum}:${aNum}:${wi}`; 
+      });
       const seg = {
         segment: 1,
         start: words[0].start,

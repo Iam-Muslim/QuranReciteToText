@@ -74,6 +74,7 @@
               class="ayah-edge-handle edge-left"
               :class="{ 'is-dragging': activeDraggingBoundary?.id === seg.id && activeDraggingBoundary?.edge === 'start' }"
               @mousedown.stop.prevent="startDragSegmentBoundary(seg, 'start', $event)"
+              @touchstart.stop.prevent="startDragSegmentBoundary(seg, 'start', $event)"
               title="Drag segment start boundary into silence"
             >
               <div class="edge-grip-bar"></div>
@@ -90,6 +91,7 @@
               class="ayah-edge-handle edge-right"
               :class="{ 'is-dragging': activeDraggingBoundary?.id === seg.id && activeDraggingBoundary?.edge === 'end' }"
               @mousedown.stop.prevent="startDragSegmentBoundary(seg, 'end', $event)"
+              @touchstart.stop.prevent="startDragSegmentBoundary(seg, 'end', $event)"
               title="Drag segment end boundary into silence"
             >
               <div class="edge-grip-bar"></div>
@@ -156,6 +158,7 @@
                 class="word-boundary-handle handle-start"
                 :class="{ 'is-dragging': activeDraggingBoundary?.id === `${seg.id}_${wIdx}` && activeDraggingBoundary?.edge === 'start' }"
                 @mousedown.stop.prevent="startDragWordBoundary(seg, w, wIdx, 'start', $event)"
+                @touchstart.stop.prevent="startDragWordBoundary(seg, w, wIdx, 'start', $event)"
                 title="Drag word start boundary into silence"
               >
                 <div class="boundary-bracket">[</div>
@@ -187,6 +190,7 @@
                 class="word-boundary-handle handle-end"
                 :class="{ 'is-dragging': activeDraggingBoundary?.id === `${seg.id}_${wIdx}` && activeDraggingBoundary?.edge === 'end' }"
                 @mousedown.stop.prevent="startDragWordBoundary(seg, w, wIdx, 'end', $event)"
+                @touchstart.stop.prevent="startDragWordBoundary(seg, w, wIdx, 'end', $event)"
                 title="Drag word end boundary into silence"
               >
                 <div class="boundary-line"></div>
@@ -211,6 +215,7 @@
             :class="{ 'is-dragging': activeDraggingDividerId === divider.id }"
             :style="{ left: `${divider.time * zoomLevel}px` }"
             @mousedown.stop.prevent="startDragDivider(divider, $event)"
+            @touchstart.stop.prevent="startDragDivider(divider, $event)"
             title="Drag shared boundary (Adjusts both adjacent words atomically)"
           >
             <div class="divider-line"></div>
@@ -245,6 +250,7 @@
             width: `${scrollbarThumbWidth}px`
           }"
           @mousedown.stop.prevent="startDragScrollbarThumb"
+          @touchstart.stop.prevent="startDragScrollbarThumb"
         ></div>
       </div>
     </div>
@@ -916,12 +922,14 @@ onMounted(() => {
   }
 
   if (projectStore.activeAudioUrl.value) {
-    loadAudioUrl(projectStore.activeAudioUrl.value, projectStore.activeAudioFilePath.value);
+    const s = projectStore.activeSurah.value;
+    loadAudioUrl(projectStore.activeAudioUrl.value, projectStore.activeAudioFilePath.value, s?.waveform_url, s?.audio_duration_seconds, s?.peaks);
   }
 
   watch(() => projectStore.activeAudioUrl.value, (newUrl) => {
     if (newUrl) {
-      loadAudioUrl(newUrl, projectStore.activeAudioFilePath.value);
+      const s = projectStore.activeSurah.value;
+      loadAudioUrl(newUrl, projectStore.activeAudioFilePath.value, s?.waveform_url, s?.audio_duration_seconds, s?.peaks);
     }
   });
 
@@ -931,7 +939,7 @@ onMounted(() => {
       if (s) {
         const url = resolveSurahAudioUrl(s);
         if (url) {
-          loadAudioUrl(url, s.audio_file);
+          loadAudioUrl(url, s.audio_file, s.waveform_url, s.audio_duration_seconds, s.peaks);
         }
       }
     },
@@ -955,7 +963,7 @@ onMounted(() => {
             const s = projectStore.activeSurah.value;
             const url = resolveSurahAudioUrl(s);
             if (url) {
-              loadAudioUrl(url, s.audio_file);
+              loadAudioUrl(url, s.audio_file, s.waveform_url, s.audio_duration_seconds);
             }
           }
         });

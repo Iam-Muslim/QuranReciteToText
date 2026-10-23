@@ -103,8 +103,6 @@ export function parseQuranCaptionSegments(
               phoneme: String(p.phoneme || ''),
               start: Number(pStart.toFixed(3)),
               end: Number(pEnd.toFixed(3)),
-              ...(p.rule ? { rule: p.rule } : {}),
-              ...(p.golden_len ? { golden_len: p.golden_len } : {}),
             };
           }),
         });
@@ -143,8 +141,6 @@ export function parseQuranCaptionSegments(
             phoneme: String(p.phoneme || ''),
             start: Number(pStart.toFixed(3)),
             end: Number(pEnd.toFixed(3)),
-            ...(p.rule ? { rule: p.rule } : {}),
-            ...(p.golden_len ? { golden_len: p.golden_len } : {}),
           };
         }),
       };
