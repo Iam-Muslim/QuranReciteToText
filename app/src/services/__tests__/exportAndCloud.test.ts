@@ -129,18 +129,22 @@ describe('Canonical JSON Exporter & Cloud Helpers', () => {
       ],
     };
 
-    const exported = JSON.parse(exportCanonicalJson(surahWithRepeats));
+    const rawJson = exportCanonicalJson(surahWithRepeats);
+    // Verified: ALWAYS minified (no formatting newlines)
+    expect(rawJson).not.toContain('\n');
+
+    const exported = JSON.parse(rawJson);
     expect(exported.ayahs[0].phrases).toHaveLength(2);
     expect(exported.ayahs[0].phrases[0].phrase).toBe(1);
     expect(exported.ayahs[0].phrases[1].phrase).toBe(2);
-    expect(exported.ayahs[0].phrases[1].is_repetition).toBe(true);
 
-    // Repeated words keep their true canonical index w: 3 and w: 4, not 5 and 6!
-    const repeatedWords = exported.ayahs[0].words.filter((w: any) => w.is_repetition);
-    expect(repeatedWords).toHaveLength(2);
-    expect(repeatedWords[0].w).toBe(3);
-    expect(repeatedWords[0].is_repetition).toBe(true);
-    expect(repeatedWords[1].w).toBe(4);
-    expect(repeatedWords[1].is_repetition).toBe(true);
+    // Repeated words keep their true canonical index w: 3 and w: 4 along the timeline: [1, 2, 3, 4, 3, 4]
+    const wordIndices = exported.ayahs[0].words.map((w: any) => w.w);
+    expect(wordIndices).toEqual([1, 2, 3, 4, 3, 4]);
+
+    // Zero bloat: no redundant is_repetition flags in JSON
+    expect(exported.ayahs[0].words[4].is_repetition).toBeUndefined();
+    expect(exported.ayahs[0].words[4].w).toBe(3);
+    expect(exported.ayahs[0].words[5].w).toBe(4);
   });
 });

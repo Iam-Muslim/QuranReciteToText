@@ -96,7 +96,6 @@ function cleanWordItem(w: any, fallbackIdx: number) {
     text,
     start: Number(wStart.toFixed(3)),
     end: Number(wEnd.toFixed(3)),
-    ...(w.is_repetition ? { is_repetition: true } : {}),
     ...(typeof w.score === 'number' ? { score: Number(w.score.toFixed(3)) } : {}),
     ...(Array.isArray(w.phonemes) && w.phonemes.length > 0 ? { phonemes: w.phonemes } : {}),
   };
@@ -104,8 +103,9 @@ function cleanWordItem(w: any, fallbackIdx: number) {
 
 /**
  * Builds canonical clean Ayahs hierarchy:
- * Hierarchy: Surah -> Ayah -> Word (with optional Phrases for multi-take / breath-group repeats)
- * Preserves canonical mushaf word indices, phrase/subsegment bounds, and repetition flags.
+ * Hierarchy: Surah -> Ayah -> Word (with optional Phrases for multi-take / breath-group boundaries)
+ * Words strictly identify position via canonical Mushaf index `w`.
+ * Repeats are naturally detected by repeated coordinates or non-monotonic progression along the timeline.
  */
 export function buildCleanAyahs(surah: SurahItem) {
   return (surah.ayahs || []).map((a) => {
@@ -120,7 +120,6 @@ export function buildCleanAyahs(surah: SurahItem) {
         phrase: seg.segment || sIdx + 1,
         start: Number(pStart.toFixed(3)),
         end: Number(pEnd.toFixed(3)),
-        ...(seg.is_repetition ? { is_repetition: true } : {}),
         ...(seg.words_range ? { words_range: seg.words_range } : {}),
       };
     });
@@ -137,23 +136,15 @@ export function buildCleanAyahs(surah: SurahItem) {
     const ayahStart = cleanWords.length > 0 ? cleanWords[0].start : (a.start ?? 0);
     const ayahEnd = cleanWords.length > 0 ? cleanWords[cleanWords.length - 1].end : (a.end ?? 0);
 
-    const isAyahRep = !!(
-      a.is_repetition || 
-      (cleanPhrases.length > 0 && cleanPhrases.every(p => p.is_repetition))
-    );
-
-    const hasMultiPhrasesOrRepeats = cleanPhrases.length > 1 || cleanPhrases.some(p => p.is_repetition);
+    const hasMultiPhrases = cleanPhrases.length > 1;
 
     const cleanAyah: any = {
       ayah: a.ayah || (a as any).ayah_number || 1,
       start: Number(ayahStart.toFixed(3)),
       end: Number(ayahEnd.toFixed(3)),
-      ...(isAyahRep ? { is_repetition: true } : {}),
-      ...(Array.isArray(a.repeated_ranges) && a.repeated_ranges.length > 0 ? { repeated_ranges: a.repeated_ranges } : {}),
-      ...(Array.isArray(a.repeated_text) && a.repeated_text.length > 0 ? { repeated_text: a.repeated_text } : {}),
     };
 
-    if (hasMultiPhrasesOrRepeats) {
+    if (hasMultiPhrases) {
       cleanAyah.phrases = cleanPhrases;
     }
     cleanAyah.words = cleanWords;
@@ -166,7 +157,7 @@ export function buildCleanAyahs(surah: SurahItem) {
 // 1. SINGLE SURAH EXPORTERS
 // ==========================================
 
-export function exportCanonicalJson(surah: SurahItem, minify: boolean = false): string {
+export function exportCanonicalJson(surah: SurahItem, minify: boolean = true): string {
   const ayahs = buildCleanAyahs(surah);
   const outDoc = {
     surah: surah.surah_number,
@@ -466,7 +457,7 @@ export function exportPremiereMarkers(surah: SurahItem): string {
 // 2. ALL SURAHS COMBINED EXPORTERS
 // ==========================================
 
-export function exportAllCanonicalJson(project: AlignerProject): string {
+export function exportAllCanonicalJson(project: AlignerProject, minify: boolean = true): string {
   const surahs = project.surahs.map(s => ({
     surah: s.surah_number,
     surah_name_arabic: s.surah_name_arabic,
@@ -477,14 +468,16 @@ export function exportAllCanonicalJson(project: AlignerProject): string {
     ayahs: buildCleanAyahs(s),
   }));
 
-  return JSON.stringify({
+  const doc = {
     project_name: project.project_name,
     reciter: project.reciter,
     riwayah: project.settings?.riwayah || 'Hafs',
     app_version: project.app_version || '2.0.0',
     total_surahs: surahs.length,
     surahs,
-  }, null, 2);
+  };
+
+  return minify ? JSON.stringify(doc) : JSON.stringify(doc, null, 2);
 }
 
 export function exportAllSrt(project: AlignerProject, wordLevel: boolean = false): string {
@@ -722,7 +715,8 @@ export function exportAllPremiereMarkers(project: AlignerProject): string {
 export async function exportSurahsAsZip(
   project: AlignerProject,
   format: ExportFormatId = 'json',
-  wordLevel: boolean = false
+  wordLevel: boolean = false,
+  minify: boolean = true
 ): Promise<Blob> {
   const zip = new JSZip();
   const rawName = project.reciter || project.settings?.reciter_name || project.project_name || 'reciter';
@@ -735,7 +729,7 @@ export async function exportSurahsAsZip(
     const reciterFolder = zip.folder(`reciters/${safeReciter}/json`);
     for (const surah of project.surahs) {
       const num = String(surah.surah_number).padStart(3, '0');
-      const content = exportCanonicalJson(surah);
+      const content = exportCanonicalJson(surah, minify);
       reciterFolder?.file(`${num}.json`, content);
     }
 
@@ -755,7 +749,7 @@ export async function exportSurahsAsZip(
         updated_at: new Date().toISOString(),
       }
     ];
-    zip.file('projects.json', JSON.stringify(manifest, null, 2));
+    zip.file('projects.json', JSON.stringify(manifest));
     return await zip.generateAsync({ type: 'blob' });
   }
 

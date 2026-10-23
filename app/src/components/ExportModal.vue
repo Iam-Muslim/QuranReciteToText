@@ -102,18 +102,20 @@
               <span class="preview-title">
                 PREVIEW: {{ previewScopeLabel }}
               </span>
-              <button 
-                v-if="exportScope === 'current' || allSurahsMode === 'combined'"
-                class="copy-btn" 
-                @click="copyToClipboard"
-              >
-                <Check v-if="copied" :size="12" class="text-success" />
-                <Copy v-else :size="12" />
-                <span>{{ copied ? 'Copied!' : 'Copy to Clipboard' }}</span>
-              </button>
-              <span v-else class="preview-zip-badge">
-                ZIP contains {{ totalSurahsCount }} Surah JSON files + projects.json manifest
-              </span>
+              <div class="preview-actions">
+                <button 
+                  v-if="exportScope === 'current' || allSurahsMode === 'combined'"
+                  class="copy-btn" 
+                  @click="copyToClipboard"
+                >
+                  <Check v-if="copied" :size="12" class="text-success" />
+                  <Copy v-else :size="12" />
+                  <span>{{ copied ? 'Copied!' : 'Copy to Clipboard' }}</span>
+                </button>
+                <span v-else class="preview-zip-badge">
+                  ZIP contains {{ totalSurahsCount }} Surah JSON files + projects.json manifest
+                </span>
+              </div>
             </div>
             <pre class="preview-content">{{ previewContent }}</pre>
           </div>
@@ -518,7 +520,7 @@ function generatePreview() {
         const num = String(s.surah_number).padStart(3, '0');
         return `  ${idx + 1}. reciters/${proposedTargetFolder.value.replace(/^reciters\//, '')}/json/${num}.json`;
       }).join('\n');
-      previewContent.value = `// DATASET ZIP PACKAGE LAYOUT:\n\n${fileList}\n  + projects.json (Manifest)\n\nClick Download to package all ${totalSurahsCount.value} Surahs into a standard dataset ZIP file.`;
+      previewContent.value = `// DATASET ZIP PACKAGE LAYOUT:\n\n${fileList}\n  + projects.json (Manifest)\n\nClick Download to package all ${totalSurahsCount.value} Surahs into a standard dataset ZIP file (minified JSON).`;
       return;
     }
 
@@ -891,6 +893,12 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown));
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+.preview-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .preview-title {

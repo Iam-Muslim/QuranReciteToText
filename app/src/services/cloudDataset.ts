@@ -683,7 +683,7 @@ export async function uploadProjectToHfDataset(
     options.onProgress?.('Serializing canonical Surah JSON timings...');
     for (const s of project.surahs || []) {
       const padded = String(s.surah_number).padStart(3, '0');
-      const jsonStr = exportCanonicalJson(s);
+      const jsonStr = exportCanonicalJson(s, true);
       const surahBlob = new Blob([jsonStr], { type: 'application/json' });
       filesToUpload.push({
         path: `${folder}/json/${padded}.json`,
