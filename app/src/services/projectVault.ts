@@ -204,3 +204,20 @@ export async function vaultDuplicate(file_name: string): Promise<string | null> 
 export function clearAudioPersistenceCache(): void {
   audioPersisted.clear();
 }
+
+/** Requests persistent storage from browser so mobile OS won't evict local projects. */
+export async function ensurePersistentStorage(): Promise<boolean> {
+  if (typeof navigator !== 'undefined' && navigator.storage && navigator.storage.persist) {
+    try {
+      const isPersisted = await navigator.storage.persisted();
+      if (!isPersisted) {
+        return await navigator.storage.persist();
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+

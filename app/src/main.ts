@@ -2,6 +2,7 @@ import { createApp } from 'vue'
 import './style.css'
 import App from './App.vue'
 import { initApiRouting, getApiBaseUrl } from './services/api'
+import { ensurePersistentStorage } from './services/projectVault'
 
 /**
  * Enterprise Application Bootstrap
@@ -33,6 +34,16 @@ async function bootstrap() {
 
   // Mount root application
   app.mount('#app')
+
+  // Register offline Service Worker for browser PWA
+  if (typeof window !== 'undefined' && 'serviceWorker' in navigator && !((window as any).__TAURI__ || (window as any).__TAURI_INTERNALS__)) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/sw.js').catch((err) => {
+        console.debug('[QuranReciteToText] Service worker registration bypassed:', err)
+      })
+    })
+    void ensurePersistentStorage()
+  }
 }
 
 // Start application

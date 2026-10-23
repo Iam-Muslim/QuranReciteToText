@@ -53,6 +53,13 @@ export class AutosaveService {
         void this.flush();
       }
     });
+
+    // iOS Safari / WebKit lifecycle: pagehide is the only reliable teardown event
+    window.addEventListener('pagehide', () => {
+      if (this.isDirty.value) {
+        void this.flush();
+      }
+    });
   }
 
   public markDirty(): void {

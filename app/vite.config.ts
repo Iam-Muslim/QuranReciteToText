@@ -25,4 +25,19 @@ export default defineConfig({
       ],
     },
   },
+  build: {
+    chunkSizeWarningLimit: 800,
+    rollupOptions: {
+      output: {
+        manualChunks(id: string) {
+          if (id.includes('wavesurfer.js')) {
+            return 'vendor-wavesurfer';
+          }
+          if (id.includes('jszip')) {
+            return 'vendor-jszip';
+          }
+        },
+      },
+    },
+  },
 });

@@ -822,4 +822,45 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown));
   from { transform: scale(0.97); opacity: 0; }
   to { transform: scale(1); opacity: 1; }
 }
+
+@media (max-width: 640px) {
+  .modal-overlay {
+    padding: 0;
+    align-items: flex-end;
+  }
+  .export-modal {
+    width: 100vw;
+    max-width: 100vw;
+    max-height: 94dvh;
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+  .modal-header {
+    padding: 10px 14px;
+  }
+  .modal-body {
+    padding: 12px 14px;
+  }
+  .format-grid {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+  .all-surahs-banner {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 8px 14px;
+  }
+  .batch-mode-toggle {
+    width: 100%;
+    justify-content: space-between;
+  }
+  .scope-tabs-bar {
+    padding: 6px 14px;
+    overflow-x: auto;
+  }
+  .modal-footer {
+    padding: 10px 14px calc(10px + env(safe-area-inset-bottom, 0px));
+  }
+}
 </style>

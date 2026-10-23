@@ -14,6 +14,9 @@
       @drop.prevent="handleFileDrop"
       @wheel="handleTimelineWheel"
       @mousedown="handleTimelineMouseDown"
+      @touchstart="handleTimelineTouchStart"
+      @touchmove="handleTimelineTouchMove"
+      @touchend="handleTimelineTouchEnd"
     >
       <!-- Drop Overlay -->
       <div v-if="isDraggingFile" class="drag-drop-overlay">
@@ -582,6 +585,9 @@ const {
   handleScrollbarTrackClick,
   startDragScrollbarThumb,
   handleTimelineWheel: handleWheelRaw,
+  handleTimelineTouchStart,
+  handleTimelineTouchMove,
+  handleTimelineTouchEnd,
 } = useTimelineDrag(
   transport.getWaveSurfer,
   zoomLevel,

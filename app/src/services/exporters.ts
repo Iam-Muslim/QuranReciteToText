@@ -739,6 +739,31 @@ export function downloadFile(content: string, filename: string, mimeType: string
 }
 
 export function downloadBlob(blob: Blob, filename: string) {
+  // Mobile browsers (iOS Safari, Android Chrome): trigger native system share sheet if available
+  if (typeof navigator !== 'undefined' && 'share' in navigator && 'canShare' in navigator) {
+    try {
+      const file = new File([blob], filename, { type: blob.type || 'application/octet-stream' });
+      if (navigator.canShare({ files: [file] })) {
+        navigator.share({
+          files: [file],
+          title: filename,
+        }).catch((err) => {
+          if (err?.name !== 'AbortError') {
+            console.debug('Web Share aborted or failed, fallback to download:', err);
+            triggerNativeDownload(blob, filename);
+          }
+        });
+        return;
+      }
+    } catch {
+      // Fallback to standard link download
+    }
+  }
+
+  triggerNativeDownload(blob, filename);
+}
+
+function triggerNativeDownload(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -746,5 +771,5 @@ export function downloadBlob(blob: Blob, filename: string) {
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

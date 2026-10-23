@@ -106,7 +106,7 @@ export function useTimingImporter(
     const input = document.createElement('input');
     input.type = 'file';
     input.multiple = true;
-    input.accept = '.json,audio/*,video/*';
+    input.accept = '.json,application/json,audio/*,*/*';
     input.onchange = () => {
       if (input.files && input.files.length > 0) {
         groupTimingEntries(Array.from(input.files).map(f => ({ name: f.name, size: f.size, file: f })));

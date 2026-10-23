@@ -345,6 +345,40 @@ export function useTimelineDrag(
     syncTrackScroll();
   }
 
+  let initialPinchDistance = 0;
+  let initialZoomOnPinch = 0;
+
+  function getDistance(t1: Touch, t2: Touch): number {
+    return Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+  }
+
+  function handleTimelineTouchStart(e: TouchEvent) {
+    if (e.touches.length === 2) {
+      initialPinchDistance = getDistance(e.touches[0], e.touches[1]);
+      initialZoomOnPinch = zoomLevel.value;
+    }
+  }
+
+  function handleTimelineTouchMove(e: TouchEvent) {
+    if (e.touches.length === 2 && initialPinchDistance > 0) {
+      e.preventDefault();
+      const currentDist = getDistance(e.touches[0], e.touches[1]);
+      const ratio = currentDist / initialPinchDistance;
+      const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+      const targetZoom = Math.round(initialZoomOnPinch * ratio);
+      const delta = targetZoom - zoomLevel.value;
+      if (Math.abs(delta) >= 2) {
+        adjustZoom(delta, midX);
+      }
+    }
+  }
+
+  function handleTimelineTouchEnd(e: TouchEvent) {
+    if (e.touches.length < 2) {
+      initialPinchDistance = 0;
+    }
+  }
+
   return {
     isPanning,
     activeDraggingDividerId,
@@ -358,5 +392,8 @@ export function useTimelineDrag(
     handleScrollbarTrackClick,
     startDragScrollbarThumb,
     handleTimelineWheel,
+    handleTimelineTouchStart,
+    handleTimelineTouchMove,
+    handleTimelineTouchEnd,
   };
 }

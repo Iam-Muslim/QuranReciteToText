@@ -361,6 +361,11 @@ function requestRemove(surahNum: number) {
 .recitation-card:hover .btn-remove {
   opacity: 0.8;
 }
+@media (hover: none), (max-width: 768px) {
+  .btn-remove {
+    opacity: 0.65;
+  }
+}
 .btn-remove:hover,
 .btn-remove.armed {
   color: var(--ruby-primary);

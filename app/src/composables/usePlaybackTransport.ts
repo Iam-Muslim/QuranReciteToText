@@ -75,6 +75,50 @@ export function usePlaybackTransport(
       updatePlayheadDirect(t);
     }
   }
+  let wakeLockSentinel: any = null;
+
+  async function requestWakeLock() {
+    if (typeof navigator !== 'undefined' && 'wakeLock' in navigator) {
+      try {
+        wakeLockSentinel = await (navigator as any).wakeLock.request('screen');
+      } catch {}
+    }
+  }
+
+  function releaseWakeLock() {
+    if (wakeLockSentinel) {
+      try {
+        wakeLockSentinel.release();
+      } catch {}
+      wakeLockSentinel = null;
+    }
+  }
+
+  function updateMediaSession() {
+    if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
+    const s = projectStore.activeSurah.value;
+    const proj = projectStore.project;
+    const reciter = proj?.reciter || proj?.settings?.reciter_name || 'Quran Reciter';
+    const surahName = s ? `${s.surah_name_arabic || ''} · ${s.surah_name_english || ''}`.trim() : 'Quran Recitation';
+
+    try {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: surahName || 'Quran Recite2Text',
+        artist: reciter,
+        album: proj?.project_name || 'Quran Recitations',
+        artwork: [
+          { src: '/logo.png', sizes: '512x512', type: 'image/png' }
+        ]
+      });
+
+      navigator.mediaSession.setActionHandler('play', () => { togglePlay(); });
+      navigator.mediaSession.setActionHandler('pause', () => { togglePlay(); });
+      navigator.mediaSession.setActionHandler('seekbackward', (details) => { skipBackward(details?.seekOffset || 3); });
+      navigator.mediaSession.setActionHandler('seekforward', (details) => { skipForward(details?.seekOffset || 3); });
+      navigator.mediaSession.setActionHandler('previoustrack', () => { projectStore.jumpToPrevAyah(); });
+      navigator.mediaSession.setActionHandler('nexttrack', () => { projectStore.jumpToNextAyah(); });
+    } catch {}
+  }
 
   function handleThemeChanged() {
     if (!wavesurfer) return;
@@ -156,12 +200,15 @@ export function usePlaybackTransport(
       isPlaying.value = true;
       projectStore.isPlaying.value = true;
       startPlaybackClock();
+      updateMediaSession();
+      void requestWakeLock();
     });
 
     wavesurfer.on('pause', () => {
       isPlaying.value = false;
       projectStore.isPlaying.value = false;
       stopPlaybackClock();
+      releaseWakeLock();
     });
 
     wavesurfer.on('timeupdate', (t: number) => {
@@ -276,6 +323,13 @@ export function usePlaybackTransport(
 
   function togglePlay() {
     if (!wavesurfer) return;
+    // Resume suspended AudioContext on mobile user touch
+    try {
+      const media = (wavesurfer as any).getMediaElement?.();
+      if (media && media.paused) {
+        media.play().catch(() => {});
+      }
+    } catch {}
     if (!hasAudioLoaded.value && wavesurfer.getDuration() > 0) {
       hasAudioLoaded.value = true;
     }
@@ -376,6 +430,7 @@ export function usePlaybackTransport(
   }
 
   function destroy() {
+    releaseWakeLock();
     stopPlaybackClock();
     if (wavesurfer) {
       wavesurfer.destroy();
