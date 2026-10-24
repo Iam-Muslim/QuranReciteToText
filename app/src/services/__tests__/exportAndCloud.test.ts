@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { exportCanonicalJson, exportAllCanonicalJson } from '../exporters';
 import { normalizeHfRepoInput } from '../cloudDataset';
+import { parseCanonicalSurahs } from '../segmentIngest';
 import type { AlignerProject, SurahItem } from '../../types/aligner';
 
 describe('Canonical JSON Exporter & Cloud Helpers', () => {
@@ -56,22 +57,27 @@ describe('Canonical JSON Exporter & Cloud Helpers', () => {
     surahs: [dummySurah],
   };
 
-  it('exportCanonicalJson produces clean single-surah JSON with direct ayahs and words', () => {
+  it('exportCanonicalJson produces clean single-surah JSON without metadata bloat', () => {
     const jsonStr = exportCanonicalJson(dummySurah);
     const parsed = JSON.parse(jsonStr);
 
     expect(parsed.surah).toBe(1);
-    expect(parsed.surah_name_arabic).toBe('الفاتحة');
-    expect(parsed.duration).toBe(35.5);
-    expect(parsed.status).toBe('verified');
+    // Verified: No bloated metadata fields
+    expect(parsed.surah_name_arabic).toBeUndefined();
+    expect(parsed.surah_name_english).toBeUndefined();
+    expect(parsed.duration).toBeUndefined();
+    expect(parsed.status).toBeUndefined();
+    expect(parsed.peaks).toBeUndefined();
+
     expect(parsed.intro?.text).toBe('أعوذ بالله من الشيطان الرجيم');
     expect(parsed.ayahs).toHaveLength(1);
     expect(parsed.ayahs[0].words).toHaveLength(4);
     expect(parsed.ayahs[0].words[0].text).toBe('بِسْمِ');
     expect(parsed.ayahs[0].words[0].w).toBe(1);
+    expect(parsed.ayahs[0].words[0].score).toBeUndefined();
   });
 
-  it('exportAllCanonicalJson exports whole project with all surahs in canonical structure', () => {
+  it('exportAllCanonicalJson exports whole project with all surahs in canonical clean structure', () => {
     const jsonStr = exportAllCanonicalJson(dummyProject);
     const parsed = JSON.parse(jsonStr);
 
@@ -80,8 +86,57 @@ describe('Canonical JSON Exporter & Cloud Helpers', () => {
     expect(parsed.riwayah).toBe('Hafs');
     expect(parsed.surahs).toHaveLength(1);
     expect(parsed.surahs[0].surah).toBe(1);
-    expect(parsed.surahs[0].duration).toBe(35.5);
+    expect(parsed.surahs[0].surah_name_arabic).toBeUndefined();
+    expect(parsed.surahs[0].duration).toBeUndefined();
     expect(parsed.surahs[0].ayahs[0].words).toHaveLength(4);
+  });
+
+  it('strips peak_frame and peak_timestamp from phonemes and round-trips correctly', () => {
+    const surahWithPhonemePeaks: SurahItem = {
+      surah_number: 1,
+      surah_name_arabic: 'الفاتحة',
+      surah_name_english: 'Al-Faatiha',
+      status: 'verified',
+      ayahs: [
+        {
+          ayah: 1,
+          start: 0,
+          end: 2.0,
+          segments: [
+            {
+              segment: 1,
+              start: 0,
+              end: 2.0,
+              words: [
+                {
+                  word: 'بِسْمِ',
+                  location: '1:1:1',
+                  start: 0,
+                  end: 0.8,
+                  score: 1.0,
+                  phonemes: [
+                    { phoneme: 'بِ', start: 0, end: 0.3, peak_frame: 69, peak_timestamp: 0.15 } as any,
+                    { phoneme: 'س', start: 0.3, end: 0.55, peak_frame: 74, peak_timestamp: 0.4 } as any,
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    const exportedStr = exportCanonicalJson(surahWithPhonemePeaks);
+    const parsed = JSON.parse(exportedStr);
+
+    const firstWordPhonemes = parsed.ayahs[0].words[0].phonemes;
+    expect(firstWordPhonemes).toHaveLength(2);
+    expect(firstWordPhonemes[0].phoneme).toBe('بِ');
+    expect(firstWordPhonemes[0].start).toBe(0);
+    expect(firstWordPhonemes[0].end).toBe(0.3);
+    // Verified: No peak frame or timestamp in export
+    expect(firstWordPhonemes[0].peak_frame).toBeUndefined();
+    expect(firstWordPhonemes[0].peak_timestamp).toBeUndefined();
   });
 
   it('normalizeHfRepoInput handles full URLs and shorthand', () => {
@@ -146,5 +201,23 @@ describe('Canonical JSON Exporter & Cloud Helpers', () => {
     expect(exported.ayahs[0].words[4].is_repetition).toBeUndefined();
     expect(exported.ayahs[0].words[4].w).toBe(3);
     expect(exported.ayahs[0].words[5].w).toBe(4);
+  });
+
+  it('round-trip test: exported unbloated canonical JSON is loaded by parseCanonicalSurahs', () => {
+    const rawJson = exportCanonicalJson(dummySurah);
+    const parsedJson = JSON.parse(rawJson);
+
+    const { surahs, firstAddedSurahNum } = parseCanonicalSurahs(parsedJson);
+    expect(surahs).toHaveLength(1);
+    expect(firstAddedSurahNum).toBe(1);
+
+    const s = surahs[0];
+    expect(s.surah_number).toBe(1);
+    expect(s.surah_name_arabic).toBe('الفاتحة');
+    expect(s.surah_name_english).toBe('Al-Fatihah');
+    expect(s.ayahs).toHaveLength(1);
+    expect(s.ayahs[0].segments[0].words).toHaveLength(4);
+    expect(s.ayahs[0].segments[0].words[0].word).toBe('بِسْمِ');
+    expect(s.ayahs[0].segments[0].words[0].location).toBe('1:1:1');
   });
 });

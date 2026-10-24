@@ -83,18 +83,32 @@ function wordEnd(w: any): number | undefined {
   return num(pick(w, ['end', 't1', 'to', 'time_end']));
 }
 
-/** Optional per-word phoneme rows: { phoneme, start, end } (any alias of start/end). */
+/** Optional per-word phoneme rows: { phoneme, start, end } or [phoneme, start, end] tuples. */
 function wordPhonemes(w: any, scale: number): PhonemeItem[] {
   const raw = w && Array.isArray(w.phonemes) ? w.phonemes : undefined;
   if (!raw || raw.length === 0) return [];
   const items: PhonemeItem[] = [];
   for (const p of raw) {
+    if (!p) continue;
+    if (Array.isArray(p) && p.length >= 3) {
+      const pn = String(p[0] || '').trim();
+      const ps = num(p[1]);
+      const pe = num(p[2]);
+      if (pn && ps !== undefined && pe !== undefined) {
+        items.push({
+          phoneme: pn,
+          start: Number((ps * scale).toFixed(3)),
+          end: Number((pe * scale).toFixed(3)),
+        });
+      }
+      continue;
+    }
     const ps = num(wordStart(p));
     const pe = num(wordEnd(p));
-    const pn = typeof p === 'string' ? p : pick(p, ['phoneme', 'char', 'symbol', 'text']);
+    const pn = typeof p === 'string' ? p : pick(p, ['phoneme', 'p', 'char', 'symbol', 'text']);
     if (pn === undefined || ps === undefined || pe === undefined) continue;
     items.push({
-      phoneme: String(pn),
+      phoneme: String(pn).trim(),
       start: Number((ps * scale).toFixed(3)),
       end: Number((pe * scale).toFixed(3)),
     });

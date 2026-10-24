@@ -3,7 +3,7 @@ import { projectStore } from './projectStore';
 import { isTauriEnvironment, createProject, saveProject, resolveAudioSourceUrl } from './api';
 import { vaultSave, safeProjectFileName } from './projectVault';
 import { uploadFiles } from '@huggingface/hub';
-import { exportCanonicalJson } from './exporters';
+import { exportCanonicalJson, cleanPhonemes } from './exporters';
 
 const STORAGE_KEY_REPO = 'quran_hf_dataset_repo';
 const STORAGE_KEY_TOKEN = 'quran_hf_access_token';
@@ -254,7 +254,7 @@ export function normalizeRawAyahsToStudio(rawAyahs: any[], surahNumber: number):
           end: typeof w.end === 'number' ? w.end : 0,
           score: typeof w.score === 'number' ? w.score : 1,
           is_repetition: !!(w.is_repetition || p.is_repetition),
-          phonemes: w.phonemes || [],
+          phonemes: cleanPhonemes(w.phonemes || []),
         }));
         const pStart = words.length > 0 ? words[0].start : (p.start ?? 0);
         const pEnd = words.length > 0 ? words[words.length - 1].end : (p.end ?? 0);
@@ -289,7 +289,7 @@ export function normalizeRawAyahsToStudio(rawAyahs: any[], surahNumber: number):
       end: typeof w.end === 'number' ? w.end : 0,
       score: typeof w.score === 'number' ? w.score : 1,
       is_repetition: !!w.is_repetition,
-      phonemes: w.phonemes || [],
+      phonemes: cleanPhonemes(w.phonemes || []),
     }));
 
     const aStart = words.length > 0 ? words[0].start : (a.start ?? 0);

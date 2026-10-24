@@ -1,4 +1,4 @@
-import type { SurahItem, AlignerProject } from '../types/aligner';
+import type { SurahItem, AlignerProject, PhonemeItem } from '../types/aligner';
 import JSZip from 'jszip';
 import { getAudioStreamUrl } from './api';
 
@@ -87,17 +87,46 @@ function extractWordIndex(w: any, fallbackIdx: number): number {
   return fallbackIdx + 1;
 }
 
-function cleanWordItem(w: any, fallbackIdx: number) {
+export function cleanPhonemes(raw: any[]): PhonemeItem[] {
+  if (!Array.isArray(raw) || raw.length === 0) return [];
+  const out: PhonemeItem[] = [];
+  for (const p of raw) {
+    if (!p) continue;
+    if (Array.isArray(p) && p.length >= 3) {
+      const pn = String(p[0] || '').trim();
+      const ps = Number(p[1]);
+      const pe = Number(p[2]);
+      if (pn && !isNaN(ps) && !isNaN(pe)) {
+        out.push({ phoneme: pn, start: Number(ps.toFixed(3)), end: Number(pe.toFixed(3)) });
+      }
+      continue;
+    }
+    const pn = typeof p === 'string' ? p : (p.phoneme ?? p.p ?? p.char ?? p.symbol ?? p.text ?? '');
+    const s = typeof p.start === 'number' ? p.start : (typeof p.start_ms === 'number' ? p.start_ms / 1000 : 0);
+    const e = typeof p.end === 'number' ? p.end : (typeof p.end_ms === 'number' ? p.end_ms / 1000 : s);
+    const cleanPh = String(pn || '').trim();
+    if (cleanPh) {
+      out.push({
+        phoneme: cleanPh,
+        start: Number(s.toFixed(3)),
+        end: Number(e.toFixed(3)),
+      });
+    }
+  }
+  return out;
+}
+
+export function cleanWordItem(w: any, fallbackIdx: number) {
   const text = w.word || w.text || w.text_arabic || '';
   const wStart = typeof w.start === 'number' ? w.start : (typeof w.start_ms === 'number' ? w.start_ms / 1000 : 0);
   const wEnd = typeof w.end === 'number' ? w.end : (typeof w.end_ms === 'number' ? w.end_ms / 1000 : 0);
+  const phonemes = cleanPhonemes(w.phonemes || []);
   return {
     w: extractWordIndex(w, fallbackIdx),
-    text,
+    ...(text ? { text } : {}),
     start: Number(wStart.toFixed(3)),
     end: Number(wEnd.toFixed(3)),
-    ...(typeof w.score === 'number' ? { score: Number(w.score.toFixed(3)) } : {}),
-    ...(Array.isArray(w.phonemes) && w.phonemes.length > 0 ? { phonemes: w.phonemes } : {}),
+    ...(phonemes.length > 0 ? { phonemes } : {}),
   };
 }
 
@@ -159,15 +188,22 @@ export function buildCleanAyahs(surah: SurahItem) {
 
 export function exportCanonicalJson(surah: SurahItem, minify: boolean = true): string {
   const ayahs = buildCleanAyahs(surah);
-  const outDoc = {
+  const outDoc: any = {
     surah: surah.surah_number,
-    surah_name_arabic: surah.surah_name_arabic,
-    surah_name_english: surah.surah_name_english,
-    duration: Number(surah.audio_duration_seconds) || 0,
-    status: surah.status || 'verified',
-    ...(surah.intro ? { intro: surah.intro } : {}),
     ayahs,
   };
+  if (surah.intro) {
+    const rawIntroWords = Array.isArray(surah.intro.words) && surah.intro.words.length > 0 ? surah.intro.words : undefined;
+    const introWords = rawIntroWords ? rawIntroWords.map((w, idx) => cleanWordItem(w, idx)) : undefined;
+    const introStart = introWords && introWords.length > 0 ? introWords[0].start : (surah.intro.start ?? 0);
+    const introEnd = introWords && introWords.length > 0 ? introWords[introWords.length - 1].end : (surah.intro.end ?? 0);
+    outDoc.intro = {
+      start: Number(introStart.toFixed(3)),
+      end: Number(introEnd.toFixed(3)),
+      ...(surah.intro.text ? { text: surah.intro.text } : {}),
+      ...(introWords ? { words: introWords } : {}),
+    };
+  }
   return minify ? JSON.stringify(outDoc) : JSON.stringify(outDoc, null, 2);
 }
 
@@ -458,21 +494,30 @@ export function exportPremiereMarkers(surah: SurahItem): string {
 // ==========================================
 
 export function exportAllCanonicalJson(project: AlignerProject, minify: boolean = true): string {
-  const surahs = project.surahs.map(s => ({
-    surah: s.surah_number,
-    surah_name_arabic: s.surah_name_arabic,
-    surah_name_english: s.surah_name_english,
-    duration: Number(s.audio_duration_seconds) || 0,
-    status: s.status || 'verified',
-    ...(s.intro ? { intro: s.intro } : {}),
-    ayahs: buildCleanAyahs(s),
-  }));
+  const surahs = (project.surahs || []).map(s => {
+    const cleanS: any = {
+      surah: s.surah_number,
+      ayahs: buildCleanAyahs(s),
+    };
+    if (s.intro) {
+      const rawIntroWords = Array.isArray(s.intro.words) && s.intro.words.length > 0 ? s.intro.words : undefined;
+      const introWords = rawIntroWords ? rawIntroWords.map((w, idx) => cleanWordItem(w, idx)) : undefined;
+      const introStart = introWords && introWords.length > 0 ? introWords[0].start : (s.intro.start ?? 0);
+      const introEnd = introWords && introWords.length > 0 ? introWords[introWords.length - 1].end : (s.intro.end ?? 0);
+      cleanS.intro = {
+        start: Number(introStart.toFixed(3)),
+        end: Number(introEnd.toFixed(3)),
+        ...(s.intro.text ? { text: s.intro.text } : {}),
+        ...(introWords ? { words: introWords } : {}),
+      };
+    }
+    return cleanS;
+  });
 
   const doc = {
     project_name: project.project_name,
     reciter: project.reciter,
     riwayah: project.settings?.riwayah || 'Hafs',
-    app_version: project.app_version || '2.0.0',
     total_surahs: surahs.length,
     surahs,
   };

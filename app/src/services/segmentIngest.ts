@@ -6,6 +6,7 @@ import type {
 } from '../types/aligner';
 import { QURAN_SURAHS } from '../data/quranMetadata';
 import { resolveAudioSourceUrl } from './api';
+import { cleanPhonemes } from './exporters';
 
 export function isIntroSegment(seg: any): boolean {
   if (!seg) return false;
@@ -333,18 +334,18 @@ export function parseCanonicalSurahs(
     let effectiveIntro: SurahIntro | undefined = undefined;
     if (sData.intro && sData.intro.words && sData.intro.words.length > 0) {
       effectiveIntro = {
-        text: sData.intro.text || sData.intro.transcribed_text || sData.intro.words.map((w: any) => w.word).join(' '),
+        text: sData.intro.text || sData.intro.transcribed_text || sData.intro.words.map((w: any) => w.word || w.text || '').join(' '),
         start: sData.intro.start ?? sData.intro.words[0].start,
         end: sData.intro.end ?? sData.intro.words[sData.intro.words.length - 1].end,
-        words: sData.intro.words.map((w: any) => ({
-          word: String(w.word || ''),
-          location: String(w.location || `0:1:1`),
-          ref: String(w.ref || w.word || ''),
+        words: sData.intro.words.map((w: any, idx: number) => ({
+          word: String(w.word || w.text || ''),
+          location: String(w.location || `0:1:${w.w || idx + 1}`),
+          ref: String(w.ref || w.word || w.text || ''),
           start: Number(w.start),
           end: Number(w.end),
           score: Number(w.score ?? 1.0),
           is_edited: false,
-          phonemes: w.phonemes || [],
+          phonemes: cleanPhonemes(w.phonemes || []),
         })),
       };
     } else if (hasSegments) {
@@ -357,14 +358,14 @@ export function parseCanonicalSurahs(
             const wRelStart = Number(w.start ?? 0);
             const wRelEnd = Number(w.end ?? Math.max(wRelStart + 0.1, wRelStart));
             introWords.push({
-              word: String(w.word || ''),
+              word: String(w.word || w.text || ''),
               location: String(w.location || `0:1:${introWords.length + 1}`),
-              ref: String(w.ref || w.word || ''),
+              ref: String(w.ref || w.word || w.text || ''),
               start: Number((segStart + wRelStart).toFixed(3)),
               end: Number((segStart + wRelEnd).toFixed(3)),
               score: Number(seg.confidence ?? 1.0),
               is_edited: false,
-              phonemes: w.phonemes || [],
+              phonemes: cleanPhonemes(w.phonemes || []),
             });
           }
         }
@@ -381,17 +382,78 @@ export function parseCanonicalSurahs(
     }
 
     const normalizedAyahs: AyahItem[] = (sData.ayahs || []).map((a: any) => {
-      const segs = Array.isArray(a.segments) && a.segments.length > 0 ? a.segments : (
-        Array.isArray(a.words) && a.words.length > 0 ? [{
+      const aNum = a.ayah || a.ayah_number || 1;
+      let segs: any[] = [];
+
+      if (Array.isArray(a.segments) && a.segments.length > 0) {
+        segs = a.segments.map((seg: any, sIdx: number) => ({
+          ...seg,
+          segment: seg.segment || sIdx + 1,
+          start: Number(seg.start ?? 0),
+          end: Number(seg.end ?? 0),
+          transcribed_text: seg.transcribed_text || (seg.words || []).map((w: any) => w.word || w.text || '').join(' '),
+          words: (seg.words || []).map((w: any, idx: number) => ({
+            word: String(w.word || w.text || ''),
+            location: String(w.location || `${sNum}:${aNum}:${w.w || idx + 1}`),
+            ref: String(w.ref || w.word || w.text || ''),
+            start: Number(w.start ?? 0),
+            end: Number(w.end ?? 0),
+            score: Number(w.score ?? 1.0),
+            is_edited: false,
+            is_repetition: !!w.is_repetition,
+            phonemes: cleanPhonemes(w.phonemes || []),
+          })),
+        }));
+      } else if (Array.isArray(a.phrases) && a.phrases.length > 0 && Array.isArray(a.words)) {
+        const allWords = a.words.map((w: any, idx: number) => ({
+          word: String(w.word || w.text || ''),
+          location: String(w.location || `${sNum}:${aNum}:${w.w || idx + 1}`),
+          ref: String(w.ref || w.word || w.text || ''),
+          start: Number(w.start ?? 0),
+          end: Number(w.end ?? 0),
+          score: Number(w.score ?? 1.0),
+          is_edited: false,
+          is_repetition: !!w.is_repetition,
+          phonemes: cleanPhonemes(w.phonemes || []),
+        }));
+        segs = a.phrases.map((p: any, pIdx: number) => {
+          const pStart = Number(p.start ?? 0);
+          const pEnd = Number(p.end ?? 0);
+          const pWords = allWords.filter((w: AlignedWord) => w.start >= pStart - 0.05 && w.end <= pEnd + 0.05);
+          return {
+            segment: p.phrase || pIdx + 1,
+            start: pStart,
+            end: pEnd,
+            transcribed_text: pWords.map((w: AlignedWord) => w.word).join(' '),
+            words: pWords.length > 0 ? pWords : allWords,
+          };
+        });
+      } else if (Array.isArray(a.words) && a.words.length > 0) {
+        const words: AlignedWord[] = a.words.map((w: any, idx: number) => ({
+          word: String(w.word || w.text || ''),
+          location: String(w.location || `${sNum}:${aNum}:${w.w || idx + 1}`),
+          ref: String(w.ref || w.word || w.text || ''),
+          start: Number(w.start ?? 0),
+          end: Number(w.end ?? 0),
+          score: Number(w.score ?? 1.0),
+          is_edited: false,
+          is_repetition: !!w.is_repetition,
+          phonemes: cleanPhonemes(w.phonemes || []),
+        }));
+        segs = [{
           segment: 1,
-          start: a.start ?? a.words[0]?.start ?? 0,
-          end: a.end ?? a.words[a.words.length - 1]?.end ?? 0,
-          transcribed_text: a.words.map((w: any) => w.word).join(' '),
-          words: a.words,
-        }] : []
-      );
+          start: a.start ?? words[0]?.start ?? 0,
+          end: a.end ?? words[words.length - 1]?.end ?? 0,
+          transcribed_text: words.map((w) => w.word).join(' '),
+          words,
+        }];
+      }
+
       return {
         ...a,
+        ayah: aNum,
+        start: a.start ?? (segs[0]?.start ?? 0),
+        end: a.end ?? (segs[segs.length - 1]?.end ?? 0),
         segments: segs,
       };
     });
@@ -403,7 +465,7 @@ export function parseCanonicalSurahs(
       audio_file: audioPath,
       audio_url: effectiveUrl,
       audio_duration_seconds: totalDur,
-      status: 'needs_review',
+      status: sData.status || 'verified',
       intro: effectiveIntro,
       ayahs: normalizedAyahs,
     };
