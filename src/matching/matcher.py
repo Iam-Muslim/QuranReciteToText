@@ -254,6 +254,26 @@ def _align_and_package_ayahs(
         if not qwords:
             continue
 
+        if has_repeated and len(qwords) > 1:
+            chosen_tokens = []
+            next_start = float('inf')
+            for rw in reversed(ay_words):
+                w_idx = rw.global_index
+                passes = matched_word_tokens.get(w_idx, [])
+                if not passes:
+                    continue
+                valid = [p for p in passes if p and (p[-1].end <= next_start + 0.05)]
+                chosen = valid[-1] if valid else passes[0]
+                chosen_tokens.append((rw, chosen))
+                if chosen:
+                    next_start = chosen[0].start
+
+            chosen_tokens.reverse()
+            qwords = [
+                _build_qword(rw, p, matched_word_scores.get(rw.global_index, 1.0))
+                for rw, p in chosen_tokens
+            ]
+
         sub_segments: Optional[List[AyahSubSegment]] = None
         repeated_ranges: Optional[List[str]] = None
         repeated_text: Optional[List[str]] = None
