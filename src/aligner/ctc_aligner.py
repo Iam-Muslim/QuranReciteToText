@@ -43,6 +43,9 @@ _MIN_PHONEME_DURATION_FRAMES = 1.0
 
 _MADD_GHUNNAH_SUBS = ('اا', 'ۦۦ', 'ۥۥ', 'ممم', 'ننن', 'ںںں', '۾۾۾', 'ييي', 'ووو')
 _MADD_GHUNNAH_EXACT = {'ں', '۾', 'ۥ', 'ۦ', 'اااا', 'ااااا', 'اااااا'}
+# Idgham with Ghunnah into و / ي: the hold opens with the PREVIOUS word's Nun/Tanween
+# («رَجًّا وَبُسَّتِ»), so it must not pull the boundary back to the previous token.
+_IDGHAM_INTO_NEXT_SUBS = ('ووو', 'ييي')
 
 
 def default_quran_token_classifier(tok: str) -> AcousticAnchorType:
@@ -141,6 +144,50 @@ def _trace_speech_decay_forward(
             if dip_count > 3:
                 break
     return float(decay_idx * 0.010)
+
+
+def _find_closure_onset(
+    frame_db_10ms: Optional[np.ndarray],
+    earliest_sec: float,
+    pk_sec: float,
+    drop_db: float = 10.0,
+    min_s: float = 0.030,
+    max_s: float = 0.400,
+) -> Optional[float]:
+    """Finds the onset of the last articulatory closure (short energy dip) before a token's peak.
+
+    Acoustic Rationale:
+    In Wasl, a consonant begins at its closure, not at its release: the occlusion of ق/ت/ك/ب,
+    a held Shaddah, or the glottal catch of ء is a short dip (30-400ms, >=10 dB under the
+    local level) that sits between the previous token and the CTC spike of the next one.
+    The spike itself lands after the release (Zipformer peaks late), so the closure is the
+    earliest reliable start of the token. When the model drops the stop entirely (e.g. the
+    ق of «اقرأ» after the Basmala), its closure still marks where the word begins.
+    Returns the dip onset in seconds, or None when no closure-like dip is found.
+    """
+    if frame_db_10ms is None:
+        return None
+    i0 = max(0, int(round(earliest_sec / 0.010)))
+    i1 = min(int(round(pk_sec / 0.010)), len(frame_db_10ms) - 1)
+    if i1 - i0 < 4:
+        return None
+    seg = frame_db_10ms[i0:i1 + 1]
+    dip_th = float(np.median(seg)) - drop_db
+    best = None
+    run_start = -1
+    for i in range(len(seg)):
+        if seg[i] < dip_th:
+            if run_start < 0:
+                run_start = i
+        else:
+            if run_start > 0:  # dip preceded by sound inside the window, and sound has returned
+                run_len_s = (i - run_start) * 0.010
+                if min_s <= run_len_s <= max_s:
+                    best = run_start
+            run_start = -1
+    if best is None:
+        return None
+    return float((i0 + best) * 0.010 + 0.010)  # centre of the first quiet 20ms window
 
 try:
     from numba import njit
@@ -709,6 +756,13 @@ class CtcViterbiAligner:
                 if c_prev == AcousticAnchorType.SUSTAINED_HOLD:
                     # Token k-1 is a sustained Madd / Ghunnah hold: holds until token k's onset
                     boundary = max(min_boundary, min(e_secs[k - 1], target_boundary))
+                elif c_curr == AcousticAnchorType.SUSTAINED_HOLD and not any(
+                    m in target_phonemes[k].phoneme for m in _IDGHAM_INTO_NEXT_SUBS
+                ):
+                    # Token k is a sustained Madd / Ghunnah hold (right-anchored): its spike fires
+                    # at the END of the hold, so the blanks before it are the hold itself. It starts
+                    # as soon as token k-1 is done (e.g. the held ن of «الأخدود * النار»).
+                    boundary = max(min_boundary, min(e_secs[k - 1] + actual_frame_step, target_boundary))
                 elif c_curr in (AcousticAnchorType.GEMINATE_CLOSURE, AcousticAnchorType.BURST_RELEASE):
                     # Token k is a stop/closure: boundary sits at the start of closure
                     boundary = max(min_boundary, min(e_secs[k - 1], target_boundary))
@@ -754,6 +808,17 @@ class CtcViterbiAligner:
                         # No audio available: trust the trellis switch and legacy heuristic only
                         boundary = w_switch * switch_sec + w_prior * prior_sec
                     boundary = max(min_boundary, min(boundary, target_boundary))
+
+                # A closure (short dip) between the two peaks is the onset of token k:
+                # never start token k after it.
+                if c_curr != AcousticAnchorType.SUSTAINED_HOLD:
+                    closure_sec = _find_closure_onset(
+                        frame_db_10ms=frame_db_10ms,
+                        earliest_sec=pk_secs[k - 1] + min_dur_s * 0.5,
+                        pk_sec=pk_secs[k],
+                    )
+                    if closure_sec is not None:
+                        boundary = max(min_boundary, min(boundary, closure_sec))
 
                 # Hard invariant: Token k always retains at least 0.5 frame before its emission peak
                 boundary = min(boundary, max(min_boundary, pk_secs[k] - actual_frame_step * 0.5))
