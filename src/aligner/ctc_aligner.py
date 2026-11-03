@@ -711,12 +711,16 @@ class CtcViterbiAligner:
                     _p_end_lim = getattr(matched_pause, "start_sec", getattr(matched_pause, "start", p_cut))
 
                 # End token k-1: trace forward acoustic energy decay into pause (bounded by end limit)
-                e_secs[k - 1] = _trace_speech_decay_forward(
-                    frame_db_10ms=frame_db_10ms,
-                    pk_sec=pk_secs[k - 1],
-                    latest_sec=_p_end_lim,
-                    speech_th_db=speech_th_db,
-                    default_sec=min(_p_end_lim, e_secs[k - 1] + 2 * actual_frame_step),
+                e_secs[k - 1] = max(
+                    s_secs[k - 1] + min_dur_s,
+                    _trace_speech_decay_forward(
+                        frame_db_10ms=frame_db_10ms,
+                        pk_sec=pk_secs[k - 1],
+                        latest_sec=_p_end_lim,
+                        speech_th_db=speech_th_db,
+                        default_sec=min(_p_end_lim, e_secs[k - 1] + 2 * actual_frame_step),
+                        rel_drop_db=float(getattr(config, 'PAUSE_DECAY_REL_DROP_DB', 0.0)),
+                    ),
                 )
 
                 # Start token k: trace backward acoustic speech onset from peak (bounded by p_cut)

@@ -116,7 +116,8 @@ MICRO_PAUSE_MIN_GAP_S: float = 0.28   # 0.16 tested: neutral (no raw gaps land i
 # word's own peak energy instead of riding absolute silence (fixes +400-750ms end tails),
 # and hard-cap the trace window (was a fixed 0.800s).
 FINAL_DECAY_REL_DROP_DB: float = 14.0
-FINAL_DECAY_TRACE_MAX_S: float = 0.40
+FINAL_DECAY_TRACE_MAX_S: float = 3.50
+PAUSE_DECAY_REL_DROP_DB: float = 14.0
 
 # Where a word's end is clamped when it straddles a VAD Waqf pause
 # (aligner-side only). "cut" = legacy pause midpoint; "start" = physical silence onset,
