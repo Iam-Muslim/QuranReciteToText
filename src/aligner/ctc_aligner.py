@@ -52,12 +52,13 @@ def default_quran_token_classifier(tok: str) -> AcousticAnchorType:
     return AcousticAnchorType.STANDARD_CV
 
 
-def _get_pause_span(p: PauseInterval) -> Tuple[float, float, float]:
-    """Extracts (start_sec, end_sec, cut_point) from a pause interval."""
+def _get_pause_span(p: PauseInterval) -> Tuple[float, float, float, float]:
+    """Extracts (start_sec, end_sec, cut_point, duration_sec) from a pause interval."""
     s = float(getattr(p, "start_sec", getattr(p, "start", 0.0)))
     e = float(getattr(p, "end_sec", getattr(p, "end", 0.0)))
     cut = float(getattr(p, "optimal_cut_point", getattr(p, "cut_point", (s + e) * 0.5)))
-    return s, e, cut
+    dur = float(getattr(p, "duration_sec", getattr(p, "duration", e - s)))
+    return s, e, cut, dur
 
 
 def _compute_frame_db(audio_pcm: Optional[np.ndarray]) -> Tuple[Optional[np.ndarray], float]:
@@ -532,10 +533,10 @@ class CtcViterbiAligner:
             matched_pause = None
             if pause_intervals:
                 for p in pause_intervals:
-                    p_s, p_e, _ = _get_pause_span(p)
+                    p_s, p_e, _, p_dur = _get_pause_span(p)
                     if p_s <= gap_e_sec and p_e >= gap_s_sec:
                         overlap = min(gap_e_sec, p_e) - max(gap_s_sec, p_s)
-                        if overlap >= 0.06 or (p_e - p_s) >= 0.15:
+                        if overlap >= 0.06 or p_dur >= 0.15:
                             matched_pause = p
                             break
 
@@ -556,7 +557,7 @@ class CtcViterbiAligner:
             if matched_pause is not None or is_micro_pause:
                 # ─── WAQF / SAKT PAUSE GAP ───
                 if matched_pause is not None:
-                    p_s, _, p_cut = _get_pause_span(matched_pause)
+                    p_s, _, p_cut, _ = _get_pause_span(matched_pause)
                     p_end_lim = p_s if clamp_mode != "cut" else p_cut
                     p_min_db = getattr(matched_pause, "min_energy_db", None)
                     local_th = speech_th_db if (p_min_db is None or math.isnan(p_min_db)) else min(speech_th_db, max(p_min_db + 4.0, -45.0))
@@ -653,7 +654,7 @@ class CtcViterbiAligner:
         # Pause protection: enforce click-free cut point boundary between phrases
         if pause_intervals:
             for p in pause_intervals:
-                p_s, p_e, p_cut = _get_pause_span(p)
+                p_s, p_e, p_cut, _ = _get_pause_span(p)
                 if p_e <= p_s:
                     continue
                 pre_pause_clamp = p_s if clamp_mode == "start" else p_cut
