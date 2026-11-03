@@ -36,7 +36,7 @@ class AcousticAnchorType(IntEnum):
 
 
 _MADD_GHUNNAH_SUBS = ('اا', 'ۦۦ', 'ۥۥ', 'ممم', 'ننن', 'ںںں', '۾۾۾', 'ييي', 'ووو')
-_MADD_GHUNNAH_EXACT = {'ں', '۾', 'ۥ', 'ۦ', 'اااا', 'ااااا', 'اااااا'}
+_MADD_GHUNNAH_EXACT = {'ں', '۾', 'ۥ', 'ۦ'}
 _IDGHAM_INTO_NEXT_SUBS = ('ووو', 'ييي')
 
 
@@ -404,12 +404,12 @@ class CtcViterbiAligner:
         # Config pre-fetching (single lookup, zero inner-loop overhead)
         lookahead = float(getattr(config, "LOOKAHEAD_OFFSET_FRAMES", LOOKAHEAD_OFFSET_FRAMES))
         blank_penalty = float(getattr(config, "CTC_BLANK_PENALTY", CTC_BLANK_PENALTY))
-        clamp_mode = str(getattr(config, "PAUSE_END_CLAMP_MODE", "cut"))
+        clamp_mode = str(getattr(config, "PAUSE_END_CLAMP_MODE", "start"))
         micro_pause_gap = float(getattr(config, "MICRO_PAUSE_MIN_GAP_S", 0.28))
-        pause_rel_drop = float(getattr(config, "PAUSE_DECAY_REL_DROP_DB", 0.0))
+        pause_rel_drop = float(getattr(config, "PAUSE_DECAY_REL_DROP_DB", 14.0))
         final_rel_drop = float(getattr(config, "FINAL_DECAY_REL_DROP_DB", 14.0))
-        final_trace_max_s = float(getattr(config, "FINAL_DECAY_TRACE_MAX_S", 0.800))
-        w_switch, w_onset, w_prior = getattr(config, "INTERIOR_BOUNDARY_WEIGHTS", (0.55, 0.25, 0.20))
+        final_trace_max_s = float(getattr(config, "FINAL_DECAY_TRACE_MAX_S", 3.50))
+        w_switch, w_onset, w_prior = getattr(config, "INTERIOR_BOUNDARY_WEIGHTS", (0.45, 0.30, 0.25))
 
         # Vectorized CTC state arrays
         token_ids = np.array([token2id.get(p.phoneme, b_id) for p in target_phonemes], dtype=np.int32)
@@ -621,7 +621,8 @@ class CtcViterbiAligner:
                         )
                         boundary = w_switch * switch_sec + w_onset * onset_sec + w_prior * prior_sec
                     else:
-                        boundary = w_switch * switch_sec + w_prior * prior_sec
+                        tot_w = w_switch + w_prior
+                        boundary = (w_switch * switch_sec + w_prior * prior_sec) / (tot_w if tot_w > 0.0 else 1.0)
                     boundary = max(min_boundary, min(boundary, target_boundary))
 
                 if c_curr != AcousticAnchorType.SUSTAINED_HOLD:

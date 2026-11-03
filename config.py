@@ -79,17 +79,6 @@ LOOKAHEAD_OFFSET_FRAMES: float = 4.0        # Zipformer causal lookahead compens
 # start MAE 86.0->81.8ms, start p95 213->175ms, end median 60->55ms.
 INTERIOR_BOUNDARY_WEIGHTS: tuple = (0.45, 0.30, 0.25)
 
-# Per-position word-timing calibration (seconds ADDED to word start/end after matching).
-# Positive = later, negative = earlier. Measured by calibration sweep on the surah-50
-# benchmark vs QUD GT. Keyed by word position inside the ayah.
-# Applied in Phase 3.5 (pipeline post-match); never inside the matcher itself.
-# Set {"ayah_initial": {"start":0,"end":0}, "interior": {"start":0,"end":0}, "ayah_final": {"start":0,"end":0}}
-# to disable.
-WORD_TIMING_CALIBRATION_S: dict = {
-    "ayah_initial": {"start": 0.070, "end": 0.030},
-    "interior":     {"start": 0.030, "end": 0.010},
-    "ayah_final":   {"start": 0.030, "end": 0.100},
-}
 
 # Duration prior in the CTC trellis (Phase 2 only; does not affect matching).
 # While a token state "stays" the path pays LAMBDA*(age - MU) per stay frame, where MU is

@@ -381,20 +381,65 @@ def _align_and_package_ayahs(
 
         seen_locations: set[str] = set()
 
+        _GHUNNAH_SUBS = ("مممم", "نننن", "ںںں", "يييي", "وووو", "ممم", "ننن", "ووو", "ييي")
+        _TANWEEN_CHARS = ("ً", "ٍ", "ٌ")
+
         def _append_chunk(chunk: List[QuranWord]) -> None:
             if not chunk:
                 return
 
-            # Preserve exact phoneme-anchored word boundaries without bleeding:
+            # 1. Tajweed Merged Boundaries (Idgham with Ghunnah / Iqlab / Tanween):
+            # When cw1 has Tanween or Nun/Meem Saakinah and cw2 starts with a held Ghunnah token (>=0.35s),
+            # canonical recitation and Ground Truth attribute the held nasalization to cw1.
+            for i in range(len(chunk) - 1):
+                cw1 = chunk[i]
+                cw2 = chunk[i + 1]
+                w1_word = cw1.word or ""
+                w1_ref = cw1.ref or ""
+                w2_ph = cw2.phonemes or []
+
+                w1_has_tanween = (
+                    any(c in w1_word for c in _TANWEEN_CHARS)
+                    or w1_word.endswith("نْ")
+                    or w1_word.endswith("ن")
+                    or w1_word.endswith("مْ")
+                    or any(w1_ref.endswith(s) for s in ("مم", "ںں", "يي", "وو", "نن"))
+                )
+
+                if w1_has_tanween and w2_ph:
+                    first_ph = w2_ph[0]
+                    ph_name = first_ph.get("phoneme", "")
+                    ph_dur = (first_ph.get("end", 0.0) - first_ph.get("start", 0.0))
+
+                    if any(ph_name.startswith(g) for g in _GHUNNAH_SUBS) and ph_dur >= 0.35:
+                        if len(w2_ph) > 1:
+                            split_pt = round(first_ph.get("end", 0.0), 3)
+                            cw1.end = split_pt
+                            cw2.start = split_pt
+                            if cw1.phonemes is not None:
+                                cw1.phonemes.append(first_ph)
+                            cw2.phonemes = w2_ph[1:]
+                        else:
+                            release_pt = round(max(first_ph.get("start", 0.0) + 0.05, first_ph.get("end", 0.0) - 0.080), 3)
+                            cw1.end = release_pt
+                            cw2.start = release_pt
+
+            # 2. Contiguous Wasl Tiling & Non-Overlap:
             for i in range(len(chunk) - 1):
                 cw1 = chunk[i]
                 cw2 = chunk[i + 1]
                 if cw1.end is not None and cw2.start is not None:
-                    # Enforce strict non-overlap: word 2 cannot start before word 1 ends
-                    if cw2.start < cw1.end:
-                        cw2.start = cw1.end
+                    gap = cw2.start - cw1.end
+                    if 0.0 < gap <= 0.180:
+                        mid = round((cw1.end + cw2.start) * 0.5, 3)
+                        cw1.end = mid
+                        cw2.start = mid
+                    elif gap < 0:
+                        mid = round((cw1.end + cw2.start) * 0.5, 3)
+                        cw1.end = mid
+                        cw2.start = mid
                         if cw2.phonemes:
-                            cw2.phonemes[0]["start"] = cw1.end
+                            cw2.phonemes[0]["start"] = mid
 
             # A subsegment is marked as a repetition if it contains ANY word that has already been recited earlier in this Ayah
             is_rep_chunk = (
