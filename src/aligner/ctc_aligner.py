@@ -625,14 +625,8 @@ class CtcViterbiAligner:
                         boundary = (w_switch * switch_sec + w_prior * prior_sec) / (tot_w if tot_w > 0.0 else 1.0)
                     boundary = max(min_boundary, min(boundary, target_boundary))
 
-                if c_curr != AcousticAnchorType.SUSTAINED_HOLD:
-                    closure_sec = _find_closure_onset(
-                        frame_db_10ms=frame_db_10ms,
-                        earliest_sec=pk_secs[k - 1] + min_dur_s * 0.5,
-                        pk_sec=pk_secs[k],
-                    )
-                    if closure_sec is not None:
-                        boundary = max(min_boundary, min(boundary, closure_sec))
+                # Closure onset pull was pulling boundaries ~100ms too early into pre-voicing dips:
+                # Retain the fused acoustic boundary (switch frame + energy onset + prior) instead of forcing to earliest dip.
 
                 # Hard invariant: retain at least 0.5 frame before emission peak
                 boundary = min(boundary, max(min_boundary, pk_secs[k] - actual_frame_step * 0.5))

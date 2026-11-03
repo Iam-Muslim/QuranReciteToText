@@ -67,7 +67,7 @@ DETECTOR_MIN_PHONEMES: int = 12             # Minimum phonemes required to trigg
 # 5. PHASE 2 CTC FORCED ALIGNMENT TUNING
 # ==============================================================================
 CTC_BLANK_PENALTY: float = 1.8              # Trellis blank prior regularization
-LOOKAHEAD_OFFSET_FRAMES: float = 4.0        # Zipformer causal lookahead compensation (4.0 frames = 160ms)
+LOOKAHEAD_OFFSET_FRAMES: float = 3.3        # Zipformer causal lookahead compensation (4.0 frames = 160ms)
 
 # Interior word-boundary fusion (Wasl connected speech, voiced transitions).
 # How much each signal contributes to the boundary between two adjacent tokens:
@@ -104,16 +104,16 @@ MICRO_PAUSE_MIN_GAP_S: float = 0.28   # 0.16 tested: neutral (no raw gaps land i
 # Final-token (ayah-end) decay trace: stop when envelope falls REL_DROP_DB below the
 # word's own peak energy instead of riding absolute silence (fixes +400-750ms end tails),
 # and hard-cap the trace window (was a fixed 0.800s).
-FINAL_DECAY_REL_DROP_DB: float = 14.0
+FINAL_DECAY_REL_DROP_DB: float = 20.0
 FINAL_DECAY_TRACE_MAX_S: float = 3.50
-PAUSE_DECAY_REL_DROP_DB: float = 14.0
+PAUSE_DECAY_REL_DROP_DB: float = 20.0
 
 # Where a word's end is clamped when it straddles a VAD Waqf pause
 # (aligner-side only). "cut" = legacy pause midpoint; "start" = physical silence onset,
 # recommended: stops ayah-final words riding deep into the pause.
-PAUSE_END_CLAMP_MODE: str = "start"
+PAUSE_END_CLAMP_MODE: str = "cut"
 CTC_BLANK_PENALTY: float = 1.8              # Trellis blank prior regularization (1.0 tested, regressed end MAE)
-LOOKAHEAD_OFFSET_FRAMES: float = 4.0        # Zipformer causal lookahead compensation (4.0 = 160ms; 2.0 tested, worse)
+LOOKAHEAD_OFFSET_FRAMES: float = 3.3        # Zipformer causal lookahead compensation (4.0 = 160ms; 2.0 tested, worse)
 
 
 # ==============================================================================

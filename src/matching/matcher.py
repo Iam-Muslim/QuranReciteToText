@@ -381,7 +381,10 @@ def _align_and_package_ayahs(
 
         seen_locations: set[str] = set()
 
-        _GHUNNAH_SUBS = ("مممم", "نننن", "ںںں", "يييي", "وووو", "ممم", "ننن", "ووو", "ييي")
+        _GHUNNAH_SUBS = (
+            "مممم", "نننن", "ںںں", "يييي", "وووو", "ممم", "ننن", "ووو", "ييي",
+            "وووَ", "يييَ", "ممَ", "ممِ", "ممُ", "ننَ", "ننِ", "ننُ"
+        )
         _TANWEEN_CHARS = ("ً", "ٍ", "ٌ")
 
         def _append_chunk(chunk: List[QuranWord]) -> None:
@@ -411,7 +414,7 @@ def _align_and_package_ayahs(
                     ph_name = first_ph.get("phoneme", "")
                     ph_dur = (first_ph.get("end", 0.0) - first_ph.get("start", 0.0))
 
-                    if any(ph_name.startswith(g) for g in _GHUNNAH_SUBS) and ph_dur >= 0.35:
+                    if any(ph_name.startswith(g) for g in _GHUNNAH_SUBS) and ph_dur >= 0.12:
                         if len(w2_ph) > 1:
                             split_pt = round(first_ph.get("end", 0.0), 3)
                             cw1.end = split_pt
@@ -420,9 +423,18 @@ def _align_and_package_ayahs(
                                 cw1.phonemes.append(first_ph)
                             cw2.phonemes = w2_ph[1:]
                         else:
-                            release_pt = round(max(first_ph.get("start", 0.0) + 0.05, first_ph.get("end", 0.0) - 0.080), 3)
+                            release_pt = round(first_ph.get("start", 0.0) + ph_dur * 0.40, 3)
                             cw1.end = release_pt
                             cw2.start = release_pt
+
+                # Idgham Mutamathilayn (e.g. 'يَجْعَل لَّهُۥ' -> Lam saakinah into Lam mushaddadah):
+                if (w1_word.endswith("لْ") or w1_word.endswith("ل")) and w2_ph and w2_ph[0].get("phoneme", "").startswith("لل"):
+                    first_ph = w2_ph[0]
+                    ph_dur = (first_ph.get("end", 0.0) - first_ph.get("start", 0.0))
+                    if ph_dur >= 0.25:
+                        mid_pt = round(first_ph.get("start", 0.0) + ph_dur * 0.50, 3)
+                        cw1.end = mid_pt
+                        cw2.start = mid_pt
 
             # 2. Contiguous Wasl Tiling & Non-Overlap:
             for i in range(len(chunk) - 1):
@@ -430,7 +442,7 @@ def _align_and_package_ayahs(
                 cw2 = chunk[i + 1]
                 if cw1.end is not None and cw2.start is not None:
                     gap = cw2.start - cw1.end
-                    if 0.0 < gap <= 0.180:
+                    if 0.0 < gap <= 0.280:
                         mid = round((cw1.end + cw2.start) * 0.5, 3)
                         cw1.end = mid
                         cw2.start = mid
