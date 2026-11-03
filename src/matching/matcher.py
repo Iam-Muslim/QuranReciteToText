@@ -365,44 +365,16 @@ def _align_and_package_ayahs(
             if not chunk:
                 return
 
-            # Refine word boundaries inside continuous speech segment:
+            # Preserve exact phoneme-anchored word boundaries without bleeding:
             for i in range(len(chunk) - 1):
                 cw1 = chunk[i]
                 cw2 = chunk[i + 1]
                 if cw1.end is not None and cw2.start is not None:
-                    # 1. Tajweed Idgham / Ghunnah crossover partitioning:
-                    # Only apply Idgham hold absorption if Word 1 canonically ends with Tanween or Nun Sakinah!
-                    w1_ref = cw1.ref or ""
-                    w1_uth = cw1.word or ""
-                    is_w1_assim = any(w1_ref.endswith(h) for h in ("مم", "نن", "وو", "يي", "لل", "رر", "ں", "۾")) or any(w1_uth.endswith(t) for t in ("ً", "ٍ", "ٌ", "ۭ", "ۢ"))
-
-                    first_ph = cw2.phonemes[0] if cw2.phonemes else None
-                    ph_str = first_ph.get("phoneme", "") if first_ph else ""
-                    is_idgham = is_w1_assim and any(h in ph_str for h in ("مم", "نن", "وو", "يي", "ںں", "۾۾", "لل", "رر"))
-
-                    if is_idgham and first_ph:
-                        p_s = first_ph.get("start", cw2.start)
-                        p_e = first_ph.get("end", cw2.end)
-                        ph_dur = p_e - p_s
-                        if ph_dur >= 0.18:
-                            split_pt = round(max(p_s + 0.85 * ph_dur, p_e - 0.080), 3)
-                            cw1.end = split_pt
-                            cw2.start = split_pt
-                            first_ph["start"] = split_pt
-                            if "raw_start" in first_ph and first_ph["raw_start"] is not None:
-                                first_ph["raw_start"] = split_pt
-                            continue
-
-                    # 2. Continuous speech contiguity: absorb micro-gaps seamlessly without modifying word 1's end
-                    if cw1.end is not None and cw2.start is not None:
-                        cgap = round(cw2.start - cw1.end, 3)
-                        if -0.05 <= cgap <= 0.35:
-                            cw2.start = cw1.end
-                            if cw2.phonemes:
-                                cw2.phonemes[0]["start"] = cw1.end
-                                if "raw_start" in cw2.phonemes[0] and cw2.phonemes[0]["raw_start"] is not None:
-                                    cw2.phonemes[0]["raw_start"] = cw1.end
-                            continue
+                    # Enforce strict non-overlap: word 2 cannot start before word 1 ends
+                    if cw2.start < cw1.end:
+                        cw2.start = cw1.end
+                        if cw2.phonemes:
+                            cw2.phonemes[0]["start"] = cw1.end
 
             # A subsegment is marked as a repetition if it contains ANY word that has already been recited earlier in this Ayah
             is_rep_chunk = (
