@@ -87,6 +87,18 @@ function extractWordIndex(w: any, fallbackIdx: number): number {
   return fallbackIdx + 1;
 }
 
+function parseTimestampSec(val: any, msVal: any, fallback: number = 0): number {
+  if (val !== undefined && val !== null && val !== '') {
+    const num = Number(val);
+    if (Number.isFinite(num)) return num;
+  }
+  if (msVal !== undefined && msVal !== null && msVal !== '') {
+    const num = Number(msVal);
+    if (Number.isFinite(num)) return num / 1000;
+  }
+  return fallback;
+}
+
 export function cleanPhonemes(raw: any[]): PhonemeItem[] {
   if (!Array.isArray(raw) || raw.length === 0) return [];
   const out: PhonemeItem[] = [];
@@ -96,14 +108,14 @@ export function cleanPhonemes(raw: any[]): PhonemeItem[] {
       const pn = String(p[0] || '').trim();
       const ps = Number(p[1]);
       const pe = Number(p[2]);
-      if (pn && !isNaN(ps) && !isNaN(pe)) {
+      if (pn && Number.isFinite(ps) && Number.isFinite(pe)) {
         out.push({ phoneme: pn, start: Number(ps.toFixed(3)), end: Number(pe.toFixed(3)) });
       }
       continue;
     }
     const pn = typeof p === 'string' ? p : (p.phoneme ?? p.p ?? p.char ?? p.symbol ?? p.text ?? '');
-    const s = typeof p.start === 'number' ? p.start : (typeof p.start_ms === 'number' ? p.start_ms / 1000 : 0);
-    const e = typeof p.end === 'number' ? p.end : (typeof p.end_ms === 'number' ? p.end_ms / 1000 : s);
+    const s = parseTimestampSec(p.start, p.start_ms, 0);
+    const e = parseTimestampSec(p.end, p.end_ms, s);
     const cleanPh = String(pn || '').trim();
     if (cleanPh) {
       out.push({
@@ -118,8 +130,8 @@ export function cleanPhonemes(raw: any[]): PhonemeItem[] {
 
 export function cleanWordItem(w: any, fallbackIdx: number) {
   const text = w.word || w.text || w.text_arabic || '';
-  const wStart = typeof w.start === 'number' ? w.start : (typeof w.start_ms === 'number' ? w.start_ms / 1000 : 0);
-  const wEnd = typeof w.end === 'number' ? w.end : (typeof w.end_ms === 'number' ? w.end_ms / 1000 : 0);
+  const wStart = parseTimestampSec(w.start, w.start_ms, 0);
+  const wEnd = parseTimestampSec(w.end, w.end_ms, wStart);
   const phonemes = cleanPhonemes(w.phonemes || []);
   return {
     w: extractWordIndex(w, fallbackIdx),

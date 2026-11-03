@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { exportCanonicalJson, exportAllCanonicalJson } from '../exporters';
+import { exportCanonicalJson, exportAllCanonicalJson, cleanPhonemes, cleanWordItem } from '../exporters';
 import { normalizeHfRepoInput } from '../cloudDataset';
 import { parseCanonicalSurahs } from '../segmentIngest';
 import type { AlignerProject, SurahItem } from '../../types/aligner';
@@ -219,5 +219,30 @@ describe('Canonical JSON Exporter & Cloud Helpers', () => {
     expect(s.ayahs[0].segments[0].words).toHaveLength(4);
     expect(s.ayahs[0].segments[0].words[0].word).toBe('بِسْمِ');
     expect(s.ayahs[0].segments[0].words[0].location).toBe('1:1:1');
+  });
+
+  it('cleanPhonemes and cleanWordItem handle string timestamps gracefully without dropping to 0', () => {
+    const rawPhonemes = [
+      { phoneme: 'بِ', start: '0.125', end: '0.345' },
+      { phoneme: 'س', start_ms: '345', end_ms: '600' },
+      ['مِ', '0.600', '0.850'],
+    ];
+
+    const cleaned = cleanPhonemes(rawPhonemes);
+    expect(cleaned).toHaveLength(3);
+    expect(cleaned[0]).toEqual({ phoneme: 'بِ', start: 0.125, end: 0.345 });
+    expect(cleaned[1]).toEqual({ phoneme: 'س', start: 0.345, end: 0.6 });
+    expect(cleaned[2]).toEqual({ phoneme: 'مِ', start: 0.6, end: 0.85 });
+
+    const rawWord = {
+      word: 'بِسْمِ',
+      start: '0.125',
+      end: '0.850',
+      phonemes: rawPhonemes,
+    };
+    const cleanedWord = cleanWordItem(rawWord, 0);
+    expect(cleanedWord.start).toBe(0.125);
+    expect(cleanedWord.end).toBe(0.85);
+    expect(cleanedWord.phonemes).toHaveLength(3);
   });
 });

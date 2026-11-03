@@ -250,8 +250,8 @@ export function normalizeRawAyahsToStudio(rawAyahs: any[], surahNumber: number):
         const words: AlignedWord[] = pWords.map((w: any, idx: number) => ({
           word: w.text || w.word || '',
           location: `${surahNumber}:${a.ayah || 1}:${w.w || idx + 1}`,
-          start: typeof w.start === 'number' ? w.start : 0,
-          end: typeof w.end === 'number' ? w.end : 0,
+          start: Number(w.start ?? 0),
+          end: Number(w.end ?? 0),
           score: typeof w.score === 'number' ? w.score : 1,
           is_repetition: !!(w.is_repetition || p.is_repetition),
           phonemes: cleanPhonemes(w.phonemes || []),
@@ -285,8 +285,8 @@ export function normalizeRawAyahsToStudio(rawAyahs: any[], surahNumber: number):
     const words: AlignedWord[] = rawWords.map((w: any, idx: number) => ({
       word: w.text || w.word || '',
       location: `${surahNumber}:${a.ayah || 1}:${w.w || idx + 1}`,
-      start: typeof w.start === 'number' ? w.start : 0,
-      end: typeof w.end === 'number' ? w.end : 0,
+      start: Number(w.start ?? 0),
+      end: Number(w.end ?? 0),
       score: typeof w.score === 'number' ? w.score : 1,
       is_repetition: !!w.is_repetition,
       phonemes: cleanPhonemes(w.phonemes || []),
