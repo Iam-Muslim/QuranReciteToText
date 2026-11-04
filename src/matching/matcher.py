@@ -494,11 +494,12 @@ def _align_and_package_ayahs(
                         first_p2["start"] = release_pt
 
                 # Case A2: Idgham bila-Ghunnah (Tanween / Nun Saakinah into Lam or Raa):
-                # No nasalization. Word 2 retains its onset consonant (Lam / Raa); boundary is at contact.
+                # Word 2 retains its onset geminate consonant; boundary is at contact onset.
                 elif w1_has_nasal_coda and any(p2_name.startswith(g) for g in ("لل", "رر")):
                     split_pt = round(first_p2.get("start", 0.0), 3)
                     cw1.end = split_pt
                     cw2.start = split_pt
+                    first_p2["start"] = split_pt
 
                 # Case B: Idgham Mutamathilayn / Mutajanisayn (e.g. 'يَجْعَل لَّهُۥ', 'طَلَعَت تَّزَٰوَرُ', 'غَرَبَت تَّقْرِضُهُمْ', 'وَٱذْكُر رَّبَّكَ', 'تَسْتَطِع عَّلَيْهِ')
                 elif any((w1_word.endswith(end_c) and p2_name.startswith(gem)) for end_c, gem in _ASSIM_PAIRS):
@@ -510,10 +511,8 @@ def _align_and_package_ayahs(
 
                 # Case C: Madd Munfasil before Hamzat al-Qat' (e.g. 'ٱلَّذِىٓ أَنزَلَ', 'إِلَّآ أَن', 'لَبِثُوٓا۟ أَمَدًا', 'فِىٓ أَعْنَـٰقِهِمْ')
                 elif any(p1_name.startswith(m) for m in _MADD_TOKENS) and p2_name.startswith("ء"):
-                    # If Word 2's Hamzah token is smeared over the prolonged Madd vowel (p2_dur >= 0.45s and len(w2_ph) > 1),
-                    # the true glottal stop contact occurs at the end of the vowel elongation:
-                    if len(w2_ph) > 1 and p2_dur >= 0.45:
-                        hamzah_lead = min(0.240, max(0.180, p2_dur * 0.30))
+                    if len(w2_ph) > 1 and p2_dur >= 0.18:
+                        hamzah_lead = min(0.200, max(0.100, p2_dur * 0.40))
                         split_pt = round(first_p2.get("end", 0.0) - hamzah_lead, 3)
                     else:
                         split_pt = round(first_p2.get("start", cw1.end or 0.0), 3)
@@ -521,27 +520,13 @@ def _align_and_package_ayahs(
                     cw2.start = split_pt
                     first_p2["start"] = split_pt
 
-                # Case D: Prolonged Single Onset Consonant / Proclitic (e.g. 'نَفْسُهُۥ وَنَحْنُ', 'هَـٰذَا فَكَشَفْنَا')
-                elif any(p1_name.startswith(m) for m in _MADD_TOKENS) and len(w2_ph) > 1 and p2_dur >= 0.30 and any(p2_name.startswith(c) for c in _PROCLITIC_CONSONANTS):
-                    cons_lead = min(0.200, max(0.100, p2_dur * 0.25))
-                    split_pt = round(first_p2.get("end", 0.0) - cons_lead, 3)
+                # Case D: Prolonged Single Onset Proclitic (e.g. 'نَفْسُهُۥ وَنَحْنُ', 'هَـٰذَا فَكَشَفْنَا')
+                # When a single proclitic ('وَ', 'فَ') absorbs a preceding held Madd vowel (duration >= 0.50s):
+                elif any(p1_name.startswith(m) for m in _MADD_TOKENS) and len(w2_ph) > 1 and p2_dur >= 0.50 and any(p2_name.startswith(c) for c in ("وَ", "فَ")):
+                    split_pt = round(first_p2.get("end", 0.0) - 0.150, 3)
                     cw1.end = split_pt
                     cw2.start = split_pt
                     first_p2["start"] = split_pt
-
-                # Case E: Sun Letters / Idgham Shamsi (e.g. 'ٱلْحَيَوٰةِ ٱلدُّنْيَا', 'مَغْرِبَ ٱلشَّمْسِ', 'بَيْنَ ٱلسَّدَّيْنِ')
-                elif (w2_word.startswith("ٱل") or w2_word.startswith("ال")) and any(p2_name.startswith(g) for g in _SHAMSI_GEMS) and p2_dur >= 0.25:
-                    split_pt = round(first_p2.get("start", 0.0) + p2_dur * 0.40, 3)
-                    cw1.end = split_pt
-                    cw2.start = split_pt
-                    first_p2["start"] = split_pt
-
-                # Case F: Coda consonant release transition (e.g. 'بَلْ عَجِبُوٓا۟', 'أَفَلَمْ يَنظُرُوٓا۟')
-                elif p1_name in ("ل", "لِ", "م", "مِ", "مُ", "ر", "رِ", "رُ", "ن", "نِ", "نَ") and p1_dur >= 0.16:
-                    shift = min(0.060, max(0.025, p1_dur * 0.30))
-                    split_pt = round(cw1.end - shift, 3)
-                    cw1.end = split_pt
-                    cw2.start = split_pt
 
             # 2. Contiguous Wasl Tiling & Non-Overlap:
             for i in range(len(chunk) - 1):
