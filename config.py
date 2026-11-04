@@ -67,7 +67,7 @@ DETECTOR_MIN_PHONEMES: int = 12             # Minimum phonemes required to trigg
 # 5. PHASE 2 CTC FORCED ALIGNMENT TUNING
 # ==============================================================================
 CTC_BLANK_PENALTY: float = 1.8              # Trellis blank prior regularization
-LOOKAHEAD_OFFSET_FRAMES: float = 3.3        # Zipformer causal lookahead compensation (4.0 frames = 160ms)
+LOOKAHEAD_OFFSET_FRAMES: float = 3.7        # Zipformer causal lookahead compensation (4.0 frames = 160ms)
 
 # Interior word-boundary fusion (Wasl connected speech, voiced transitions).
 # How much each signal contributes to the boundary between two adjacent tokens:

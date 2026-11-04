@@ -736,6 +736,9 @@ def align_ayah_boundaries(
             w_first.start = seg_next.start_time
             if w_first.phonemes:
                 w_first.phonemes[0]["start"] = w_first.start
+            w_last.end = seg_prev.end_time
+            if w_last.phonemes:
+                w_last.phonemes[-1]["end"] = w_last.end
             if seg_prev.sub_segments:
                 seg_prev.sub_segments[-1].end_time = seg_prev.end_time
             if seg_next.sub_segments:
