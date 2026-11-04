@@ -744,16 +744,38 @@ def align_ayah_boundaries(
             if seg_next.sub_segments:
                 seg_next.sub_segments[0].start_time = seg_next.start_time
         else:
-            # Acoustic silence valley between Ayahs when VAD missed breath pause
-            first_ph = w_first.phonemes[0] if w_first.phonemes else {}
-            pk = first_ph.get("peak_timestamp", w_first.start)
+            # Acoustic silence valley between Ayahs when VAD missed breath pause:
+            # Split the inter-Ayah silence gap symmetrically between seg_prev and seg_next
             last_end = w_last.end or 0.0
-            if pk and (pk - last_end) >= 0.20:
-                mid_onset = round((last_end + pk) / 2.0, 3)
-                if mid_onset > (w_first.start or 0.0):
-                    w_first.start = mid_onset
-                    seg_next.start_time = round(mid_onset, 2)
-                    if w_first.phonemes:
-                        w_first.phonemes[0]["start"] = mid_onset
-                    if seg_next.sub_segments:
-                        seg_next.sub_segments[0].start_time = seg_next.start_time
+            first_start = w_first.start or 0.0
+            gap = first_start - last_end
+            if gap >= 0.15:
+                mid_pt = round((last_end + first_start) / 2.0, 3)
+                w_last.end = mid_pt
+                if w_last.phonemes:
+                    w_last.phonemes[-1]["end"] = mid_pt
+                seg_prev.end_time = round(mid_pt, 2)
+                if seg_prev.sub_segments:
+                    seg_prev.sub_segments[-1].end_time = seg_prev.end_time
+
+                w_first.start = mid_pt
+                if w_first.phonemes:
+                    w_first.phonemes[0]["start"] = mid_pt
+                seg_next.start_time = round(mid_pt, 2)
+                if seg_next.sub_segments:
+                    seg_next.sub_segments[0].start_time = seg_next.start_time
+
+    # Final Ayah boundary extension: ensure the last word of the final segment extends to speech end
+    if segments:
+        seg_final = segments[-1]
+        words_final = (
+            seg_final.sub_segments[-1].words
+            if (seg_final.sub_segments and seg_final.sub_segments[-1].words)
+            else seg_final.words
+        )
+        if words_final:
+            w_final = words_final[-1]
+            if seg_final.end_time and (seg_final.end_time - (w_final.end or 0.0)) > 0.05:
+                w_final.end = seg_final.end_time
+                if w_final.phonemes:
+                    w_final.phonemes[-1]["end"] = w_final.end

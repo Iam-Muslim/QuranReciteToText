@@ -351,6 +351,9 @@ def _align_and_package_ayahs(
                         break
                     if p.duration_sec < min_sub_pause:
                         continue
+                    # Reject shallow consonant closures (e.g. labial dips > -30 dB) that are not true breath pauses:
+                    if p.duration_sec < 0.35 and getattr(p, "min_energy_db", None) is not None and p.min_energy_db > -30.0:
+                        continue
                     cut = p.optimal_cut_point
 
                     # 1. Primary check using raw CTC ASR time before forced alignment:
@@ -381,60 +384,164 @@ def _align_and_package_ayahs(
 
         seen_locations: set[str] = set()
 
+        # Exact model Ghunnah tokens from tokens.txt
         _GHUNNAH_SUBS = (
-            "مممم", "نننن", "ںںں", "يييي", "وووو", "ممم", "ننن", "ووو", "ييي",
-            "وووَ", "يييَ", "ممَ", "ممِ", "ممُ", "ننَ", "ننِ", "ننُ"
+            "ممممَ", "ممممُ", "ممممِ", "ممم",
+            "ننننَ", "ننننُ", "ننننِ", "ننن",
+            "ںںں", "ں", "۾۾۾", "۾",
+            "وووَ", "وووُ", "وووِ", "ووو", "ووَ", "ووُ", "ووِ", "وو",
+            "يييَ", "يييُ", "ييي", "ييييي", "ييَ", "ييُ", "ييِ", "يي"
         )
-        _TANWEEN_CHARS = ("ً", "ٍ", "ٌ")
+        # Exact model Madd tokens from tokens.txt
+        _MADD_TOKENS = (
+            "ۥۥۥۥۥۥ", "ۥۥۥۥۥ", "ۥۥۥۥ", "ۥۥ", "ۥ",
+            "ۦۦۦۦۦۦ", "ۦۦۦۦۦ", "ۦۦۦۦ", "ۦۦ", "ۦ",
+            "اااااا", "ااااا", "اااا", "اا", "ااۜ",
+            "ووو", "وو", "ييي", "يي", "ييييي"
+        )
+        _TANWEEN_CHARS = ("ً", "ٍ", "ٌ", "ۢ", "ۭ")
+        _SHAMSI_GEMS = (
+            "تت", "ثث", "دد", "ذذ", "رر", "زز", "سس", "شش", "صص", "ضض", "طط", "ظظ", "لل",
+            "نننن", "ننن"
+        )
+        _ASSIM_PAIRS = (
+            ("لْ", "لل"), ("ل", "لل"),
+            ("تْ", "تت"), ("ت", "تت"),
+            ("رْ", "رر"), ("ر", "رر"),
+            ("عْ", "عع"), ("ع", "عع"),
+            ("دْ", "دد"), ("د", "دد"),
+            ("بْ", "بب"), ("ب", "بب"),
+        )
+        _PROCLITIC_CONSONANTS = ("وَ", "فَ", "بِ", "لِ", "كَ", "سَ", "جَ", "طَ", "قَ", "نَ", "تَ", "يَ", "عَ", "مَ", "مِ", "مُ")
 
         def _append_chunk(chunk: List[QuranWord]) -> None:
             if not chunk:
                 return
 
-            # 1. Tajweed Merged Boundaries (Idgham with Ghunnah / Iqlab / Tanween):
-            # When cw1 has Tanween or Nun/Meem Saakinah and cw2 starts with a held Ghunnah token (>=0.35s),
-            # canonical recitation and Ground Truth attribute the held nasalization to cw1.
+            # 1. Tajweed Assimilated Boundaries (Idgham bi-Ghunnah, bila-Ghunnah, Iqlab, Mutamathilayn, Shamsi):
             for i in range(len(chunk) - 1):
                 cw1 = chunk[i]
                 cw2 = chunk[i + 1]
                 w1_word = cw1.word or ""
                 w1_ref = cw1.ref or ""
+                w2_word = cw2.word or ""
+                w2_ref = cw2.ref or ""
+                w1_ph = cw1.phonemes or []
                 w2_ph = cw2.phonemes or []
 
-                w1_has_tanween = (
+                # Exact Tajweed assimilation codas from ordered_quran_phonemes.json:
+                # 'ںںں' (Ikhfa/Idgham), 'مم' (Idgham/Iqlab), 'وو' (Idgham Waw), 'يي' (Idgham Yaa), '۾۾۾' (Ikhfa Shafawi)
+                w1_has_nasal_coda = (
                     any(c in w1_word for c in _TANWEEN_CHARS)
-                    or w1_word.endswith("نْ")
-                    or w1_word.endswith("ن")
-                    or w1_word.endswith("مْ")
-                    or any(w1_ref.endswith(s) for s in ("مم", "ںں", "يي", "وو", "نن"))
+                    or (w1_word.endswith("نْ") and not w1_word.endswith("ءَانْ"))
+                    or (w1_word.endswith("ن") and not w1_word.endswith("ءَان"))
+                    or (w1_word.endswith("مْ") and not w1_word.endswith("ءَامْ"))
+                    or (w1_word.endswith("م") and not w1_word.endswith("ءَام"))
+                    or any(w1_ref.endswith(s) for s in ("مم", "وو", "يي", "ںںں", "۾۾۾", "ں", "۾"))
                 )
 
-                if w1_has_tanween and w2_ph:
-                    first_ph = w2_ph[0]
-                    ph_name = first_ph.get("phoneme", "")
-                    ph_dur = (first_ph.get("end", 0.0) - first_ph.get("start", 0.0))
+                if not w2_ph:
+                    continue
 
-                    if any(ph_name.startswith(g) for g in _GHUNNAH_SUBS) and ph_dur >= 0.12:
-                        if len(w2_ph) > 1:
-                            split_pt = round(first_ph.get("end", 0.0), 3)
+                first_p2 = w2_ph[0]
+                p2_name = first_p2.get("phoneme", "")
+                p2_dur = first_p2.get("end", 0.0) - first_p2.get("start", 0.0)
+                last_p1 = w1_ph[-1] if w1_ph else {}
+                p1_name = last_p1.get("phoneme", "")
+                p1_dur = last_p1.get("end", 0.0) - last_p1.get("start", 0.0)
+
+                is_waw_idgham = w1_ref.endswith("وو") and any(p2_name.startswith(w) for w in ("وَ", "وُ", "وِ", "و")) and p2_dur >= 0.15
+                is_yaa_idgham = w1_ref.endswith("يي") and any(p2_name.startswith(y) for y in ("يَ", "يُ", "يِ", "ي")) and p2_dur >= 0.15
+                is_ikhfa_shafawi = (w1_ref.endswith("۾۾۾") or w1_ref.endswith("۾") or w1_word.endswith("م")) and any(p2_name.startswith(b) for b in ("بِ", "بَ", "بُ", "ب")) and p2_dur >= 0.30
+                is_meem_idgham = (w1_ref.endswith("مم") or w1_word.endswith("م")) and (w2_ref.startswith("مم") or w2_word.startswith("م")) and len(w2_ph) > 1
+
+                # Case A: Idgham bi-Ghunnah / Shafawi / Ikhfa (Tanween, Nun Saakinah, Meem Saakinah):
+                # Canonical recitation & Medina GT assign the held Ghunnah (2 Harakat) to Word 1.
+                if w1_has_nasal_coda and (any(p2_name.startswith(g) for g in _GHUNNAH_SUBS) or is_waw_idgham or is_yaa_idgham or is_ikhfa_shafawi or is_meem_idgham) and p2_dur >= 0.12:
+                    if len(w2_ph) > 1:
+                        if is_ikhfa_shafawi:
+                            split_pt = round(max(first_p2.get("start", 0.0) + 0.10, first_p2.get("end", 0.0) - 0.25), 3)
+                            cw1.end = split_pt
+                            cw2.start = split_pt
+                            first_p2["start"] = split_pt
+                        elif is_meem_idgham and len(w2_ph) > 1:
+                            split_pt = round(w2_ph[1].get("start", first_p2.get("end", 0.0)), 3)
                             cw1.end = split_pt
                             cw2.start = split_pt
                             if cw1.phonemes is not None:
-                                cw1.phonemes.append(first_ph)
+                                cw1.phonemes.append(first_p2)
                             cw2.phonemes = w2_ph[1:]
                         else:
-                            release_pt = round(first_ph.get("start", 0.0) + ph_dur * 0.40, 3)
-                            cw1.end = release_pt
-                            cw2.start = release_pt
+                            split_pt = round(max(first_p2.get("start", 0.0) + 0.05, first_p2.get("end", 0.0) - 0.040), 3)
+                            cw1.end = split_pt
+                            cw2.start = split_pt
+                            if cw1.phonemes is not None and not (is_waw_idgham or is_yaa_idgham):
+                                cw1.phonemes.append(first_p2)
+                                cw2.phonemes = w2_ph[1:]
+                            elif is_waw_idgham or is_yaa_idgham:
+                                if len(w2_ph) > 1 and (w2_ph[1].get("start", 0.0) - first_p2.get("end", 0.0)) >= 0.30:
+                                    cw1.end = round(w2_ph[1].get("start", 0.0) - 0.150, 3)
+                                    cw2.start = cw1.end
+                                    if cw1.phonemes is not None:
+                                        cw1.phonemes.append(first_p2)
+                                    cw2.phonemes = w2_ph[1:]
+                                else:
+                                    first_p2["start"] = split_pt
+                    else:
+                        release_pt = round(max(first_p2.get("start", 0.0) + 0.05, first_p2.get("end", 0.0) - 0.040), 3)
+                        cw1.end = release_pt
+                        cw2.start = release_pt
+                        first_p2["start"] = release_pt
 
-                # Idgham Mutamathilayn (e.g. 'يَجْعَل لَّهُۥ' -> Lam saakinah into Lam mushaddadah):
-                if (w1_word.endswith("لْ") or w1_word.endswith("ل")) and w2_ph and w2_ph[0].get("phoneme", "").startswith("لل"):
-                    first_ph = w2_ph[0]
-                    ph_dur = (first_ph.get("end", 0.0) - first_ph.get("start", 0.0))
-                    if ph_dur >= 0.25:
-                        mid_pt = round(first_ph.get("start", 0.0) + ph_dur * 0.50, 3)
+                # Case A2: Idgham bila-Ghunnah (Tanween / Nun Saakinah into Lam or Raa):
+                # No nasalization. Word 2 retains its onset consonant (Lam / Raa); boundary is at contact.
+                elif w1_has_nasal_coda and any(p2_name.startswith(g) for g in ("لل", "رر")):
+                    split_pt = round(first_p2.get("start", 0.0), 3)
+                    cw1.end = split_pt
+                    cw2.start = split_pt
+
+                # Case B: Idgham Mutamathilayn / Mutajanisayn (e.g. 'يَجْعَل لَّهُۥ', 'طَلَعَت تَّزَٰوَرُ', 'غَرَبَت تَّقْرِضُهُمْ', 'وَٱذْكُر رَّبَّكَ', 'تَسْتَطِع عَّلَيْهِ')
+                elif any((w1_word.endswith(end_c) and p2_name.startswith(gem)) for end_c, gem in _ASSIM_PAIRS):
+                    if p2_dur >= 0.25:
+                        mid_pt = round(first_p2.get("start", 0.0) + p2_dur * 0.50, 3)
                         cw1.end = mid_pt
                         cw2.start = mid_pt
+                        first_p2["start"] = mid_pt
+
+                # Case C: Madd Munfasil before Hamzat al-Qat' (e.g. 'ٱلَّذِىٓ أَنزَلَ', 'إِلَّآ أَن', 'لَبِثُوٓا۟ أَمَدًا', 'فِىٓ أَعْنَـٰقِهِمْ')
+                elif any(p1_name.startswith(m) for m in _MADD_TOKENS) and p2_name.startswith("ء"):
+                    # If Word 2's Hamzah token is smeared over the prolonged Madd vowel (p2_dur >= 0.45s and len(w2_ph) > 1),
+                    # the true glottal stop contact occurs at the end of the vowel elongation:
+                    if len(w2_ph) > 1 and p2_dur >= 0.45:
+                        hamzah_lead = min(0.240, max(0.180, p2_dur * 0.30))
+                        split_pt = round(first_p2.get("end", 0.0) - hamzah_lead, 3)
+                    else:
+                        split_pt = round(first_p2.get("start", cw1.end or 0.0), 3)
+                    cw1.end = split_pt
+                    cw2.start = split_pt
+                    first_p2["start"] = split_pt
+
+                # Case D: Prolonged Single Onset Consonant / Proclitic (e.g. 'نَفْسُهُۥ وَنَحْنُ', 'هَـٰذَا فَكَشَفْنَا')
+                elif any(p1_name.startswith(m) for m in _MADD_TOKENS) and len(w2_ph) > 1 and p2_dur >= 0.30 and any(p2_name.startswith(c) for c in _PROCLITIC_CONSONANTS):
+                    cons_lead = min(0.200, max(0.100, p2_dur * 0.25))
+                    split_pt = round(first_p2.get("end", 0.0) - cons_lead, 3)
+                    cw1.end = split_pt
+                    cw2.start = split_pt
+                    first_p2["start"] = split_pt
+
+                # Case E: Sun Letters / Idgham Shamsi (e.g. 'ٱلْحَيَوٰةِ ٱلدُّنْيَا', 'مَغْرِبَ ٱلشَّمْسِ', 'بَيْنَ ٱلسَّدَّيْنِ')
+                elif (w2_word.startswith("ٱل") or w2_word.startswith("ال")) and any(p2_name.startswith(g) for g in _SHAMSI_GEMS) and p2_dur >= 0.25:
+                    split_pt = round(first_p2.get("start", 0.0) + p2_dur * 0.40, 3)
+                    cw1.end = split_pt
+                    cw2.start = split_pt
+                    first_p2["start"] = split_pt
+
+                # Case F: Coda consonant release transition (e.g. 'بَلْ عَجِبُوٓا۟', 'أَفَلَمْ يَنظُرُوٓا۟')
+                elif p1_name in ("ل", "لِ", "م", "مِ", "مُ", "ر", "رِ", "رُ", "ن", "نِ", "نَ") and p1_dur >= 0.16:
+                    shift = min(0.060, max(0.025, p1_dur * 0.30))
+                    split_pt = round(cw1.end - shift, 3)
+                    cw1.end = split_pt
+                    cw2.start = split_pt
 
             # 2. Contiguous Wasl Tiling & Non-Overlap:
             for i in range(len(chunk) - 1):
@@ -470,19 +577,48 @@ def _align_and_package_ayahs(
 
             sub_segs_list.append(_build_sub(chunk, is_rep_chunk))
 
-        for pass_words, _ in passes:
+        for p_idx, (pass_words, _) in enumerate(passes):
             current_chunk: List[QuranWord] = []
             for w in pass_words:
                 if current_chunk:
                     prev_w = current_chunk[-1]
                     p_bounds = _find_pause_cut(prev_w, w)
                     if p_bounds is not None:
+                        cut_pt = p_bounds[0]
+                        prev_w.end = max(prev_w.end or 0.0, cut_pt)
+                        if prev_w.phonemes:
+                            prev_w.phonemes[-1]["end"] = prev_w.end
                         _append_chunk(current_chunk)
                         current_chunk = []
 
                 current_chunk.append(w)
 
             if current_chunk:
+                # If there is a subsequent pass (repetition), check if an acoustic breath pause sits between passes
+                if p_idx < len(passes) - 1:
+                    next_pass_words = passes[p_idx + 1][0]
+                    if next_pass_words:
+                        p_bounds = _find_pause_cut(current_chunk[-1], next_pass_words[0])
+                        if p_bounds is not None:
+                            cut_pt = p_bounds[0]
+                            current_chunk[-1].end = max(current_chunk[-1].end or 0.0, cut_pt)
+                            if current_chunk[-1].phonemes:
+                                current_chunk[-1].phonemes[-1]["end"] = current_chunk[-1].end
+                        else:
+                            first_next_p = next_pass_words[0].phonemes[0] if next_pass_words[0].phonemes else None
+                            if first_next_p and (first_next_p.get("end", 0.0) - first_next_p.get("start", 0.0)) >= 0.50:
+                                true_start = round(first_next_p.get("end", 0.0) - 0.250, 3)
+                                first_next_p["start"] = true_start
+                                next_pass_words[0].start = true_start
+
+                            p_last_e = current_chunk[-1].end or 0.0
+                            n_first_s = next_pass_words[0].start or 0.0
+                            rep_gap = n_first_s - p_last_e
+                            if rep_gap >= 0.20:
+                                mid_pt = round((p_last_e + n_first_s) / 2.0, 3)
+                                current_chunk[-1].end = min(p_last_e + 0.90, mid_pt)
+                                if current_chunk[-1].phonemes:
+                                    current_chunk[-1].phonemes[-1]["end"] = current_chunk[-1].end
                 _append_chunk(current_chunk)
 
         if len(sub_segs_list) > 1 or has_repeated:
