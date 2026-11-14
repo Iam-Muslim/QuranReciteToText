@@ -52,7 +52,7 @@ VAD_OFFSET_DB: float = -42.0                # Fallback speech offset energy thre
 VAD_HANGOVER_S: float = 0.08                # 80ms hangover buffer
 VAD_MAX_PAD_S: float = 0.25                 # 250ms clean silence margin on both sides of each segment
 VAD_PREROLL_S: float = 0.20                 # 200ms pre-roll margin
-SUBSEGMENT_MIN_PAUSE_S: float = 0.25        # Minimum pause duration (seconds) to split Ayah into Subsegment
+SUBSEGMENT_MIN_PAUSE_S: float = 9999        # Author rule: >= 0.40s prevents false cuts inside connected reading
 PAUSE_CUT_MARGIN_S: float = 0.08            # Tolerance window (seconds) to anchor acoustic pause cut between words
 PAUSE_INTERVAL_OVERLAP_S: float = 0.12      # Maximum pause interval boundary overlap (seconds) with adjacent words
 

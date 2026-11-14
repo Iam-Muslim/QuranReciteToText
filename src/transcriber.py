@@ -257,10 +257,22 @@ class TajweedFormerEngine:
             conf_logits = np.ctypeslib.as_array(heads.conf, shape=(heads.n20,))
 
         # Top-2 Decoded Frames (40ms CTC frames)
+        # Extract timing_log_probs (20ms H-time chain, [n20, 38]).
+        # Source: zf_tajweed.h: 'timing_log_probs: [n20, 38] H-time chain, log-softmax; 0 = pause state'
+        # Source: migrating-to-3.md: 'Madd counts come from timing_log_probs (20ms frames):
+        #   the held span of a long vowel'
+        # Source: AGENTS.md: 'A held sound (a long madd) is speech: the timing head keeps
+        #   hearing it while the token head shows blank.'
+        tlp_arr = None
+        if heads.n20 > 0 and heads.timing_log_probs:
+            tlp_arr = np.ctypeslib.as_array(heads.timing_log_probs, shape=(heads.n20, heads.vocab))
+
         top2_ptr = ctypes.POINTER(_ZfTajweedTop2)()
         n_frames = self.dll.zf_tajweed_stream_top2(st, ctypes.byref(top2_ptr))
 
-        # Direct author greedy decoding (tf_decode.c lines 57-91)
+        # Direct author greedy decoding (tf_decode.c lines 57-91).
+        # zf_tajweed_stream_top2 operates on log_probs at 40ms (zf_tajweed.h):
+        # 'Per 40 ms CTC frame of log_probs, the best token and the runner-up'
         seg_phonemes: List[PhonemeToken] = []
         t = 0
         while t < n_frames:
@@ -277,11 +289,26 @@ class TajweedFormerEngine:
                     pk = k
 
             pk_top2 = top2_ptr[pk]
+            # 40ms frame t -> 20ms frame 2*t (zf_tajweed.h: '20ms frame 2k and 2k+1 lie in 40ms frame k')
             fine_sf = 2 * t
-            fine_ef = 2 * (e + 1)
+            fine_ef = 2 * (e + 1)  # CTC-based end frame in 20ms units
             fine_pk = 2 * pk
 
-            # Neural confidence: mean sigmoid over 20ms span [2*t : 2*(e+1)] (tf_decode.c line 85)
+            # H-TIME CHAIN EXTENSION (migrating-to-3.md, zf_tajweed.h):
+            # Extend fine_ef forward while timing_log_probs argmax == token id `a`
+            # and state != 0 (pause). This correctly extends held vowels (Madd)
+            # and held nasals (Ghunna) which the CTC head stops emitting after one spike.
+            if tlp_arr is not None and fine_ef < heads.n20:
+                f = fine_ef
+                while f < heads.n20:
+                    timing_argmax = int(np.argmax(tlp_arr[f]))
+                    # State 0 = pause (zf_tajweed.h: '0 = pause state'). Stop there.
+                    if timing_argmax == 0 or timing_argmax != a:
+                        break
+                    f += 1
+                fine_ef = f  # extended end frame in 20ms units
+
+            # Neural confidence: mean sigmoid over 20ms span [2*t : fine_ef] (tf_decode.c line 85)
             if conf_logits is not None and fine_ef <= len(conf_logits):
                 span = conf_logits[fine_sf:fine_ef]
                 conf = float(np.mean(1.0 / (1.0 + np.exp(-span))))
@@ -310,7 +337,7 @@ class TajweedFormerEngine:
 
         if return_heads:
             lp = np.ctypeslib.as_array(heads.log_probs, shape=(heads.n40, heads.vocab)).copy() if heads.n40 > 0 and heads.log_probs else None
-            tlp = np.ctypeslib.as_array(heads.timing_log_probs, shape=(heads.n20, heads.vocab)).copy() if heads.n20 > 0 and heads.timing_log_probs else None
+            tlp = tlp_arr.copy() if tlp_arr is not None else None
             return seg_phonemes, lp, tlp
 
         return seg_phonemes
@@ -526,7 +553,6 @@ class TajweedFormerEngine:
                     reset_stream=do_reset,
                     return_heads=True,
                 )
-                return s_idx, ph, lp, tlp
             else:
                 ph = self._infer_stream(
                     st,
@@ -536,7 +562,14 @@ class TajweedFormerEngine:
                     reset_stream=do_reset,
                     return_heads=False,
                 )
-                return s_idx, ph, None, None
+                lp, tlp = None, None
+
+            # Author rule: "With the flush the last phone runs about 0.2 s into the silence, so cap its end at your VAD end."
+            if ph and ph[-1].end > seg.raw_end_sec:
+                ph[-1].end = round(seg.raw_end_sec, 4)
+                ph[-1].end_frame = min(ph[-1].end_frame, int(round(seg.raw_end_sec / FRAME_STEP)))
+
+            return s_idx, ph, lp, tlp
 
         results_by_idx = [None] * num_segments
 
