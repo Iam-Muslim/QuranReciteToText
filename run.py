@@ -114,6 +114,7 @@ def main():
     parser.add_argument("--fast", action="store_true", default=False, help="Auto-configure top-speed parallel workers and threads for this CPU")
     parser.add_argument("--threads", type=int, default=None, help="TajweedFormer execution threads (default: 0 = fast cores)")
     parser.add_argument("--workers", type=int, default=None, help="Parallel segment workers (default: 1, or auto in --fast mode)")
+    parser.add_argument("--stream", action="store_true", default=False, help="Force direct sequential continuous streaming matching author CLI (zero VAD slicing)")
     parser.add_argument("--progress", action="store_true", default=False, help="Emit JSON progress lines for frontend apps")
     parser.add_argument("--qiraat", type=str, default="hafs", help="Canonical recitation tradition (e.g. hafs, warsh, qaloon, duri, susi, bazzi, qunbul; default: hafs)")
     args = parser.parse_args()
@@ -170,6 +171,8 @@ def main():
             sys.exit(1)
 
     workers, threads = resolve_concurrency(fast=args.fast, user_workers=args.workers, user_threads=args.threads)
+    if args.stream:
+        workers = 1
 
     os.environ["SEGMENT_WORKERS"] = str(workers)
     os.environ["ZF_THREADS"] = str(threads)
@@ -187,7 +190,8 @@ def main():
         output_dir = config.DEFAULT_OUTPUT_DIR
         os.makedirs(output_dir, exist_ok=True)
         if not args.progress:
-            print(f"Initializing pipeline ({workers} workers, {threads} thread(s))...", flush=True)
+            mode_desc = "Direct Continuous Stream" if args.stream else f"VAD Segmentation ({workers} workers, {threads} thread(s))"
+            print(f"Initializing pipeline [{mode_desc}]...", flush=True)
         pipeline = AudioPipeline()
         pipeline.initialize(num_threads=threads)
         batch_result = pipeline.process_directory(
@@ -196,6 +200,7 @@ def main():
             live_profile=not args.progress,
             json_progress=args.progress,
             qiraat=args.qiraat,
+            stream_mode=args.stream,
         )
         if batch_result.get("total_files", 0) == 0:
             sys.exit(1)
@@ -219,7 +224,10 @@ def main():
         print("=" * 55)
         print(f"Audio Duration      : {audio_duration:.2f}s", flush=True)
         print(f"Startup & Preload   : {startup_time:.2f}s", flush=True)
-        print(f"Workers / Threads   : {workers} workers, {threads} thread(s)", flush=True)
+        if args.stream:
+            print("Execution Mode      : Direct Continuous Stream (Author CLI)", flush=True)
+        else:
+            print(f"Execution Mode      : VAD Segmentation ({workers} workers, {threads} thread(s))", flush=True)
         if args.qiraat and args.qiraat.strip().lower() != "hafs":
             print(f"qiraat : {args.qiraat}", flush=True)
 
@@ -230,6 +238,7 @@ def main():
         live_profile=not args.progress,
         json_progress=args.progress,
         qiraat=args.qiraat,
+        stream_mode=args.stream,
     )
 
     total_time = time.time() - start_time

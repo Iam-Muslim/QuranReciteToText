@@ -34,6 +34,7 @@ FRAME_STEP: float = 1.0 / FRAME_RATE        # 0.020s (TajweedFormer V4 fine acou
 CLIP_AUDIO_PEAKS: bool = True               # Soft guard against clipping > 1.0
 NUM_SEGMENT_WORKERS: int = 1                # 1 = sequential 0-overhead stream; >1 = parallel LPT worker streams
 RESET_ENCODER_ON_SILENCE: bool = True       # Reset TajweedFormer streaming encoder state at Waqf silence pauses
+COLLECT_ACOUSTIC_MATRICES: bool = True      # Collect log_probs (40ms) and timing_log_probs (20ms) matrices
 
 # ==============================================================================
 # 3. PHASE 1 UNIFIED TAJWEED ACOUSTIC SILENCE & PAUSE ENGINE (VAD)

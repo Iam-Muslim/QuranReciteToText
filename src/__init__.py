@@ -90,6 +90,7 @@ class AudioPipeline:
         target_surah: Optional[int] = None,
         start_ayah: Optional[int] = None,
         qiraat: str = "hafs",
+        stream_mode: bool = False,
     ) -> PipelineResult:
         load_start = time.time()
         if on_progress_event:
@@ -109,6 +110,7 @@ class AudioPipeline:
             target_surah=target_surah,
             start_ayah=start_ayah,
             qiraat=qiraat,
+            stream_mode=stream_mode,
         )
 
     def process_directory(
@@ -119,6 +121,7 @@ class AudioPipeline:
         json_progress: bool = False,
         on_progress_event: Optional[Callable[[PipelineProgressEvent], None]] = None,
         qiraat: str = "hafs",
+        stream_mode: bool = False,
     ) -> Dict[str, Any]:
         """Transcribes all audio files in a directory recursively, preserving folder hierarchy.
 
@@ -197,6 +200,7 @@ class AudioPipeline:
                     json_progress=json_progress,
                     on_progress_event=on_progress_event,
                     qiraat=qiraat,
+                    stream_mode=stream_mode,
                 )
                 out_dict = result.to_output_dict()
 
@@ -325,6 +329,7 @@ class AudioPipeline:
         target_surah: Optional[int] = None,
         start_ayah: Optional[int] = None,
         qiraat: str = "hafs",
+        stream_mode: bool = False,
     ) -> PipelineResult:
         overall_start = time.time()
         audio_duration = len(audio_pcm) / SAMPLE_RATE
@@ -378,6 +383,7 @@ class AudioPipeline:
             sample_rate=SAMPLE_RATE,
             on_progress=_on_asr_progress if (live_profile or json_progress or on_progress_event) else None,
             on_vad_done=_on_vad_done if (live_profile or json_progress or on_progress_event) else None,
+            stream_mode=stream_mode,
         )
         phonemes = raw_result.phonemes
         vad_time = getattr(raw_result, "vad_time", 0.0)

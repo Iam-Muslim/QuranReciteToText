@@ -14,7 +14,7 @@ import queue
 import ctypes
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Optional, List, Dict, Tuple, Callable, Any
+from typing import Optional, List, Dict, Tuple, Callable, Any, Union
 from pathlib import Path
 import numpy as np
 
@@ -27,6 +27,7 @@ from config import (
 from src.models import (
     PhonemeToken,
     RawTranscriptionResult,
+    PauseInterval,
     RecoveryEvent,
     RecoverySummary,
     SpeechRecoveryResult,
@@ -51,8 +52,9 @@ HEAD_CONF = 1 << 11
 
 ACTIVE_HEADS_MASK = (
     HEAD_LOG_PROBS
-    | HEAD_ID
+    | HEAD_TIMING
     | HEAD_CONF
+    | HEAD_ID
 )
 
 
@@ -229,10 +231,11 @@ class TajweedFormerEngine:
         frame_offset: int = 0,
         is_recovered: bool = False,
         reset_stream: bool = True,
-    ) -> List[PhonemeToken]:
-        """Core inference worker: pushes PCM and decodes greedy tokens with 20ms confidence."""
+        return_heads: bool = False,
+    ) -> Union[List[PhonemeToken], Tuple[List[PhonemeToken], Optional[np.ndarray], Optional[np.ndarray]]]:
+        """Core inference worker: pushes PCM and decodes greedy tokens matching author engine tf_decode.c."""
         if len(pcm) == 0:
-            return []
+            return ([], None, None) if return_heads else []
 
         if not pcm.flags.c_contiguous:
             pcm = np.ascontiguousarray(pcm)
@@ -253,88 +256,62 @@ class TajweedFormerEngine:
         if heads.n20 > 0 and heads.conf:
             conf_logits = np.ctypeslib.as_array(heads.conf, shape=(heads.n20,))
 
-        # Fine 20ms Identity Head (Stack 0 CTC, 50 Hz)
-        id_lp = None
-        if heads.n20 > 0 and heads.id_log_probs:
-            id_lp = np.ctypeslib.as_array(heads.id_log_probs, shape=(heads.n20, heads.vocab))
-
-        # Top-2 Decoded Frames
+        # Top-2 Decoded Frames (40ms CTC frames)
         top2_ptr = ctypes.POINTER(_ZfTajweedTop2)()
         n_frames = self.dll.zf_tajweed_stream_top2(st, ctypes.byref(top2_ptr))
 
+        # Direct author greedy decoding (tf_decode.c lines 57-91)
         seg_phonemes: List[PhonemeToken] = []
-        prev_tok = BLANK_ID
-        cur_run: List[int] = []
-
-        def _flush(tok: int, frames: List[int]) -> None:
-            if not frames or tok == BLANK_ID or tok not in self.id2token:
-                return
-            r_sf, r_ef = frames[0], frames[-1] + 1
-            pk_idx = max(range(len(frames)), key=lambda idx: top2_ptr[frames[idx]].margin)
-            r_pk = frames[pk_idx]
-
-            if heads.n20 > 0:
-                # 20ms Fine Frame Resolution
-                fine_sf = 2 * r_sf
-                fine_ef = 2 * r_ef
-                fine_pk = 2 * r_pk
-
-                # 1. Onset Boundary Refinement at 20ms (Pure CTC Argmax)
-                if id_lp is not None and fine_sf + 1 < heads.n20:
-                    if int(np.argmax(id_lp[fine_sf])) != tok and int(np.argmax(id_lp[fine_sf + 1])) == tok:
-                        fine_sf += 1
-
-                # 2. Offset Boundary Refinement at 20ms (Pure CTC Argmax)
-                if id_lp is not None and fine_ef > fine_sf:
-                    if int(np.argmax(id_lp[fine_ef - 1])) != tok and int(np.argmax(id_lp[fine_ef - 2])) == tok:
-                        fine_ef -= 1
-
-                # 3. Calibrated Neural Confidence (mean sigmoid over 20ms token span, matching tf_decode.c)
-                if conf_logits is not None and fine_sf < len(conf_logits):
-                    span = conf_logits[fine_sf:max(fine_sf + 1, fine_ef)]
-                    conf = float(np.mean(1.0 / (1.0 + np.exp(-span))))
-                else:
-                    conf = max(0.0, min(1.0, 1.0 / (1.0 + math.exp(-top2_ptr[r_pk].margin))))
-
-                seg_phonemes.append(
-                    PhonemeToken(
-                        phoneme=self.id2token[tok],
-                        start=round(time_offset_s + fine_sf * 0.020, 4),
-                        end=round(time_offset_s + fine_ef * 0.020, 4),
-                        confidence=round(conf, 4),
-                        is_recovered=is_recovered,
-                        start_frame=frame_offset + fine_sf,
-                        end_frame=frame_offset + fine_ef,
-                        peak_frame=frame_offset + fine_pk,
-                        peak_timestamp=round(time_offset_s + fine_pk * 0.020, 4),
-                    )
-                )
-            else:
-                # Fallback to 40ms frame conversion
-                conf = max(0.0, min(1.0, 1.0 / (1.0 + math.exp(-top2_ptr[r_pk].margin))))
-                seg_phonemes.append(
-                    PhonemeToken(
-                        phoneme=self.id2token[tok],
-                        start=round(time_offset_s + r_sf * FRAME_STEP, 4),
-                        end=round(time_offset_s + r_ef * FRAME_STEP, 4),
-                        confidence=round(conf, 4),
-                        is_recovered=is_recovered,
-                        start_frame=frame_offset + r_sf,
-                        end_frame=frame_offset + r_ef,
-                        peak_frame=frame_offset + r_pk,
-                        peak_timestamp=round(time_offset_s + r_pk * FRAME_STEP, 4),
-                    )
-                )
-
-        for f in range(n_frames):
-            tok = top2_ptr[f].token
-            if tok == prev_tok:
-                if tok != BLANK_ID: cur_run.append(f)
+        t = 0
+        while t < n_frames:
+            a = top2_ptr[t].token
+            if a == BLANK_ID or a not in self.id2token:
+                t += 1
                 continue
-            _flush(prev_tok, cur_run)
-            cur_run = [f] if tok != BLANK_ID else []
-            prev_tok = tok
-        _flush(prev_tok, cur_run)
+            e = t
+            while e + 1 < n_frames and top2_ptr[e + 1].token == a:
+                e += 1
+            pk = t
+            for k in range(t + 1, e + 1):
+                if top2_ptr[k].log_prob > top2_ptr[pk].log_prob:
+                    pk = k
+
+            pk_top2 = top2_ptr[pk]
+            fine_sf = 2 * t
+            fine_ef = 2 * (e + 1)
+            fine_pk = 2 * pk
+
+            # Neural confidence: mean sigmoid over 20ms span [2*t : 2*(e+1)] (tf_decode.c line 85)
+            if conf_logits is not None and fine_ef <= len(conf_logits):
+                span = conf_logits[fine_sf:fine_ef]
+                conf = float(np.mean(1.0 / (1.0 + np.exp(-span))))
+            else:
+                conf = float(1.0 / (1.0 + math.exp(-pk_top2.margin)))
+
+            seg_phonemes.append(
+                PhonemeToken(
+                    phoneme=self.id2token[a],
+                    start=round(time_offset_s + fine_sf * 0.020, 4),
+                    end=round(time_offset_s + fine_ef * 0.020, 4),
+                    confidence=round(conf, 4),
+                    is_recovered=is_recovered,
+                    start_frame=frame_offset + fine_sf,
+                    end_frame=frame_offset + fine_ef,
+                    peak_frame=frame_offset + fine_pk,
+                    peak_timestamp=round(time_offset_s + fine_pk * 0.020, 4),
+                    token_id=a,
+                    log_prob=round(float(pk_top2.log_prob), 4),
+                    runner_up=int(pk_top2.runner_up),
+                    runner_up_log_prob=round(float(pk_top2.runner_up_log_prob), 4),
+                    margin=round(float(pk_top2.margin), 4),
+                )
+            )
+            t = e + 1
+
+        if return_heads:
+            lp = np.ctypeslib.as_array(heads.log_probs, shape=(heads.n40, heads.vocab)).copy() if heads.n40 > 0 and heads.log_probs else None
+            tlp = np.ctypeslib.as_array(heads.timing_log_probs, shape=(heads.n20, heads.vocab)).copy() if heads.n20 > 0 and heads.timing_log_probs else None
+            return seg_phonemes, lp, tlp
 
         return seg_phonemes
 
@@ -355,6 +332,144 @@ class TajweedFormerEngine:
             if own:
                 self.destroy_stream(st)
 
+    def transcribe_continuous(
+        self,
+        audio: np.ndarray,
+        sample_rate: int = SAMPLE_RATE,
+        on_progress: Optional[Callable[[float, float, float], None]] = None,
+        return_matrices: Optional[bool] = None,
+    ) -> RawTranscriptionResult:
+        """Continuous whole-audio transcription matching author SDK / CLI tf_session_push exactly."""
+        if self.model is None or len(audio) == 0:
+            return RawTranscriptionResult(vocab_size=len(self.vocab))
+
+        audio_pcm = np.ascontiguousarray(audio.astype(np.float32, copy=False))
+        audio_dur = len(audio_pcm) / sample_rate
+        need_matrices = getattr(config, "COLLECT_ACOUSTIC_MATRICES", False) if return_matrices is None else return_matrices
+
+        t0 = time.time()
+        st = self.create_stream()
+        try:
+            self.dll.zf_tajweed_stream_reset(st)
+            self.dll.zf_tajweed_stream_set_heads(st, ACTIVE_HEADS_MASK)
+
+            step = sample_rate // 50  # 20ms pushes matching cli/tajweedformer.c line 185
+            n = len(audio_pcm)
+            last_rep = 0.0
+            for at in range(0, n, step):
+                chunk = audio_pcm[at:min(n, at + step)]
+                ptr = chunk.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+                self.dll.zf_tajweed_stream_push_audio(st, ptr, len(chunk))
+                if on_progress:
+                    now = time.time()
+                    if now - last_rep >= 0.25 or (at + step >= n):
+                        last_rep = now
+                        pct = min(100.0, (at / n) * 100.0)
+                        elp = max(0.001, now - t0)
+                        spd = (at / sample_rate) / elp
+                        on_progress(pct, spd, elp)
+            self.dll.zf_tajweed_stream_finish(st)
+
+            heads = _ZfTajweedHeads()
+            self.dll.zf_tajweed_stream_heads(st, ctypes.byref(heads))
+
+            conf_logits = None
+            if heads.n20 > 0 and heads.conf:
+                conf_logits = np.ctypeslib.as_array(heads.conf, shape=(heads.n20,)).copy()
+
+            top2_ptr = ctypes.POINTER(_ZfTajweedTop2)()
+            n40 = self.dll.zf_tajweed_stream_top2(st, ctypes.byref(top2_ptr))
+
+            phonemes: List[PhonemeToken] = []
+            BLANK = BLANK_ID
+            T = n40
+            t = 0
+            while t < T:
+                a = top2_ptr[t].token
+                if a == BLANK or a not in self.id2token:
+                    t += 1
+                    continue
+                e = t
+                while e + 1 < T and top2_ptr[e + 1].token == a:
+                    e += 1
+                pk = t
+                for k in range(t + 1, e + 1):
+                    if top2_ptr[k].log_prob > top2_ptr[pk].log_prob:
+                        pk = k
+
+                pk_top2 = top2_ptr[pk]
+                fine_sf = 2 * t
+                fine_ef = 2 * (e + 1)
+                fine_pk = 2 * pk
+
+                if conf_logits is not None and heads.n20 >= fine_ef:
+                    span = conf_logits[fine_sf:fine_ef]
+                    conf = float(np.mean(1.0 / (1.0 + np.exp(-span))))
+                else:
+                    conf = max(0.0, min(1.0, 1.0 / (1.0 + math.exp(-pk_top2.margin))))
+
+                phonemes.append(
+                    PhonemeToken(
+                        phoneme=self.id2token[a],
+                        start=round(fine_sf * 0.020, 4),
+                        end=round(fine_ef * 0.020, 4),
+                        confidence=round(conf, 4),
+                        start_frame=fine_sf,
+                        end_frame=fine_ef,
+                        peak_frame=fine_pk,
+                        peak_timestamp=round(fine_pk * 0.020, 4),
+                        token_id=a,
+                        log_prob=round(float(pk_top2.log_prob), 4),
+                        runner_up=int(pk_top2.runner_up),
+                        runner_up_log_prob=round(float(pk_top2.runner_up_log_prob), 4),
+                        margin=round(float(pk_top2.margin), 4),
+                    )
+                )
+                t = e + 1
+
+            lp_mat = None
+            tlp_mat = None
+            if need_matrices:
+                if heads.n40 > 0 and heads.log_probs:
+                    lp_mat = np.ctypeslib.as_array(heads.log_probs, shape=(heads.n40, heads.vocab)).copy()
+                if heads.n20 > 0 and heads.timing_log_probs:
+                    tlp_mat = np.ctypeslib.as_array(heads.timing_log_probs, shape=(heads.n20, heads.vocab)).copy()
+
+            # Direct pause extraction from inter-token silence runs (author waqf / sakt)
+            pause_intervals: List[PauseInterval] = []
+            pause_timestamps: List[float] = []
+            min_pause_s = getattr(config, "VAD_MIN_PAUSE_S", 0.20)
+            for i in range(len(phonemes) - 1):
+                gap = phonemes[i + 1].start - phonemes[i].end
+                if gap >= min_pause_s:
+                    mid = round((phonemes[i].end + phonemes[i + 1].start) / 2.0, 3)
+                    ptype = "waqf" if gap >= 0.45 else "sakt"
+                    pause_intervals.append(
+                        PauseInterval(
+                            start_sec=round(phonemes[i].end, 3),
+                            end_sec=round(phonemes[i + 1].start, 3),
+                            duration_sec=round(gap, 3),
+                            pause_type=ptype,
+                            cut_point=mid,
+                        )
+                    )
+                    pause_timestamps.append(mid)
+
+            return RawTranscriptionResult(
+                phonemes=phonemes,
+                raw_tokens=[p.phoneme for p in phonemes],
+                raw_timestamps=[p.start for p in phonemes],
+                logprobs_matrix=lp_mat,
+                timing_logprobs_matrix=tlp_mat,
+                num_frames=heads.n20,
+                vocab_size=len(self.vocab),
+                pause_timestamps=pause_timestamps,
+                pause_intervals=pause_intervals,
+                vad_time=0.0,
+            )
+        finally:
+            self.destroy_stream(st)
+
     def transcribe_audio(
         self,
         audio: np.ndarray,
@@ -362,15 +477,28 @@ class TajweedFormerEngine:
         on_progress: Optional[Callable[[float, float, float], None]] = None,
         on_vad_done: Optional[Callable[[float], None]] = None,
         reset_on_silence: Optional[bool] = None,
+        return_matrices: Optional[bool] = None,
+        stream_mode: bool = False,
     ) -> RawTranscriptionResult:
-        """Phase 1: VAD Pause Segmentation + Exact C-Engine TajweedFormer Streaming."""
+        """Phase 1: Direct C-Engine TajweedFormer Streaming (or VAD segmented if configured)."""
         if self.model is None or len(audio) == 0:
             return RawTranscriptionResult(vocab_size=len(self.vocab))
 
         audio_pcm = np.ascontiguousarray(audio.astype(np.float32, copy=False))
         audio_duration = len(audio_pcm) / sample_rate
 
-        # Phase 1: Unified Tajweed VAD
+        # When stream_mode is requested, stream whole audio continuously matching author SDK/CLI
+        if stream_mode:
+            if on_vad_done:
+                on_vad_done(0.0)
+            return self.transcribe_continuous(
+                audio=audio_pcm,
+                sample_rate=sample_rate,
+                on_progress=on_progress,
+                return_matrices=return_matrices,
+            )
+
+        # Phase 1: Unified Tajweed VAD Segmentation (Parallel / Segmented path)
         vad_start = time.time()
         vad = QuranSilenceVAD(sample_rate=sample_rate)
         segments, pause_intervals, pause_timestamps = vad.detect_speech_and_pauses(audio_pcm)
@@ -383,21 +511,34 @@ class TajweedFormerEngine:
         total_frames = max(1, int(math.ceil(audio_duration / FRAME_STEP)))
         num_segments = len(segments)
         do_reset = getattr(config, "RESET_ENCODER_ON_SILENCE", True) if reset_on_silence is None else reset_on_silence
+        need_matrices = getattr(config, "COLLECT_ACOUSTIC_MATRICES", False) if return_matrices is None else return_matrices
 
-        def _worker_task(st, s_idx: int) -> Tuple[int, List[PhonemeToken]]:
+        def _worker_task(st, s_idx: int) -> Tuple[int, List[PhonemeToken], Optional[np.ndarray], Optional[np.ndarray]]:
             seg = segments[s_idx]
             s_sm = max(0, int(round(seg.padded_start_sec * sample_rate)))
             e_sm = min(len(audio_pcm), int(round(seg.padded_end_sec * sample_rate)))
-            ph = self._infer_stream(
-                st,
-                audio_pcm[s_sm:e_sm],
-                time_offset_s=seg.padded_start_sec,
-                frame_offset=int(round(seg.padded_start_sec / FRAME_STEP)),
-                reset_stream=do_reset,
-            )
-            return s_idx, ph
+            if need_matrices:
+                ph, lp, tlp = self._infer_stream(
+                    st,
+                    audio_pcm[s_sm:e_sm],
+                    time_offset_s=seg.padded_start_sec,
+                    frame_offset=int(round(seg.padded_start_sec / FRAME_STEP)),
+                    reset_stream=do_reset,
+                    return_heads=True,
+                )
+                return s_idx, ph, lp, tlp
+            else:
+                ph = self._infer_stream(
+                    st,
+                    audio_pcm[s_sm:e_sm],
+                    time_offset_s=seg.padded_start_sec,
+                    frame_offset=int(round(seg.padded_start_sec / FRAME_STEP)),
+                    reset_stream=do_reset,
+                    return_heads=False,
+                )
+                return s_idx, ph, None, None
 
-        results_by_idx: List[Optional[Tuple[int, List[PhonemeToken]]]] = [None] * num_segments
+        results_by_idx = [None] * num_segments
 
         env_workers = os.environ.get("SEGMENT_WORKERS")
         num_workers = int(env_workers) if env_workers is not None else getattr(config, "NUM_SEGMENT_WORKERS", 1)
@@ -416,7 +557,7 @@ class TajweedFormerEngine:
                 # LPT (Longest Processing Time first) scheduling for optimal worker utilization
                 sorted_indices = sorted(range(num_segments), key=lambda idx: segments[idx].duration_sec, reverse=True)
 
-                def _parallel_worker(s_idx: int) -> Tuple[int, List[PhonemeToken]]:
+                def _parallel_worker(s_idx: int):
                     st = stream_pool.get()
                     try:
                         return _worker_task(st, s_idx)
@@ -428,8 +569,9 @@ class TajweedFormerEngine:
                 with ThreadPoolExecutor(max_workers=pool_size) as executor:
                     futures = {executor.submit(_parallel_worker, i): i for i in sorted_indices}
                     for fut in as_completed(futures):
-                        s_idx, s_ph = fut.result()
-                        results_by_idx[s_idx] = (s_idx, s_ph)
+                        res = fut.result()
+                        s_idx = res[0]
+                        results_by_idx[s_idx] = res
                         completed_count += 1
                         if on_progress:
                             comp_dur += segments[s_idx].duration_sec
@@ -446,8 +588,8 @@ class TajweedFormerEngine:
             try:
                 comp_dur = 0.0
                 for s_idx in range(num_segments):
-                    s_idx, s_ph = _worker_task(single_st, s_idx)
-                    results_by_idx[s_idx] = (s_idx, s_ph)
+                    res = _worker_task(single_st, s_idx)
+                    results_by_idx[s_idx] = res
                     if on_progress:
                         comp_dur += segments[s_idx].duration_sec
                         elp = max(0.001, time.time() - asr_start)
@@ -457,10 +599,27 @@ class TajweedFormerEngine:
 
         # 3. Chronological Reassembly
         phonemes: List[PhonemeToken] = []
+        assembled_lp = None
+        assembled_tlp = None
+        if need_matrices:
+            total_40 = max(1, int(math.ceil(audio_duration / 0.040)))
+            total_20 = total_40 * 2
+            assembled_lp = np.full((total_40, vocab_size), -20.0, dtype=np.float32)
+            assembled_tlp = np.full((total_20, vocab_size), -20.0, dtype=np.float32)
+
         for s_idx in range(num_segments):
             if not results_by_idx[s_idx]: continue
-            _, seg_ph = results_by_idx[s_idx]
+            _, seg_ph, lp, tlp = results_by_idx[s_idx]
             phonemes.extend(seg_ph)
+            if need_matrices and lp is not None and tlp is not None:
+                seg = segments[s_idx]
+                f40_start = max(0, int(round(seg.padded_start_sec / 0.040)))
+                f40_end = min(len(assembled_lp), f40_start + len(lp))
+                assembled_lp[f40_start:f40_end] = lp[:f40_end - f40_start]
+
+                f20_start = f40_start * 2
+                f20_end = min(len(assembled_tlp), f20_start + len(tlp))
+                assembled_tlp[f20_start:f20_end] = tlp[:f20_end - f20_start]
 
         phonemes.sort(key=lambda p: p.start)
 
@@ -468,6 +627,8 @@ class TajweedFormerEngine:
             phonemes=phonemes,
             raw_tokens=[p.phoneme for p in phonemes],
             raw_timestamps=[p.start for p in phonemes],
+            logprobs_matrix=assembled_lp,
+            timing_logprobs_matrix=assembled_tlp,
             num_frames=total_frames,
             vocab_size=vocab_size,
             pause_timestamps=pause_timestamps,

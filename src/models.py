@@ -13,7 +13,7 @@ import numpy as np
 
 @dataclass(slots=True)
 class PhonemeToken:
-    """Individual acoustic phoneme token with timestamps and confidence."""
+    """Individual acoustic phoneme token with timestamps, confidence, and engine CTC posteriors."""
     phoneme: str
     start: float
     end: float
@@ -25,6 +25,11 @@ class PhonemeToken:
     peak_timestamp: Optional[float] = None
     raw_start: Optional[float] = None
     raw_end: Optional[float] = None
+    token_id: Optional[int] = None
+    log_prob: Optional[float] = None
+    runner_up: Optional[int] = None
+    runner_up_log_prob: Optional[float] = None
+    margin: Optional[float] = None
 
     @property
     def duration(self) -> float:
@@ -42,11 +47,21 @@ class PhonemeToken:
             "start": round(self.start, 3),
             "end": round(self.end, 3),
             "duration": round(self.duration, 3),
-            "confidence": round(self.confidence, 2),
+            "confidence": round(self.confidence, 4),
         }
-        for k in ("start_frame", "end_frame"):
+        if self.token_id is not None:
+            d["token_id"] = self.token_id
+        if self.log_prob is not None:
+            d["log_prob"] = round(self.log_prob, 4)
+        if self.runner_up is not None:
+            d["runner_up"] = self.runner_up
+        if self.runner_up_log_prob is not None:
+            d["runner_up_log_prob"] = round(self.runner_up_log_prob, 4)
+        if self.margin is not None:
+            d["margin"] = round(self.margin, 4)
+        for k in ("start_frame", "end_frame", "peak_frame", "peak_timestamp"):
             v = getattr(self, k)
-            if v is not None: d[k] = v
+            if v is not None: d[k] = round(v, 4) if isinstance(v, float) else v
         if self.is_recovered: d["is_recovered"] = True
         return d
 
