@@ -5,11 +5,10 @@ import os
 import logging
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Optional, List, Tuple, Dict
+from typing import Optional, List, Tuple, Dict, Any
 import numpy as np
 
 import config
-from config import DEFAULT_REF_NORM_PH_PATH, DEFAULT_PH_INDEX_PATH
 from src.models import PhonemeToken, PauseInterval
 from src.matching.phonetics import (
     normalize_phoneme_query,
@@ -114,25 +113,34 @@ class PhoneticSearch:
     def is_loaded(self) -> bool:
         return self._is_loaded
 
-    def load(self, ref_norm_ph_path: Optional[str] = None, ph_index_path: Optional[str] = None) -> None:
+    def load(
+        self,
+        zfx_reader: Optional[Any] = None,
+        zfx_path: Optional[str] = None,
+        tokens_path: Optional[str] = None,
+    ) -> None:
         if self._is_loaded:
             return
-        ref_path = ref_norm_ph_path or DEFAULT_REF_NORM_PH_PATH
-        npy_path = ph_index_path or DEFAULT_PH_INDEX_PATH
 
-        if not os.path.exists(ref_path) or not os.path.exists(npy_path):
-            raise FileNotFoundError(f"Missing phonetic reference files: {ref_path} or {npy_path}")
+        # 1. Prefer active ZfxReader instance if supplied (zero redundant disk I/O)
+        if zfx_reader is not None:
+            self._ref_ph_norm, self._ref_codes, self._index_array = zfx_reader.get_global_phonetic_search_index()
+            self._is_loaded = True
+            return
 
-        with open(ref_path, "r", encoding="utf-8") as f:
-            self._ref_ph_norm = f.read().strip()
-        self._ref_codes = np.array([ord(c) for c in self._ref_ph_norm], dtype=np.int32)
+        # 2. Derive directly from expected_tj3.zfx + tokens.txt in memory
+        target_zfx = zfx_path or getattr(config, "DEFAULT_EXPECTED_ZFX_PATH", None)
+        target_tokens = tokens_path or getattr(config, "DEFAULT_TOKENS_PATH", None)
+        if target_zfx and os.path.exists(target_zfx) and target_tokens and os.path.exists(target_tokens):
+            from src.matching.reference import ZfxReader
+            reader = ZfxReader(target_zfx, target_tokens)
+            self._ref_ph_norm, self._ref_codes, self._index_array = reader.get_global_phonetic_search_index()
+            self._is_loaded = True
+            return
 
-        arr = np.load(npy_path)
-        if arr.ndim == 1:
-            arr = arr.reshape(-1, 7)
-        # Store only Surah (col 0) and Ayah (col 1) to conserve RAM
-        self._index_array = arr[:, :2].astype(np.uint16)
-        self._is_loaded = True
+        raise FileNotFoundError(
+            f"Cannot initialize PhoneticSearch: expected_tj3.zfx ({target_zfx}) or tokens.txt ({target_tokens}) not found."
+        )
 
     def search(self, query: str, error_ratio: Optional[float] = None) -> List[SurahSearchResult]:
         if not self._is_loaded or self._ref_codes is None or self._index_array is None:
@@ -269,22 +277,27 @@ class SurahDetector:
 
     def initialize(
         self,
-        ref_norm_ph_path: Optional[str] = None,
-        ph_index_path: Optional[str] = None,
+        zfx_reader: Optional[Any] = None,
+        zfx_path: Optional[str] = None,
+        tokens_path: Optional[str] = None,
         **kwargs,
     ) -> None:
         if self._is_initialized:
             return
-        self._phonetic_search.load(ref_norm_ph_path=ref_norm_ph_path, ph_index_path=ph_index_path)
+        self._phonetic_search.load(
+            zfx_reader=zfx_reader,
+            zfx_path=zfx_path,
+            tokens_path=tokens_path,
+        )
         self._is_initialized = True
 
     def detect_single_surah(
-        self, aligned_phonemes: List[PhonemeToken], sample_length: int = 35
+        self, phonemes: List[PhonemeToken], sample_length: int = 35
     ) -> SurahDetectionResult:
-        if not aligned_phonemes:
+        if not phonemes:
             return SurahDetectionResult(surah=1, start_ayah=1, end_ayah=1)
 
-        total_toks = len(aligned_phonemes)
+        total_toks = len(phonemes)
 
         # Probe opening window offsets to be robust to Isti'adha, Basmalah, or intro silence
         probe_offsets = [off for off in (0, 8, 16, 24, 32, 48, 64, 80, 100, 120, 150, 180) if off + 15 <= total_toks]
@@ -297,7 +310,7 @@ class SurahDetector:
 
         def _probe_slice(offset: int) -> None:
             for slen in (16, 28):
-                slice_tokens = aligned_phonemes[offset:offset + slen]
+                slice_tokens = phonemes[offset:offset + slen]
                 q = "".join(p.phoneme for p in slice_tokens)
                 norm_q = normalize_phoneme_query(q)
                 q_len = min(len(norm_q), 64)
@@ -363,7 +376,7 @@ class SurahDetector:
                 ]
                 for end_offset in tail_offsets:
                     if end_offset > best_offset and end_offset >= 0:
-                        slice_tokens = aligned_phonemes[end_offset:end_offset + sample_length]
+                        slice_tokens = phonemes[end_offset:end_offset + sample_length]
                         q = "".join(p.phoneme for p in slice_tokens)
                         norm_q = normalize_phoneme_query(q)
                         q_len = min(len(norm_q), 64)
@@ -382,36 +395,35 @@ class SurahDetector:
                 surah=best_surah,
                 start_ayah=start_ayah,
                 end_ayah=confirmed_end_ayah,
-                start_time=aligned_phonemes[0].start,
-                end_time=aligned_phonemes[-1].end,
+                start_time=phonemes[0].start,
+                end_time=phonemes[-1].end,
                 confidence=max(0.5, 1.0 - best_norm),
             )
-
 
         return SurahDetectionResult(
             surah=1,
             start_ayah=1,
             end_ayah=None,
-            start_time=aligned_phonemes[0].start,
-            end_time=aligned_phonemes[-1].end,
+            start_time=phonemes[0].start,
+            end_time=phonemes[-1].end,
             confidence=0.5,
         )
 
     def detect_multi_surah(
         self,
-        aligned_phonemes: List[PhonemeToken],
+        phonemes: List[PhonemeToken],
         sample_length: int = 24,
         step: int = 16,
         pause_timestamps: Optional[List[float]] = None,
         pause_intervals: Optional[List[PauseInterval]] = None,
     ) -> List[SurahDetectionResult]:
         """Discovers sequential Surahs in continuous recitation audio (Waqf, Sakt, Wasl, with or without Basmalah)."""
-        if not aligned_phonemes:
+        if not phonemes:
             return [SurahDetectionResult(surah=1, start_ayah=1, end_ayah=1, token_start_idx=0, token_end_idx=0)]
 
-        total_toks = len(aligned_phonemes)
+        total_toks = len(phonemes)
         if total_toks < 60:
-            single = self.detect_single_surah(aligned_phonemes)
+            single = self.detect_single_surah(phonemes)
             single.token_start_idx = 0
             single.token_end_idx = total_toks
             return [single]
@@ -421,7 +433,7 @@ class SurahDetector:
         effective_step = 16 if step == 16 else (step or 16)
         probe_hits: List[Tuple[int, int, int, float]] = []  # (offset, surah, ayah, norm_dist)
         for offset in range(0, max(1, total_toks - 12), effective_step):
-            slice_tokens = aligned_phonemes[offset : offset + sample_length]
+            slice_tokens = phonemes[offset : offset + sample_length]
             q = "".join(p.phoneme for p in slice_tokens)
             norm_q = normalize_phoneme_query(q)
             q_len = min(len(norm_q), 64)
@@ -437,7 +449,7 @@ class SurahDetector:
                     probe_hits.append((offset, top.surah_number, top.ayah_number, norm_d))
 
         if not probe_hits:
-            single = self.detect_single_surah(aligned_phonemes)
+            single = self.detect_single_surah(phonemes)
             single.token_start_idx = 0
             single.token_end_idx = total_toks
             return [single]
@@ -455,7 +467,7 @@ class SurahDetector:
                 filtered_hits.append(h)
 
         if not filtered_hits:
-            single = self.detect_single_surah(aligned_phonemes)
+            single = self.detect_single_surah(phonemes)
             single.token_start_idx = 0
             single.token_end_idx = total_toks
             return [single]
@@ -490,7 +502,7 @@ class SurahDetector:
 
         # If filtered to empty or single cluster, fallback to proven single-surah detector
         if not clusters or len(clusters) == 1:
-            single = self.detect_single_surah(aligned_phonemes)
+            single = self.detect_single_surah(phonemes)
             single.token_start_idx = 0
             single.token_end_idx = total_toks
             return [single]
@@ -514,13 +526,13 @@ class SurahDetector:
                 next_hits = [c for c in clusters[i + 1] if c[1] == next_surah]
                 off_last = surah_hits[-1][0] if surah_hits else cluster[-1][0]
                 off_next = next_hits[0][0] if next_hits else clusters[i + 1][0][0]
-                t_low = aligned_phonemes[min(off_last + sample_length - 1, total_toks - 1)].end
-                t_high = aligned_phonemes[min(off_next, total_toks - 1)].start
+                t_low = phonemes[min(off_last + sample_length - 1, total_toks - 1)].end
+                t_high = phonemes[min(off_next, total_toks - 1)].start
 
                 # Check if a prayer phrase (Takbeer/Tasmee') or preamble (Isti'adha/Basmalah) is recited in the transition gap
                 gap_tok_start = max(0, off_last)
                 gap_tok_end = min(total_toks, off_next + sample_length)
-                gap_tokens = aligned_phonemes[gap_tok_start:gap_tok_end]
+                gap_tokens = phonemes[gap_tok_start:gap_tok_end]
                 gap_str = "".join(t.phoneme for t in gap_tokens)
 
                 preamble_candidates: List[int] = []
@@ -588,7 +600,7 @@ class SurahDetector:
 
                 if preamble_tok_idx is not None and preamble_tok_idx > off_last:
                     # Place boundary before the preamble so Surah B receives all preamble tokens
-                    t_preamble = aligned_phonemes[preamble_tok_idx].start
+                    t_preamble = phonemes[preamble_tok_idx].start
                     if candidate_pauses:
                         best_p = None
                         for p in candidate_pauses:
@@ -597,7 +609,7 @@ class SurahDetector:
                                 break
                         if best_p is not None:
                             for idx in range(off_last, preamble_tok_idx + 1):
-                                if aligned_phonemes[idx].start >= best_p:
+                                if phonemes[idx].start >= best_p:
                                     tok_end = idx
                                     snapped = True
                                     break
@@ -611,7 +623,7 @@ class SurahDetector:
                         for p in candidate_pauses:
                             if (t_low - 0.3) <= p <= (t_high + 0.3):
                                 for idx in range(off_last, min(off_next + sample_length, total_toks)):
-                                    if aligned_phonemes[idx].start >= p:
+                                    if phonemes[idx].start >= p:
                                         tok_end = idx
                                         snapped = True
                                         break
@@ -637,7 +649,7 @@ class SurahDetector:
                 ]
                 for end_offset in tail_offsets:
                     if end_offset >= tok_start:
-                        slice_toks = aligned_phonemes[end_offset : end_offset + sample_length]
+                        slice_toks = phonemes[end_offset : end_offset + sample_length]
                         q = "".join(p.phoneme for p in slice_toks)
                         norm_q = normalize_phoneme_query(q)
                         q_l = min(len(norm_q), 64)
@@ -658,8 +670,8 @@ class SurahDetector:
                     surah=surah,
                     start_ayah=s_ayah,
                     end_ayah=confirmed_end,
-                    start_time=aligned_phonemes[tok_start].start,
-                    end_time=aligned_phonemes[min(tok_end - 1, total_toks - 1)].end,
+                    start_time=phonemes[tok_start].start,
+                    end_time=phonemes[min(tok_end - 1, total_toks - 1)].end,
                     confidence=round(max(0.5, 1.0 - avg_norm), 2),
                     token_start_idx=tok_start,
                     token_end_idx=tok_end,

@@ -9,7 +9,6 @@ Zero-overhead, zero-mutation identity bypass for standard Hafs ('an 'Asim).
 
 from __future__ import annotations
 
-import os
 import copy
 import json
 import logging
@@ -17,7 +16,7 @@ from pathlib import Path
 from collections import defaultdict
 from typing import Optional, List, Dict, Any, Tuple
 
-from src.models import QuranSegment, QuranWord, AyahSubSegment
+from src.models import QuranSegment
 
 logger = logging.getLogger(__name__)
 

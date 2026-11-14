@@ -116,22 +116,8 @@ def load_msvc_runtime() -> None:
             except Exception:
                 pass
 
-    # Copy DLLs into onnxruntime/capi if present so onnxruntime always finds them
-    try:
-        ort_spec = importlib.util.find_spec("onnxruntime")
-        if ort_spec and ort_spec.submodule_search_locations:
-            capi_dir = Path(list(ort_spec.submodule_search_locations)[0]) / "capi"
-            if capi_dir.is_dir():
-                for name in dll_names:
-                    src = _BIN_DIR / name
-                    dst = capi_dir / name
-                    if src.is_file() and not dst.is_file():
-                        try:
-                            shutil.copy2(str(src), str(dst))
-                        except Exception:
-                            pass
-    except Exception:
-        pass
+    # Preload bundled MSVC runtimes
+    pass
 
 
 def bootstrap() -> None:

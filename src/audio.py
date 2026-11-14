@@ -16,14 +16,10 @@ from config import SAMPLE_RATE, CLIP_AUDIO_PEAKS
 
 
 def _miniaudio_decode(file_path: str, sample_rate: int) -> np.ndarray:
-    """Fast in-process C decoding via miniaudio (MP3, WAV, FLAC)."""
-    decoded = miniaudio.decode_file(
-        file_path,
-        output_format=miniaudio.SampleFormat.FLOAT32,
-        nchannels=1,
-        sample_rate=sample_rate,
-    )
-    return np.frombuffer(decoded.samples, dtype=np.float32)
+    """Fast in-process C decoding via miniaudio (MP3, WAV, FLAC), supporting Unicode/Arabic paths."""
+    with open(file_path, "rb") as f:
+        audio_bytes = f.read()
+    return _miniaudio_decode_bytes(audio_bytes, sample_rate)
 
 
 def _miniaudio_decode_bytes(audio_bytes: bytes, sample_rate: int) -> np.ndarray:

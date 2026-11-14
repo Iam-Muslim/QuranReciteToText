@@ -11,7 +11,7 @@
 ### Lightweight CPU Pipeline for Quran Recitation Transcription & Tajweed Alignment
 
 [![Python Version](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)](https://python.org)
-[![Inference Engine](https://img.shields.io/badge/Inference-ONNX%20Runtime%20CPU-005CED?logo=onnx&logoColor=white)](https://onnxruntime.ai)
+[![Inference Engine](https://img.shields.io/badge/Inference-TajweedFormer%20V4%20C--Engine-005CED?logo=c&logoColor=white)](https://quranlab.ai)
 [![Speed](https://img.shields.io/badge/Speed-20x%20--%2040x%20RTF%20(CPU)-brightgreen)](#benchmarks)
 
 <br/>
@@ -23,6 +23,7 @@
 
 <p align="center">
   <a href="#features">Features</a> &bull;
+  <a href="#model-setup">Model Setup</a> &bull;
   <a href="#quick-start">Quick Start</a> &bull;
   <a href="#cli-usage">CLI Usage</a> &bull;
   <a href="#batch-directory-processing---dir">Batch Processing</a> &bull;
@@ -37,8 +38,7 @@
 
 ## Features
 
-- **Neural Zipformer CTC Forced Alignment (Recommended)**: Powered by a 65.5M-parameter Transformer model trained on 59,000+ hours of recitation for fast, sub-frame, highly accurate word and Tajweed phoneme boundaries.
-- **Montreal Forced Aligner (MFA) [Experimental / Research Only]**: Optional secondary alignment pass via `--mfa` using pre-trained [Quran Hafs acoustic models](https://huggingface.co/Quran-Lab/mfa-quran-hafs). *Note: MFA is experimental and NOT recommended for general use; stick to the default neural CTC aligner for production alignment.*
+- **TajweedFormer V4 Native C-Engine**: Powered by the exact TajweedFormer V4 acoustic model and portable C runtime (`zf_tajweed.dll`) for ultra-fast, 20ms fine timing, and sub-frame accurate word and Tajweed phoneme boundaries.
 - **Word & Letter Timestamps**: Millisecond-accurate start and end boundaries for each word and its individual Tajweed phonemes.
 - **Automatic Surah & Ayah Detection**: Identifies recited verses automatically from audio without needing text input or prior labels.
 - **Batch Directory Processing**: Recursively processes folders of audio or video recitations, preserving folder trees, exporting per-file `<stem>.json` files, and generating merged `all_surahs.json` sets.
@@ -46,8 +46,53 @@
 - **Tajweed Acoustic VAD ("Madd Guardian")**: Specialized silence detection protects prolonged vowels (*Madd* 2/4/6 counts) and plosive stop closures (*Qalqalah*).
 - **Tajweed Boundary Repair**: Automatically reconciles cross-word assimilations like Idgham (with/without Ghunnah), Iqlab, and Shaddah.
 - **Prayer & Taraweeh Compatible**: Handles Istiaadha, Basmalah, and prayer Takbeers (`الله أكبر`) without distorting verse alignment.
-- **Fast CPU Inference (20x–40x RTF)**: Runs offline on consumer CPUs using quantized INT8 ONNX models. No GPU or PyTorch required.
+- **Fast CPU Inference (15x–30x RTF)**: Runs offline on consumer CPUs using the exact native C TajweedFormer inference engine. No GPU or PyTorch required.
 - **100% Offline & Private**: Zero external cloud calls, telemetry, or network dependencies.
+
+---
+
+## Model Setup (QuranLab TajweedFormer V4)
+
+QuranReciteToText uses the **TajweedFormer V4** neural acoustic model architecture developed by [QuranLab](https://quranlab.ai).
+
+> [!IMPORTANT]
+> **No Automated Model Downloads**: To keep this repository lightweight, clean, and 100% offline, TajweedFormer V4 model files are **not bundled in Git** and are **never downloaded automatically** in the background. You must obtain the model files from [quranlab.ai](https://quranlab.ai) and place them in the `data/model/` folder.
+
+### Required Model Directory Structure
+
+Ensure the model files from [quranlab.ai](https://quranlab.ai) are placed in `data/model/` as follows:
+
+```text
+QuranReciteToText/
+└── data/
+    ├── bin/
+    │   └── zf_tajweed.dll              # Windows native C inference runtime
+    └── model/
+        ├── tokens.txt                  # 38-token Tajweed acoustic vocabulary
+        ├── expected_tj3.zfx            # Precomputed reference phonemes for all 114 Surahs
+        ├── frontend.zfw                # Shared audio front-end filterbank feature weights
+        ├── layers.zfw                  # Core TajweedFormer acoustic model weights (~65 MB)
+        ├── calibration.json            # Model calibration thresholds & head params
+        └── c24_l256/                   # Primary execution context (recommended)
+            ├── frames.zfw              # Context frame buffer weights
+            ├── model_engine2.onnx      # ONNX execution graph
+            ├── model_engine2.onnx.zfg  # Compiled fast execution graph definition
+            └── model_engine2.onnx.zfg.bin # Binary graph parameters
+```
+
+### Required Files Breakdown
+
+| File / Folder | Purpose & Specification |
+| :--- | :--- |
+| **`tokens.txt`** | Vocabulary mapping of the 38 acoustic tokens: blank (`<blk>`), word delimiter (`|`), Arabic consonants, short vowels (`a`, `i`, `u`), and long vowels (`aa`, `ii`, `uu`). |
+| **`expected_tj3.zfx`** | Compact binary reference containing the canonical expected phoneme sequence for every Ayah across all 114 Surahs. |
+| **`frontend.zfw`** | Filterbank and feature extraction neural weights used by the native C-engine. |
+| **`layers.zfw`** | Deep acoustic transformer weights common across all context window configurations. |
+| **`c24_l256/`** | The recommended inference context (24-frame / 480ms chunk size, 256-frame / 10.2s left context) delivering optimum phoneme accuracy and high RTF speed. |
+| **`calibration.json`** | Model calibration parameters for fine confidence thresholds. |
+| **`data/bin/zf_tajweed.dll`** | Native C runtime library for Windows (or `libzf_tajweed.so` on Linux) delivering 20ms fine timing without PyTorch or external heavy runtimes. |
+
+*(Note: The lightweight Silero VAD model at `data/onnx/silero_vad_half.onnx` is automatically fetched if not present).*
 
 ---
 
@@ -57,15 +102,14 @@
 git clone https://github.com/Iam-Muslim/QuranReciteToText.git
 cd QuranReciteToText
 
-# Process a single audio/video file
+# 1. Place the TajweedFormer V4 model files in data/model/ (see Model Setup above)
+
+# 2. Process a single audio/video file
 python run.py --audio recitation.mp3
 
-# Or process an entire folder recursively
+# 3. Or process an entire folder recursively
 python run.py --dir ./my_recitations
 ```
-
-> [!NOTE]
-> Missing Python packages and the default acoustic model ([Quran-Lab/zipformer_p-arabic-v3](https://huggingface.co/Quran-Lab/zipformer_p-arabic-v3)) are downloaded and configured automatically.
 
 **Supported Media Formats**:
 - **Audio**: `.mp3`, `.wav`, `.m4a`, `.flac`, `.ogg`, `.opus`, `.aac`, `.wma`, `.aiff`
@@ -233,15 +277,13 @@ print(f"Batch complete: {len(summary['succeeded'])}/{summary['total_files']} fil
 Depending on the execution mode, outputs are saved to `./output`:
 
 ### Single-File Mode (`--audio`)
-Generates 5 files in `./output`:
+Generates production-ready artifacts in `./output`:
 
 | File | Description |
 | :--- | :--- |
 | **`output.json`** | Canonical JSON with Surahs, Ayahs, words, Uthmani text, locations, and phoneme timings. |
-| **`ctc_aligned_phonemes.json`** | All recognized Tajweed phonemes aligned to exact audio frame boundaries. |
-| **`raw_transcription.json`** | Raw unconstrained phonemes and detected pause timestamps. |
-| **`recovered_speech.json`** | Diagnostics of acoustic speech recovery events. |
-| **`qurancaption_segments.json`** | Segments format ready for QuranCaption subtitle generators. |
+| **`raw_transcription.json`** | Recognized Tajweed phonemes, timestamps, and detected pause intervals. |
+| **`recovered_speech.json`** | *(Optional)* Diagnostic telemetry of speech gap recovery (only emitted when enabled in `config.py`). |
 
 ### Batch Directory Mode (`--dir`)
 Generates clean, production-ready JSON files mirroring the source directory structure:
@@ -311,10 +353,12 @@ Tested on a consumer laptop CPU (AMD Ryzen 7 / Intel Core i7, CPU only):
 
 ## How It Works
 
-1. **Silence & Pause Detection**: Chunks audio at natural breath pauses (*Waqf*) while protecting held vowels (*Madd*) and consonant stop closures (*Qalqalah*).
-2. **Phoneme Recognition**: The Zipformer-v3 INT8 model transcribes each chunk into Arabic Tajweed phonemes.
-3. **CTC Forced Alignment**: Banded Viterbi alignment calculates exact audio boundaries for each phoneme.
-4. **Text Matching**: Matches recognized phonemes against the Quran reference to determine Surah/Ayah and build word boundaries.
+The entire pipeline executes in 4 sequential phases:
+
+1. **Phase 1: Silence & VAD Detection**: Chunks audio at natural breath pauses (*Waqf*) while protecting held vowels (*Madd*) and consonant stop closures (*Qalqalah*).
+2. **Phase 2: Acoustic Phoneme Transcribing**: The native C TajweedFormer V4 engine transcribes each chunk into 38-token Tajweed phonemes with direct 20ms-level timing and neural confidence.
+3. **Phase 3: Medina Text Alignment**: Matches recognized phonemes against the reference Medina Mushaf using Myers bit-parallel discovery and dynamic sequence alignment to resolve Surah/Ayah and accurate word boundaries.
+4. **Phase 4: JSON Artifact Export**: Generates canonical `output.json` and `raw_transcription.json`.
 
 ---
 
@@ -331,11 +375,6 @@ Parameters can be adjusted in [`config.py`](config.py):
 </details>
 
 ---
-
-<div align="center">
-<sub><b>Integration</b>: Automatically generates <code>output/qurancaption_segments.json</code> for 1-click use with <a href="https://github.com/zonetecde/QuranCaption">QuranCaption</a></sub>
-</div>
-
 
 ## License (لوجه الله تعالى)
 

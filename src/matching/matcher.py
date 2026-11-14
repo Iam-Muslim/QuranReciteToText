@@ -7,17 +7,20 @@ and canonical Ayah segment construction from Medina Mushaf reference.
 from __future__ import annotations
 
 import os
-import json
 import bisect
 import logging
-import re
 from dataclasses import dataclass
 from typing import Optional, List, Dict, Any, Tuple
 from collections import defaultdict
 import numpy as np
 
 import config
-from config import DEFAULT_QURAN_PHONEMES_PATH
+from config import (
+    DEFAULT_EXPECTED_ZFX_PATH,
+    DEFAULT_TOKENS_PATH,
+    PAUSE_CUT_MARGIN_S,
+    PAUSE_INTERVAL_OVERLAP_S,
+)
 from src.models import (
     PhonemeToken,
     PauseInterval,
@@ -29,20 +32,14 @@ from src.matching.phonetics import (
     get_sub_cost_table,
     _compute_insertion_costs_fast,
     _compute_deletion_costs_fast,
-    ISTIAADHA_TEXT,
     ISTIAADHA_PH,
-    BASMALAH_TEXT,
-    BASMALAH_PH,
-    TAKBEER_TEXT,
     TAKBEER_PH,
-    TASMEE_TEXT,
     TASMEE_PH,
     PRAYER_EXCLUDED_VERSES,
 )
 from src.matching.kernels import _global_viterbi_fast
-from src.matching.reference import RefWord, SurahReferenceData
+from src.matching.reference import RefWord, SurahReferenceData, ZfxReader
 from src.matching.detector import SurahDetector, SurahDetectionResult, find_near_matches
-from src.vad import align_ayah_boundaries
 
 logger = logging.getLogger(__name__)
 
@@ -68,26 +65,25 @@ class MatcherConfig:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _build_qword(rw: RefWord, tokens: List[PhonemeToken], score: float) -> QuranWord:
-    """Creates a unified QuranWord instance with phoneme breakdown and raw ASR bounds."""
-    r_start = tokens[0].raw_start if tokens[0].raw_start is not None else tokens[0].start
-    r_end = tokens[-1].raw_end if tokens[-1].raw_end is not None else tokens[-1].end
-    qw = QuranWord(
+    """Creates a unified QuranWord instance with phoneme breakdown and acoustic bounds."""
+    w_start = round(tokens[0].start, 3)
+    w_end = round(tokens[-1].end, 3)
+    return QuranWord(
         word=rw.uthmani,
         location=rw.location,
         ref=rw.phoneme,
-        start=round(tokens[0].start, 3),
-        end=round(tokens[-1].end, 3),
+        start=w_start,
+        end=w_end,
         score=round(score, 2),
         phonemes=[t.to_dict() for t in tokens],
-        raw_start=round(r_start, 3),
-        raw_end=round(r_end, 3),
+        raw_start=w_start,
+        raw_end=w_end,
     )
-    return qw
 
 
 
 def _align_and_package_ayahs(
-    aligned_tokens: List[PhonemeToken],
+    tokens: List[PhonemeToken],
     ref_data: SurahReferenceData,
     start_word_index: int = 0,
     target_end_ayah: Optional[int] = None,
@@ -96,16 +92,16 @@ def _align_and_package_ayahs(
     pause_intervals: Optional[List[PauseInterval]] = None,
 ) -> List[QuranSegment]:
     """Aligns speech tokens against Surah reference using JumpDTW Dynamic Programming."""
-    if not aligned_tokens or ref_data.num_words == 0:
+    if not tokens or ref_data.num_words == 0:
         return []
 
     cfg = matcher_cfg or MatcherConfig()
-    total_tokens = len(aligned_tokens)
-    asr_str = "".join(t.phoneme for t in aligned_tokens)
+    total_tokens = len(tokens)
+    asr_str = "".join(t.phoneme for t in tokens)
 
     # Fast char-to-token index lookup
     char_to_tok: List[int] = []
-    for tok_idx, t in enumerate(aligned_tokens):
+    for tok_idx, t in enumerate(tokens):
         char_to_tok.extend([tok_idx] * len(t.phoneme))
     char_to_tok.append(total_tokens)
 
@@ -216,7 +212,7 @@ def _align_and_package_ayahs(
                     if ref_covered < 2 or coverage < min_cov:
                         continue
 
-                w_toks = aligned_tokens[t_s:t_e]
+                w_toks = tokens[t_s:t_e]
                 matched_word_tokens[w].append(w_toks)
                 w_conf = sum(t.confidence for t in w_toks) / len(w_toks)
                 matched_word_scores[w] = round(min(1.0, w_conf), 2)
@@ -317,7 +313,7 @@ def _align_and_package_ayahs(
         min_sub_pause = getattr(config, "SUBSEGMENT_MIN_PAUSE_S", 0.20)
 
         def _build_sub(pass_words: List[QuranWord], is_rep: bool) -> AyahSubSegment:
-            sub_asr = " ".join("".join(p.get("phoneme", "") for p in (w.phonemes or [])) for w in pass_words if w.phonemes)
+            sub_asr = "".join("".join(p.get("phoneme", "") for p in (w.phonemes or [])) for w in pass_words if w.phonemes)
             return AyahSubSegment(
                 sub_segment_number=len(sub_segs_list) + 1,
                 start_time=pass_words[0].start or 0.0,
@@ -329,221 +325,63 @@ def _align_and_package_ayahs(
             )
 
         def _find_pause_cut(w_prev: QuranWord, w_curr: QuranWord) -> Optional[Tuple[float, float]]:
-            # Raw ASR bounds (before forced alignment) where acoustic pauses actually sit in <blank> frames
-            w_prev_raw_e = w_prev.raw_end if w_prev.raw_end is not None else (w_prev.end or 0.0)
-            w_curr_raw_s = w_curr.raw_start if w_curr.raw_start is not None else (w_curr.start or 0.0)
-
-            w_prev_s = w_prev.start or 0.0
             w_prev_e = w_prev.end or 0.0
             w_curr_s = w_curr.start or 0.0
-            w_curr_e = w_curr.end or 0.0
 
-            mid_prev = (w_prev_s + w_prev_e) / 2.0
-            mid_curr = (w_curr_s + w_curr_e) / 2.0
-            if mid_curr <= mid_prev:
+            if w_curr_s <= w_prev_e:
                 return None
 
+            mid_prev = (w_prev.start or 0.0 + w_prev_e) / 2.0
+            mid_curr = (w_curr_s + (w_curr.end or 0.0)) / 2.0
+
             if intervals:
-                idx = bisect.bisect_right(interval_starts, w_curr_e + 0.50)
+                idx = bisect.bisect_right(interval_starts, w_curr_s + 0.50)
                 for i in range(idx - 1, -1, -1):
                     p = intervals[i]
-                    if p.start_sec < w_prev_s - 1.0:
+                    if p.start_sec < w_prev_e - 1.0:
                         break
                     if p.duration_sec < min_sub_pause:
                         continue
-                    # Reject shallow consonant closures (e.g. labial dips > -30 dB) that are not true breath pauses:
+                    # Reject shallow consonant closures (e.g. labial dips > -30 dB) that are not true breath pauses
                     if p.duration_sec < 0.35 and getattr(p, "min_energy_db", None) is not None and p.min_energy_db > -30.0:
                         continue
                     cut = p.optimal_cut_point
 
-                    # 1. Primary check using raw CTC ASR time before forced alignment:
-                    if (w_prev_raw_e - 0.08) <= cut <= (w_curr_raw_s + 0.08) and (mid_prev < cut < mid_curr):
+                    # Acoustic cut sits naturally between previous word end and current word start
+                    if (w_prev_e - PAUSE_CUT_MARGIN_S) <= cut <= (w_curr_s + PAUSE_CUT_MARGIN_S) and (mid_prev < cut < mid_curr):
                         return (cut, p.end_sec)
-
-                    # 2. Interval overlap check in raw ASR time:
-                    if (p.start_sec >= w_prev_raw_e - 0.12) and (p.end_sec <= w_curr_raw_s + 0.12):
+                    if (p.start_sec >= w_prev_e - PAUSE_INTERVAL_OVERLAP_S) and (p.end_sec <= w_curr_s + PAUSE_INTERVAL_OVERLAP_S):
                         if mid_prev < cut < mid_curr:
                             return (cut, p.end_sec)
-
-                    # 3. Geometric fallback: cut point sits safely between the word boundaries
-                    if cut > (w_prev_s + 0.04) and cut < (w_curr_e - 0.04) and (mid_prev < cut < mid_curr):
-                        if (p.start_sec - 0.15) <= w_prev_e and (p.end_sec + 0.15) >= w_curr_s:
-                            return (cut, p.end_sec)
             elif pauses:
-                idx = bisect.bisect_right(pause_pts, w_curr_e + 0.50)
+                idx = bisect.bisect_right(pause_pts, w_curr_s + 0.50)
                 for i in range(idx - 1, -1, -1):
                     pt = pause_pts[i]
-                    if pt < w_prev_s - 1.0:
+                    if pt < w_prev_e - 1.0:
                         break
-                    if (w_prev_raw_e - 0.08) <= pt <= (w_curr_raw_s + 0.08) and (mid_prev < pt < mid_curr):
-                        return (pt, pt + 0.10)
-                    if mid_prev < pt < mid_curr and pt > (w_prev_s + 0.04) and pt < (w_curr_e - 0.04):
+                    if (w_prev_e - PAUSE_CUT_MARGIN_S) <= pt <= (w_curr_s + PAUSE_CUT_MARGIN_S) and (mid_prev < pt < mid_curr):
                         return (pt, pt + 0.10)
 
             return None
 
         seen_locations: set[str] = set()
 
-        # Exact model Ghunnah tokens from tokens.txt
-        _GHUNNAH_SUBS = (
-            "ممممَ", "ممممُ", "ممممِ", "ممم",
-            "ننننَ", "ننننُ", "ننننِ", "ننن",
-            "ںںں", "ں", "۾۾۾", "۾",
-            "وووَ", "وووُ", "وووِ", "ووو", "ووَ", "ووُ", "ووِ", "وو",
-            "يييَ", "يييُ", "ييي", "ييييي", "ييَ", "ييُ", "ييِ", "يي"
-        )
-        # Exact model Madd tokens from tokens.txt
-        _MADD_TOKENS = (
-            "ۥۥۥۥۥۥ", "ۥۥۥۥۥ", "ۥۥۥۥ", "ۥۥ", "ۥ",
-            "ۦۦۦۦۦۦ", "ۦۦۦۦۦ", "ۦۦۦۦ", "ۦۦ", "ۦ",
-            "اااااا", "ااااا", "اااا", "اا", "ااۜ",
-            "ووو", "وو", "ييي", "يي", "ييييي"
-        )
-        _TANWEEN_CHARS = ("ً", "ٍ", "ٌ", "ۢ", "ۭ")
-        _SHAMSI_GEMS = (
-            "تت", "ثث", "دد", "ذذ", "رر", "زز", "سس", "شش", "صص", "ضض", "طط", "ظظ", "لل",
-            "نننن", "ننن"
-        )
-        _ASSIM_PAIRS = (
-            ("لْ", "لل"), ("ل", "لل"),
-            ("تْ", "تت"), ("ت", "تت"),
-            ("رْ", "رر"), ("ر", "رر"),
-            ("عْ", "عع"), ("ع", "عع"),
-            ("دْ", "دد"), ("د", "دد"),
-            ("بْ", "بب"), ("ب", "بب"),
-        )
-        _PROCLITIC_CONSONANTS = ("وَ", "فَ", "بِ", "لِ", "كَ", "سَ", "جَ", "طَ", "قَ", "نَ", "تَ", "يَ", "عَ", "مَ", "مِ", "مُ")
-
         def _append_chunk(chunk: List[QuranWord]) -> None:
             if not chunk:
                 return
 
-            # 1. Tajweed Assimilated Boundaries (Idgham bi-Ghunnah, bila-Ghunnah, Iqlab, Mutamathilayn, Shamsi):
+            # Pure acoustic non-overlap guard (never bridge positive acoustic silence)
             for i in range(len(chunk) - 1):
                 cw1 = chunk[i]
                 cw2 = chunk[i + 1]
-                w1_word = cw1.word or ""
-                w1_ref = cw1.ref or ""
-                w2_word = cw2.word or ""
-                w2_ref = cw2.ref or ""
-                w1_ph = cw1.phonemes or []
-                w2_ph = cw2.phonemes or []
-
-                # Exact Tajweed assimilation codas from ordered_quran_phonemes.json:
-                # 'ںںں' (Ikhfa/Idgham), 'مم' (Idgham/Iqlab), 'وو' (Idgham Waw), 'يي' (Idgham Yaa), '۾۾۾' (Ikhfa Shafawi)
-                w1_has_nasal_coda = (
-                    any(c in w1_word for c in _TANWEEN_CHARS)
-                    or (w1_word.endswith("نْ") and not w1_word.endswith("ءَانْ"))
-                    or (w1_word.endswith("ن") and not w1_word.endswith("ءَان"))
-                    or (w1_word.endswith("مْ") and not w1_word.endswith("ءَامْ"))
-                    or (w1_word.endswith("م") and not w1_word.endswith("ءَام"))
-                    or any(w1_ref.endswith(s) for s in ("مم", "وو", "يي", "ںںں", "۾۾۾", "ں", "۾"))
-                )
-
-                if not w2_ph:
-                    continue
-
-                first_p2 = w2_ph[0]
-                p2_name = first_p2.get("phoneme", "")
-                p2_dur = first_p2.get("end", 0.0) - first_p2.get("start", 0.0)
-                last_p1 = w1_ph[-1] if w1_ph else {}
-                p1_name = last_p1.get("phoneme", "")
-                p1_dur = last_p1.get("end", 0.0) - last_p1.get("start", 0.0)
-
-                is_waw_idgham = w1_ref.endswith("وو") and any(p2_name.startswith(w) for w in ("وَ", "وُ", "وِ", "و")) and p2_dur >= 0.15
-                is_yaa_idgham = w1_ref.endswith("يي") and any(p2_name.startswith(y) for y in ("يَ", "يُ", "يِ", "ي")) and p2_dur >= 0.15
-                is_ikhfa_shafawi = (w1_ref.endswith("۾۾۾") or w1_ref.endswith("۾") or w1_word.endswith("م")) and any(p2_name.startswith(b) for b in ("بِ", "بَ", "بُ", "ب")) and p2_dur >= 0.30
-                is_meem_idgham = (w1_ref.endswith("مم") or w1_word.endswith("م")) and (w2_ref.startswith("مم") or w2_word.startswith("م")) and len(w2_ph) > 1
-
-                # Case A: Idgham bi-Ghunnah / Shafawi / Ikhfa (Tanween, Nun Saakinah, Meem Saakinah):
-                # Canonical recitation & Medina GT assign the held Ghunnah (2 Harakat) to Word 1.
-                if w1_has_nasal_coda and (any(p2_name.startswith(g) for g in _GHUNNAH_SUBS) or is_waw_idgham or is_yaa_idgham or is_ikhfa_shafawi or is_meem_idgham) and p2_dur >= 0.12:
-                    if len(w2_ph) > 1:
-                        if is_ikhfa_shafawi:
-                            split_pt = round(max(first_p2.get("start", 0.0) + 0.10, first_p2.get("end", 0.0) - 0.25), 3)
-                            cw1.end = split_pt
-                            cw2.start = split_pt
-                            first_p2["start"] = split_pt
-                        elif is_meem_idgham and len(w2_ph) > 1:
-                            split_pt = round(w2_ph[1].get("start", first_p2.get("end", 0.0)), 3)
-                            cw1.end = split_pt
-                            cw2.start = split_pt
-                            if cw1.phonemes is not None:
-                                cw1.phonemes.append(first_p2)
-                            cw2.phonemes = w2_ph[1:]
-                        else:
-                            split_pt = round(max(first_p2.get("start", 0.0) + 0.05, first_p2.get("end", 0.0) - 0.040), 3)
-                            cw1.end = split_pt
-                            cw2.start = split_pt
-                            if cw1.phonemes is not None and not (is_waw_idgham or is_yaa_idgham):
-                                cw1.phonemes.append(first_p2)
-                                cw2.phonemes = w2_ph[1:]
-                            elif is_waw_idgham or is_yaa_idgham:
-                                if len(w2_ph) > 1 and (w2_ph[1].get("start", 0.0) - first_p2.get("end", 0.0)) >= 0.30:
-                                    cw1.end = round(w2_ph[1].get("start", 0.0) - 0.150, 3)
-                                    cw2.start = cw1.end
-                                    if cw1.phonemes is not None:
-                                        cw1.phonemes.append(first_p2)
-                                    cw2.phonemes = w2_ph[1:]
-                                else:
-                                    first_p2["start"] = split_pt
-                    else:
-                        release_pt = round(max(first_p2.get("start", 0.0) + 0.05, first_p2.get("end", 0.0) - 0.040), 3)
-                        cw1.end = release_pt
-                        cw2.start = release_pt
-                        first_p2["start"] = release_pt
-
-                # Case A2: Idgham bila-Ghunnah (Tanween / Nun Saakinah into Lam or Raa):
-                # Word 2 retains its onset geminate consonant; boundary is at contact onset.
-                elif w1_has_nasal_coda and any(p2_name.startswith(g) for g in ("لل", "رر")):
-                    split_pt = round(first_p2.get("start", 0.0), 3)
-                    cw1.end = split_pt
-                    cw2.start = split_pt
-                    first_p2["start"] = split_pt
-
-                # Case B: Idgham Mutamathilayn / Mutajanisayn (e.g. 'يَجْعَل لَّهُۥ', 'طَلَعَت تَّزَٰوَرُ', 'غَرَبَت تَّقْرِضُهُمْ', 'وَٱذْكُر رَّبَّكَ', 'تَسْتَطِع عَّلَيْهِ')
-                elif any((w1_word.endswith(end_c) and p2_name.startswith(gem)) for end_c, gem in _ASSIM_PAIRS):
-                    if p2_dur >= 0.25:
-                        mid_pt = round(first_p2.get("start", 0.0) + p2_dur * 0.50, 3)
-                        cw1.end = mid_pt
-                        cw2.start = mid_pt
-                        first_p2["start"] = mid_pt
-
-                # Case C: Madd Munfasil before Hamzat al-Qat' (e.g. 'ٱلَّذِىٓ أَنزَلَ', 'إِلَّآ أَن', 'لَبِثُوٓا۟ أَمَدًا', 'فِىٓ أَعْنَـٰقِهِمْ')
-                elif any(p1_name.startswith(m) for m in _MADD_TOKENS) and p2_name.startswith("ء"):
-                    if len(w2_ph) > 1 and p2_dur >= 0.18:
-                        hamzah_lead = min(0.200, max(0.100, p2_dur * 0.40))
-                        split_pt = round(first_p2.get("end", 0.0) - hamzah_lead, 3)
-                    else:
-                        split_pt = round(first_p2.get("start", cw1.end or 0.0), 3)
-                    cw1.end = split_pt
-                    cw2.start = split_pt
-                    first_p2["start"] = split_pt
-
-                # Case D: Prolonged Single Onset Proclitic (e.g. 'نَفْسُهُۥ وَنَحْنُ', 'هَـٰذَا فَكَشَفْنَا')
-                # When a single proclitic ('وَ', 'فَ') absorbs a preceding held Madd vowel (duration >= 0.50s):
-                elif any(p1_name.startswith(m) for m in _MADD_TOKENS) and len(w2_ph) > 1 and p2_dur >= 0.50 and any(p2_name.startswith(c) for c in ("وَ", "فَ")):
-                    split_pt = round(first_p2.get("end", 0.0) - 0.150, 3)
-                    cw1.end = split_pt
-                    cw2.start = split_pt
-                    first_p2["start"] = split_pt
-
-            # 2. Contiguous Wasl Tiling & Non-Overlap:
-            for i in range(len(chunk) - 1):
-                cw1 = chunk[i]
-                cw2 = chunk[i + 1]
-                if cw1.end is not None and cw2.start is not None:
-                    gap = cw2.start - cw1.end
-                    if 0.0 < gap <= 0.280:
-                        mid = round((cw1.end + cw2.start) * 0.5, 3)
-                        cw1.end = mid
-                        cw2.start = mid
-                    elif gap < 0:
-                        mid = round((cw1.end + cw2.start) * 0.5, 3)
-                        cw1.end = mid
-                        cw2.start = mid
-                        if cw2.phonemes:
-                            cw2.phonemes[0]["start"] = mid
+                if cw1.end is not None and cw2.start is not None and cw2.start < cw1.end:
+                    mid = round((cw1.end + cw2.start) * 0.5, 3)
+                    cw1.end = mid
+                    cw2.start = mid
+                    if cw1.phonemes:
+                        cw1.phonemes[-1]["end"] = min(cw1.phonemes[-1]["end"], mid)
+                    if cw2.phonemes:
+                        cw2.phonemes[0]["start"] = max(cw2.phonemes[0]["start"], mid)
 
             # A subsegment is marked as a repetition if it contains ANY word that has already been recited earlier in this Ayah
             is_rep_chunk = (
@@ -569,41 +407,12 @@ def _align_and_package_ayahs(
                     prev_w = current_chunk[-1]
                     p_bounds = _find_pause_cut(prev_w, w)
                     if p_bounds is not None:
-                        cut_pt = p_bounds[0]
-                        prev_w.end = max(prev_w.end or 0.0, cut_pt)
-                        if prev_w.phonemes:
-                            prev_w.phonemes[-1]["end"] = prev_w.end
                         _append_chunk(current_chunk)
                         current_chunk = []
 
                 current_chunk.append(w)
 
             if current_chunk:
-                # If there is a subsequent pass (repetition), check if an acoustic breath pause sits between passes
-                if p_idx < len(passes) - 1:
-                    next_pass_words = passes[p_idx + 1][0]
-                    if next_pass_words:
-                        p_bounds = _find_pause_cut(current_chunk[-1], next_pass_words[0])
-                        if p_bounds is not None:
-                            cut_pt = p_bounds[0]
-                            current_chunk[-1].end = max(current_chunk[-1].end or 0.0, cut_pt)
-                            if current_chunk[-1].phonemes:
-                                current_chunk[-1].phonemes[-1]["end"] = current_chunk[-1].end
-                        else:
-                            first_next_p = next_pass_words[0].phonemes[0] if next_pass_words[0].phonemes else None
-                            if first_next_p and (first_next_p.get("end", 0.0) - first_next_p.get("start", 0.0)) >= 0.50:
-                                true_start = round(first_next_p.get("end", 0.0) - 0.250, 3)
-                                first_next_p["start"] = true_start
-                                next_pass_words[0].start = true_start
-
-                            p_last_e = current_chunk[-1].end or 0.0
-                            n_first_s = next_pass_words[0].start or 0.0
-                            rep_gap = n_first_s - p_last_e
-                            if rep_gap >= 0.20:
-                                mid_pt = round((p_last_e + n_first_s) / 2.0, 3)
-                                current_chunk[-1].end = min(p_last_e + 0.90, mid_pt)
-                                if current_chunk[-1].phonemes:
-                                    current_chunk[-1].phonemes[-1]["end"] = current_chunk[-1].end
                 _append_chunk(current_chunk)
 
         if len(sub_segs_list) > 1 or has_repeated:
@@ -627,8 +436,8 @@ def _align_and_package_ayahs(
             segment_number=seg_number,
             ayah=ay,
             surah_number=ref_data.surah,
-            start_time=round(seg_start, 2),
-            end_time=round(seg_end, 2),
+            start_time=round(seg_start, 3),
+            end_time=round(seg_end, 3),
             matched_ref=matched_ref_str,
             words=qwords,
             repeated_ranges=repeated_ranges,
@@ -637,9 +446,6 @@ def _align_and_package_ayahs(
         ))
         seg_number += 1
 
-    if pause_intervals and len(segments) > 1:
-        align_ayah_boundaries(segments, pause_intervals)
-
     return segments
 
 
@@ -647,37 +453,22 @@ def _align_and_package_ayahs(
 # 3. OPENING PREAMBLE EXTRACTION
 # ═══════════════════════════════════════════════════════════════════════════════
 
-ISTIAADHA_TEXT = "أَعُوذُ بِٱللَّهِ مِنَ ٱلشَّيْطَـٰنِ ٱلرَّجِيمِ"
-ISTIAADHA_PH = "ءَعُۥۥذُبِللَااهِمِنَششَيطَاانِررَجِۦۦۦۦم"
-
 ISTIAADHA_REF_DATA = SurahReferenceData(
     0,
-    {
-        "0:1": {
-            "aya_text": ISTIAADHA_TEXT,
-            "aya_phonemes_list": ["ءَعُۥۥذُ", "بِللَااهِ", "مِنَ", "ششَيطَاانِ", "ررَجِۦۦۦۦم"],
-        }
-    },
+    ayah_words={1: ["ءaعuuذu", "بiلaaهi", "مiنa", "شaيطaaنi", "رaجiiم"]},
+    uthmani_words={1: ["أَعُوذُ", "بِٱللَّهِ", "مِنَ", "ٱلشَّيْطَـٰنِ", "ٱلرَّجِيمِ"]},
 )
 
 TAKBEER_REF_DATA = SurahReferenceData(
     0,
-    {
-        "0:2": {
-            "aya_text": TAKBEER_TEXT,
-            "aya_phonemes_list": ["ءَللَااهُ", "ءَكڇبَر"],
-        }
-    },
+    ayah_words={2: ["ءaلaaهu", "ءaكبaر"]},
+    uthmani_words={2: ["اللَّهُ", "أَكْبَرُ"]},
 )
 
 TASMEE_REF_DATA = SurahReferenceData(
     0,
-    {
-        "0:3": {
-            "aya_text": TASMEE_TEXT,
-            "aya_phonemes_list": ["سَمِعَ", "للَااهُ", "لِمَںںں", "حَمِدَه"],
-        }
-    },
+    ayah_words={3: ["سaمiعa", "لaaهu", "لiمaن", "حaمiدaه"]},
+    uthmani_words={3: ["سَمِعَ", "اللَّهُ", "لِمَنْ", "حَمِدَهُ"]},
 )
 
 
@@ -721,16 +512,16 @@ def _slice_preamble_match(
 
 
 def _extract_opening_preamble(
-    aligned_tokens: List[PhonemeToken],
+    tokens: List[PhonemeToken],
     surah: int,
     start_ayah: int,
     ref_surah_1: SurahReferenceData,
 ) -> Tuple[Optional[Dict[str, Any]], List[PhonemeToken]]:
     """Detects and isolates prayer transition phrases (Takbeer/Tasmee'), Isti'adha, and/or Basmalah before Ayah 1."""
-    if not aligned_tokens:
-        return None, aligned_tokens
+    if not tokens:
+        return None, tokens
 
-    curr = aligned_tokens
+    curr = tokens
     intro_words: List[Dict[str, Any]] = []
     intro_texts: List[str] = []
     intro_starts: List[float] = []
@@ -744,7 +535,7 @@ def _extract_opening_preamble(
             intro_starts.append(st)
             intro_ends.append(et)
             segs = _align_and_package_ayahs(
-                aligned_tokens=toks,
+                tokens=toks,
                 ref_data=ref,
                 start_word_index=0,
                 target_end_ayah=None,
@@ -756,7 +547,7 @@ def _extract_opening_preamble(
                         for w in sub.words:
                             intro_words.append(w.to_dict())
                 elif segs[0].words:
-                    intro_texts.append(" ".join("".join(p.get("phoneme", "") for p in (w.phonemes or [])) for w in segs[0].words if w.phonemes))
+                    intro_texts.append("".join("".join(p.get("phoneme", "") for p in (w.phonemes or [])) for w in segs[0].words if w.phonemes))
                     for w in segs[0].words:
                         intro_words.append(w.to_dict())
 
@@ -785,9 +576,9 @@ def _extract_opening_preamble(
 
     if intro_texts:
         return {
-            "start": round(min(intro_starts), 2),
-            "end": round(max(intro_ends), 2),
-            "transcribed_text": " ".join(intro_texts),
+            "start": round(min(intro_starts), 3),
+            "end": round(max(intro_ends), 3),
+            "transcribed_text": "".join(intro_texts),
             "words": intro_words,
         }, curr
 
@@ -804,7 +595,7 @@ class QuranMatcher:
     def __init__(self, config: Optional[MatcherConfig] = None):
         self.config = config or MatcherConfig()
         self.detector = SurahDetector()
-        self._verses: Dict[str, Any] = {}
+        self._zfx_reader: Optional[ZfxReader] = None
         self._surah_refs: Dict[int, SurahReferenceData] = {}
         self._is_initialized = False
 
@@ -814,32 +605,39 @@ class QuranMatcher:
 
     def initialize_from_file(
         self,
-        json_file_path: Optional[str] = None,
-        ref_norm_ph_path: Optional[str] = None,
-        ph_index_path: Optional[str] = None,
+        zfx_path: Optional[str] = None,
+        tokens_path: Optional[str] = None,
+        qpc_path: Optional[str] = None,
     ) -> None:
-        path = json_file_path or DEFAULT_QURAN_PHONEMES_PATH
-        if not os.path.exists(path):
-            raise FileNotFoundError(f"Quran phonemes file not found: {path}")
+        target_zfx = zfx_path or DEFAULT_EXPECTED_ZFX_PATH
+        target_tokens = tokens_path or DEFAULT_TOKENS_PATH
+        target_qpc = qpc_path or getattr(config, "DEFAULT_QPC_HAFS_PATH", None)
 
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            self._verses = data.get("verses", data)
+        if not os.path.exists(target_zfx):
+            raise FileNotFoundError(f"Missing ZFX reference file: {target_zfx}")
+        if not os.path.exists(target_tokens):
+            raise FileNotFoundError(f"Missing tokens file: {target_tokens}")
+
+        self._zfx_reader = ZfxReader(target_zfx, target_tokens, qpc_path=target_qpc)
 
         self.detector.initialize(
-            ref_norm_ph_path=ref_norm_ph_path,
-            ph_index_path=ph_index_path,
+            zfx_reader=self._zfx_reader,
+            zfx_path=target_zfx,
+            tokens_path=target_tokens,
         )
         self._is_initialized = True
 
     def _get_surah_ref(self, surah: int) -> SurahReferenceData:
         if surah not in self._surah_refs:
-            self._surah_refs[surah] = SurahReferenceData(surah, self._verses)
+            if self._zfx_reader is None:
+                raise RuntimeError("QuranMatcher is not initialized with ZFX reference.")
+            w_dict, u_dict = self._zfx_reader.get_surah_data(surah)
+            self._surah_refs[surah] = SurahReferenceData(surah, ayah_words=w_dict, uthmani_words=u_dict)
         return self._surah_refs[surah]
 
     def match_segments(
         self,
-        aligned_phonemes: List[PhonemeToken],
+        phonemes: List[PhonemeToken],
         audio_duration: float = 0.0,
         target_surah: Optional[int] = None,
         start_ayah: Optional[int] = None,
@@ -848,7 +646,7 @@ class QuranMatcher:
     ) -> List[QuranSegment]:
         if not self._is_initialized:
             self.initialize_from_file()
-        if not aligned_phonemes or not self._verses:
+        if not phonemes or self._zfx_reader is None:
             return []
 
         # 1. Automatic Multi-Surah / Single-Surah Detection
@@ -862,18 +660,18 @@ class QuranMatcher:
                     start_ayah=detected_start_ayah or 1,
                     end_ayah=detected_end_ayah,
                     token_start_idx=0,
-                    token_end_idx=len(aligned_phonemes),
+                    token_end_idx=len(phonemes),
                 )
             ]
         else:
             sections = self.detector.detect_multi_surah(
-                aligned_phonemes,
+                phonemes,
                 pause_timestamps=pause_timestamps,
                 pause_intervals=pause_intervals,
             )
 
         if not sections:
-            sections = [SurahDetectionResult(surah=1, start_ayah=1, token_start_idx=0, token_end_idx=len(aligned_phonemes))]
+            sections = [SurahDetectionResult(surah=1, start_ayah=1, token_start_idx=0, token_end_idx=len(phonemes))]
 
         if len(sections) == 1:
             det_res = sections[0]
@@ -889,7 +687,7 @@ class QuranMatcher:
                 det_res.confidence,
             )
             return self._align_surah_section(
-                tokens=aligned_phonemes,
+                tokens=phonemes,
                 surah=detected_surah,
                 start_ayah=detected_start_ayah or 1,
                 end_ayah=detected_end_ayah,
@@ -903,7 +701,7 @@ class QuranMatcher:
         global_seg_idx = 1
 
         for sec in sections:
-            sec_tokens = aligned_phonemes[sec.token_start_idx : sec.token_end_idx]
+            sec_tokens = phonemes[sec.token_start_idx : sec.token_end_idx]
             if not sec_tokens:
                 continue
 
@@ -948,7 +746,7 @@ class QuranMatcher:
     ) -> List[QuranSegment]:
         """Aligns a continuous section against a specific Surah reference with preamble extraction."""
         intro_dict, remaining_tokens = _extract_opening_preamble(
-            aligned_tokens=tokens,
+            tokens=tokens,
             surah=surah,
             start_ayah=start_ayah,
             ref_surah_1=self._get_surah_ref(1),
@@ -961,7 +759,7 @@ class QuranMatcher:
         start_word_idx = ref_data.ayah_start_word_index.get(effective_start_ayah, 0)
 
         segs = _align_and_package_ayahs(
-            aligned_tokens=remaining_tokens,
+            tokens=remaining_tokens,
             ref_data=ref_data,
             start_word_index=start_word_idx,
             target_end_ayah=end_ayah,

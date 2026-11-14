@@ -19,7 +19,7 @@ _app_path = Path(__file__).parent.resolve()
 if str(_app_path) not in sys.path:
     sys.path.insert(0, str(_app_path))
 
-# Bootstrap environment: Windows console, SSL certs, MSVC runtime DLLs (Exact QuranCaption pattern)
+# Bootstrap environment: Windows console, SSL certs, MSVC runtime DLLs
 def _bootstrap_environment() -> None:
     if sys.platform == "win32":
         for stream in (sys.stdout, sys.stderr):
@@ -66,26 +66,11 @@ def _bootstrap_environment() -> None:
                 dll_file = bin_dir / name
                 if dll_file.is_file():
                     ctypes.CDLL(str(dll_file))
-
-            import importlib.util
-            import shutil
-            ort_spec = importlib.util.find_spec("onnxruntime")
-            if ort_spec and ort_spec.submodule_search_locations:
-                capi_dir = Path(list(ort_spec.submodule_search_locations)[0]) / "capi"
-                if capi_dir.is_dir():
-                    for name in dll_names:
-                        src = bin_dir / name
-                        dst = capi_dir / name
-                        if src.is_file() and not dst.is_file():
-                            try:
-                                shutil.copy2(str(src), str(dst))
-                            except Exception:
-                                pass
         except Exception:
             pass
 
     try:
-        import data.bin.bootstrap
+        import data.bin.bootstrap  # noqa: F401
     except Exception:
         pass
 
@@ -101,18 +86,22 @@ def get_hardware_topology() -> tuple[int, int]:
 
 def resolve_concurrency(fast: bool, user_workers: int | None, user_threads: int | None) -> tuple[int, int]:
     """Resolves optimal (workers, threads) based on hardware topology and CLI flags."""
+    import config
     phys, log = get_hardware_topology()
     if fast:
-        # Fast mode: scale workers to dedicated physical cores (leave 1 core on multicore systems for OS/I/O)
-        opt_workers = max(1, min(phys - 1 if phys > 2 else phys, 7))
-        # When running parallel segment workers, each worker uses 1 intra-op thread for zero-barrier locality.
-        # This eliminates AVX2 hyperthread contention and mutex stalls, cutting CPU load by >40% with zero speed loss.
-        opt_threads = 1 if opt_workers > 1 else (2 if phys >= 2 else 1)
-        workers = user_workers if user_workers is not None else opt_workers
-        threads = user_threads if user_threads is not None else (1 if workers > 1 else 2)
+        # Fast mode: scale parallel segment workers across physical/logical cores (sweet spot for desktop/server)
+        opt_workers = max(1, min(phys + (log - phys) // 2, 8))
+        opt_threads = 1 if opt_workers > 1 else 0
     else:
-        workers = user_workers if user_workers is not None else 1
-        threads = user_threads if user_threads is not None else (2 if phys >= 2 else 1)
+        cfg_workers = getattr(config, "NUM_SEGMENT_WORKERS", 1)
+        opt_workers = cfg_workers if cfg_workers > 1 else 1
+        opt_threads = 1 if opt_workers > 1 else 0
+
+    workers = user_workers if user_workers is not None else opt_workers
+    if user_threads is not None:
+        threads = user_threads
+    else:
+        threads = 1 if workers > 1 else opt_threads
     return workers, threads
 
 
@@ -123,14 +112,11 @@ def main():
     parser.add_argument("--audio", type=str, default=None, help="Path to input audio file")
     parser.add_argument("--dir", type=str, default=None, help="Path to directory containing audio files for batch transcription")
     parser.add_argument("--fast", action="store_true", default=False, help="Auto-configure top-speed parallel workers and threads for this CPU")
-    parser.add_argument("--threads", type=int, default=None, help="ONNX execution threads (default: auto/2)")
+    parser.add_argument("--threads", type=int, default=None, help="TajweedFormer execution threads (default: 0 = fast cores)")
     parser.add_argument("--workers", type=int, default=None, help="Parallel segment workers (default: 1, or auto in --fast mode)")
     parser.add_argument("--progress", action="store_true", default=False, help="Emit JSON progress lines for frontend apps")
     parser.add_argument("--qiraat", type=str, default="hafs", help="Canonical recitation tradition (e.g. hafs, warsh, qaloon, duri, susi, bazzi, qunbul; default: hafs)")
-    parser.add_argument("--mfa", action="store_true", default=False, help="Run secondary 10ms phone-level alignment using Montreal Forced Aligner (MFA)")
     args = parser.parse_args()
-    if args.mfa:
-        parser.error("--mfa is temporarily disabled.")
 
     audio_path = args.audio
     dir_path = args.dir
@@ -185,9 +171,9 @@ def main():
 
     workers, threads = resolve_concurrency(fast=args.fast, user_workers=args.workers, user_threads=args.threads)
 
-    os.environ["ONNX_SEGMENT_WORKERS"] = str(workers)
+    os.environ["SEGMENT_WORKERS"] = str(workers)
+    os.environ["ZF_THREADS"] = str(threads)
     os.environ["OMP_NUM_THREADS"] = str(threads)
-    os.environ["ONNX_NUM_THREADS"] = str(threads)
     os.environ["OMP_WAIT_POLICY"] = "PASSIVE"
     os.environ["KMP_BLOCKTIME"] = "0"
 
@@ -201,7 +187,7 @@ def main():
         output_dir = config.DEFAULT_OUTPUT_DIR
         os.makedirs(output_dir, exist_ok=True)
         if not args.progress:
-            print("Initializing pipeline...", flush=True)
+            print(f"Initializing pipeline ({workers} workers, {threads} thread(s))...", flush=True)
         pipeline = AudioPipeline()
         pipeline.initialize(num_threads=threads)
         batch_result = pipeline.process_directory(
@@ -209,7 +195,6 @@ def main():
             output_dir=output_dir,
             live_profile=not args.progress,
             json_progress=args.progress,
-            enable_mfa=args.mfa,
             qiraat=args.qiraat,
         )
         if batch_result.get("total_files", 0) == 0:
@@ -234,6 +219,7 @@ def main():
         print("=" * 55)
         print(f"Audio Duration      : {audio_duration:.2f}s", flush=True)
         print(f"Startup & Preload   : {startup_time:.2f}s", flush=True)
+        print(f"Workers / Threads   : {workers} workers, {threads} thread(s)", flush=True)
         if args.qiraat and args.qiraat.strip().lower() != "hafs":
             print(f"qiraat : {args.qiraat}", flush=True)
 
@@ -243,7 +229,6 @@ def main():
         export_json_files=config.EXPORT_ALL_ARTIFACTS,
         live_profile=not args.progress,
         json_progress=args.progress,
-        enable_mfa=args.mfa,
         qiraat=args.qiraat,
     )
 
@@ -262,8 +247,6 @@ def main():
             "total_time": round(total_time, 2),
             "real_time_factor": round(prof.real_time_factor, 1),
         }
-        if prof.mfa_time > 0:
-            out_dict["mfa_time"] = round(prof.mfa_time, 2)
         print(json.dumps(out_dict), flush=True)
 
 

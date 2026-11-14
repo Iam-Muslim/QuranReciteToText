@@ -20,8 +20,6 @@ output/
 .vscode/
 .idea/
 benchmark
-mfa_workspace
-quran_hafs_acoustic.zip
 
 # Node & Tauri build artifacts
 node_modules/
@@ -36,3 +34,4 @@ app/.cache/
 app/userData/
 *.qproj
 output
+model

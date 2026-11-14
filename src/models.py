@@ -1,4 +1,4 @@
-"""Unified Data Models for Transcription, CTC Alignment, and Quran Output Segments."""
+"""Unified Data Models for Transcription, Quran Matching, and Output Segments."""
 
 from __future__ import annotations
 
@@ -33,23 +33,21 @@ class PhonemeToken:
     def to_dict(self) -> Dict[str, Any]:
         d = {"phoneme": self.phoneme, "start": round(self.start, 3), "end": round(self.end, 3)}
         if self.is_recovered: d["is_recovered"] = True
-        if self.peak_timestamp is not None: d["peak_timestamp"] = round(self.peak_timestamp, 3)
-        if self.peak_frame is not None: d["peak_frame"] = self.peak_frame
         return d
 
     def to_raw_dict(self, index: int) -> Dict[str, Any]:
-        d = {"index": index, "phoneme": self.phoneme, "start": round(self.start, 3), "end": round(self.end, 3), "duration": round(self.duration, 3), "confidence": round(self.confidence, 2)}
-        for k in ("start_frame", "end_frame", "peak_frame"):
+        d = {
+            "index": index,
+            "phoneme": self.phoneme,
+            "start": round(self.start, 3),
+            "end": round(self.end, 3),
+            "duration": round(self.duration, 3),
+            "confidence": round(self.confidence, 2),
+        }
+        for k in ("start_frame", "end_frame"):
             v = getattr(self, k)
             if v is not None: d[k] = v
-        if self.peak_timestamp is not None: d["peak_timestamp"] = round(self.peak_timestamp, 3)
         if self.is_recovered: d["is_recovered"] = True
-        return d
-
-    def to_aligned_dict(self, index: int) -> Dict[str, Any]:
-        d = {"index": index, "phoneme": self.phoneme, "start_seconds": round(self.start, 3), "end_seconds": round(self.end, 3), "duration_seconds": round(self.duration, 3), "confidence": round(self.confidence, 2), "is_recovered": self.is_recovered}
-        if self.start_frame is not None: d["start_frame"] = self.start_frame
-        if self.end_frame is not None: d["end_frame"] = self.end_frame
         return d
 
 
@@ -85,13 +83,14 @@ class PauseInterval:
 
 @dataclass(slots=True)
 class RawTranscriptionResult:
-    """Consolidated result of Phase 1 pure ONNX Zipformer CTC transcription."""
+    """Consolidated result of Phase 1 TajweedFormer acoustic transcription."""
     phonemes: List[PhonemeToken] = field(default_factory=list)
     raw_tokens: List[str] = field(default_factory=list)
     raw_timestamps: List[float] = field(default_factory=list)
     logprobs_matrix: Optional[np.ndarray] = None
+    timing_logprobs_matrix: Optional[np.ndarray] = None
     num_frames: int = 0
-    vocab_size: int = 251
+    vocab_size: int = 38
     pause_timestamps: List[float] = field(default_factory=list)
     pause_intervals: List[PauseInterval] = field(default_factory=list)
     vad_time: float = 0.0
@@ -100,7 +99,7 @@ class RawTranscriptionResult:
 
     @property
     def raw_text(self) -> str:
-        return " ".join(self.raw_tokens)
+        return "".join(self.raw_tokens)
 
 
 @dataclass(slots=True)
@@ -180,22 +179,14 @@ class QuranWord:
             "word": self.word,
             "location": self.location,
             "ref": self.ref,
-            "start": round(self.start, 2) if self.start is not None else None,
-            "end": round(self.end, 2) if self.end is not None else None,
+            "start": round(self.start, 3) if self.start is not None else None,
+            "end": round(self.end, 3) if self.end is not None else None,
             "score": round(self.score, 2) if self.score is not None else 0.0,
             "phonemes": self.phonemes if self.phonemes is not None else [],
         }
         if self.is_repetition:
             d["is_repetition"] = True
         return d
-
-
-def enforce_word_phoneme_monotonicity(word: 'QuranWord') -> None:
-    """No-op: Aligner Viewer strictly preserves raw acoustic phoneme timestamps directly from the aligner.
-
-    Zero artificial snapping, zero micro-gap bridging, zero stretching.
-    """
-    return
 
 
 @dataclass(slots=True)
@@ -212,8 +203,8 @@ class AyahSubSegment:
     def to_dict(self) -> Dict[str, Any]:
         d = {
             "segment": self.sub_segment_number,
-            "start": round(self.start_time, 2),
-            "end": round(self.end_time, 2),
+            "start": round(self.start_time, 3),
+            "end": round(self.end_time, 3),
             "transcribed_text": self.text,
             "words": [w.to_dict() for w in self.words],
         }
@@ -249,8 +240,8 @@ class QuranSegment:
 
         d: Dict[str, Any] = {
             "ayah": real_ayah,
-            "start": round(self.start_time, 2),
-            "end": round(self.end_time, 2),
+            "start": round(self.start_time, 3),
+            "end": round(self.end_time, 3),
             "matched_ref": self.matched_ref,
         }
         if self.repeated_ranges:
@@ -261,7 +252,7 @@ class QuranSegment:
         if self.sub_segments:
             d["segments"] = [s.to_dict() for s in self.sub_segments]
         else:
-            seg_asr = " ".join("".join(p.get("phoneme", "") for p in (w.phonemes or [])) for w in self.words if w.phonemes)
+            seg_asr = "".join("".join(p.get("phoneme", "") for p in (w.phonemes or [])) for w in self.words if w.phonemes)
             d["segments"] = [
                 {
                     "segment": 1,
@@ -282,10 +273,8 @@ class PipelineProfiling:
     vad_time: float = 0.0
     asr_time: float = 0.0
     recovery_time: float = 0.0
-    alignment_time: float = 0.0
     match_time: float = 0.0
     export_time: float = 0.0
-    mfa_time: float = 0.0
     total_time: float = 0.0
 
     @property
@@ -299,236 +288,17 @@ class PipelineProfiling:
 
 @dataclass(slots=True)
 class PipelineResult:
-    """Consolidated result of the entire pipeline execution."""
+    """Consolidated result of the pipeline execution."""
     audio_duration_seconds: float
-    raw_phonemes: List[PhonemeToken]
-    recovered_phonemes: List[PhonemeToken]
-    recovery_events: List[RecoveryEvent]
-    recovery_summary: RecoverySummary
-    ctc_aligned_phonemes: List[PhonemeToken]
+    phonemes: List[PhonemeToken] = field(default_factory=list)
     segments: List[QuranSegment] = field(default_factory=list)
     total_processing_time_seconds: float = 0.0
     profiling: Optional[PipelineProfiling] = None
     pause_timestamps: List[float] = field(default_factory=list)
     pause_intervals: List[PauseInterval] = field(default_factory=list)
-    mfa_results: Optional[List[Any]] = None
-
-    def to_qurancaption_response(
-        self,
-        offset_s: float = 0.0,
-        start_segment_idx: int = 1,
-    ) -> List[Dict[str, Any]]:
-        """Direct native export to QuranCaption timeline segment format.
-
-        Extracts intro segments (Isti'adha/Basmala) and transforms each Ayah's
-        sub-segments into individual timeline segments with normalized relative word timings.
-        """
-        raw_segments: List[Dict[str, Any]] = []
-
-        def _process_intro_dict(intro_d: Dict[str, Any]) -> List[Dict[str, Any]]:
-            if not intro_d or not intro_d.get("words"):
-                return []
-            raw_intro_words = intro_d["words"]
-
-            def _get_intro_spec_type(w: Any) -> str:
-                loc = str(w.get("location", "") if isinstance(w, dict) else getattr(w, "location", ""))
-                if loc.startswith("0:2:"):
-                    return "Takbeer"
-                if loc.startswith("0:3:"):
-                    return "Tasmee"
-                if loc.startswith("0:1:"):
-                    return "Isti'adha"
-                return "Basmala"
-
-            groups_to_process = []
-            cur_type = None
-            cur_words = []
-            for w in raw_intro_words:
-                st = _get_intro_spec_type(w)
-                if st != cur_type:
-                    if cur_words and cur_type is not None:
-                        groups_to_process.append((cur_type, cur_words))
-                    cur_type = st
-                    cur_words = [w]
-                else:
-                    cur_words.append(w)
-            if cur_words and cur_type is not None:
-                groups_to_process.append((cur_type, cur_words))
-
-            if not groups_to_process and raw_intro_words:
-                text_peek = " ".join(
-                    str(w.get("word", "") if isinstance(w, dict) else getattr(w, "word", ""))
-                    for w in raw_intro_words
-                )
-                if any(x in text_peek for x in ("أَكْبَر", "اكبر")):
-                    spec = "Takbeer"
-                elif any(x in text_peek for x in ("سَمِعَ", "سمع")):
-                    spec = "Tasmee"
-                elif any(x in text_peek for x in ("أَعوذُ", "اعوذ", "أعوذ")):
-                    spec = "Isti'adha"
-                else:
-                    spec = "Basmala"
-                groups_to_process.append((spec, raw_intro_words))
-
-            intro_segs: List[Dict[str, Any]] = []
-            for spec_type, g_words in groups_to_process:
-                g_raw_starts = [
-                    float(w.get("start", intro_d.get("start", 0.0)) if isinstance(w, dict) else getattr(w, "start", 0.0))
-                    for w in g_words
-                ]
-                g_raw_ends = [
-                    float(w.get("end", intro_d.get("end", 0.0)) if isinstance(w, dict) else getattr(w, "end", 0.0))
-                    for w in g_words
-                ]
-                g_abs_s = round(min(g_raw_starts) + offset_s, 3)
-                g_abs_e = round(max(g_raw_ends) + offset_s, 3)
-                if g_abs_e <= g_abs_s:
-                    g_abs_e = round(g_abs_s + 0.1, 3)
-                g_dur = max(0.0, round(g_abs_e - g_abs_s, 3))
-
-                w_list = []
-                for w in g_words:
-                    w_d = w if isinstance(w, dict) else (w.to_dict() if hasattr(w, "to_dict") else vars(w))
-                    ws = float(w_d.get("start", g_abs_s)) + offset_s
-                    we = float(w_d.get("end", g_abs_e)) + offset_s
-                    w_dict = {
-                        "word": str(w_d.get("word", "")),
-                        "location": str(w_d.get("location", "1:1:1")),
-                        "start": max(0.0, round(ws - g_abs_s, 3)),
-                        "end": min(g_dur, max(0.0, round(we - g_abs_s, 3))),
-                        "_abs_start": ws,
-                        "_abs_end": we,
-                    }
-                    if w_d.get("phonemes"):
-                        w_dict["phonemes"] = w_d["phonemes"]
-                    w_list.append(w_dict)
-
-                text = " ".join(w["word"] for w in w_list if w.get("word"))
-                intro_segs.append({
-                    "segment": 0,
-                    "time_from": g_abs_s,
-                    "time_to": g_abs_e,
-                    "ref_from": spec_type,
-                    "ref_to": spec_type,
-                    "special_type": spec_type,
-                    "matched_text": text,
-                    "confidence": 1.0,
-                    "error": None,
-                    "has_missing_words": False,
-                    "potentially_undersegmented": False,
-                    "words": w_list,
-                })
-            return intro_segs
-
-        # 1. Intros across all Surahs (Isti'adha / Basmalah at opening and inter-surah transitions)
-        for seg in self.segments:
-            intro = getattr(seg, "intro", None)
-            if intro and isinstance(intro, dict) and intro.get("words"):
-                raw_segments.extend(_process_intro_dict(intro))
-
-        # 2. Extract Ayahs and Sub-segments with pure acoustic word and phoneme timings
-        for seg in self.segments:
-            sub_segments = seg.sub_segments or [
-                AyahSubSegment(
-                    sub_segment_number=1,
-                    start_time=seg.start_time,
-                    end_time=seg.end_time,
-                    text=" ".join(w.word for w in seg.words),
-                    words_range=seg.matched_ref,
-                    words=seg.words,
-                )
-            ]
-
-            for sub in sub_segments:
-                sub_abs_s = round(float(sub.start_time) + offset_s, 3)
-                sub_abs_e = round(float(sub.end_time) + offset_s, 3)
-                if sub_abs_e <= sub_abs_s:
-                    sub_abs_e = round(sub_abs_s + 0.1, 3)
-                sub_dur = max(0.0, round(sub_abs_e - sub_abs_s, 3))
-
-                words_list: List[Dict[str, Any]] = []
-                scores: List[float] = []
-
-                for w in sub.words:
-                    w_s = float(w.start if w.start is not None else sub.start_time) + offset_s
-                    w_e = float(w.end if w.end is not None else sub.end_time) + offset_s
-                    if w.score is not None:
-                        scores.append(float(w.score))
-                    w_dict = {
-                        "word": str(w.word or ""),
-                        "location": str(w.location or f"{seg.surah_number}:{seg.ayah}:1"),
-                        "start": max(0.0, round(w_s - sub_abs_s, 3)),
-                        "end": min(sub_dur, max(0.0, round(w_e - sub_abs_s, 3))),
-                        "_abs_start": w_s,
-                        "_abs_end": w_e,
-                    }
-                    if getattr(w, "phonemes", None):
-                        w_dict["phonemes"] = w.phonemes
-                    if getattr(w, "score", None) is not None:
-                        w_dict["score"] = round(float(w.score), 2)
-                    if getattr(w, "is_repetition", False):
-                        w_dict["is_repetition"] = True
-                    words_list.append(w_dict)
-
-                if words_list and words_list[0].get("location") and words_list[-1].get("location"):
-                    ref_from = words_list[0]["location"]
-                    ref_to = words_list[-1]["location"]
-                    matched_text = " ".join(w["word"] for w in words_list if w.get("word"))
-                elif sub.words_range:
-                    wr = str(sub.words_range)
-                    ref_from, ref_to = wr.split("-", 1) if "-" in wr else (wr, wr)
-                    matched_text = " ".join(w["word"] for w in words_list if w.get("word")) or sub.text
-                else:
-                    ref_str = str(seg.matched_ref or f"{seg.surah_number}:{seg.ayah}:1")
-                    ref_from, ref_to = ref_str.split("-", 1) if "-" in ref_str else (ref_str, ref_str)
-                    matched_text = " ".join(w["word"] for w in words_list if w.get("word")) or sub.text
-
-                conf = round(sum(scores) / max(1, len(scores)), 3) if scores else 1.0
-
-                raw_segments.append({
-                    "segment": 0,
-                    "time_from": sub_abs_s,
-                    "time_to": sub_abs_e,
-                    "ref_from": ref_from,
-                    "ref_to": ref_to,
-                    "matched_text": matched_text,
-                    "confidence": conf,
-                    "error": None,
-                    "has_missing_words": False,
-                    "potentially_undersegmented": False,
-                    **({"is_repetition": True} if getattr(sub, "is_repetition", False) else {}),
-                    "words": words_list,
-                })
-
-        # 3. Sort segments by time_from
-        raw_segments.sort(key=lambda s: s["time_from"])
-
-        # 3.1 Canonical Word-Anchored Segment Boundaries:
-        # NOTE FOR DEVELOPERS: DO NOT MODIFY OR ADD ARTIFICIAL LEAD-IN/BRIDGING HERE.
-        # In this pipeline, segment boundaries are strictly defined by the acoustic start of the
-        # first word and the acoustic end of the last word. Word 0 always starts at relative 0.000s.
-        for s in raw_segments:
-            words = s.get("words", [])
-            if words:
-                # Defensive fallback: intro segments historically lacked these keys.
-                seg_s = words[0].get("_abs_start", s["time_from"])
-                seg_e = words[-1].get("_abs_end", s["time_to"])
-                s["time_from"] = seg_s
-                s["time_to"] = max(seg_s + 0.010, seg_e)
-                seg_dur = max(0.0, round(s["time_to"] - seg_s, 3))
-                for wd in words:
-                    abs_s = wd.pop("_abs_start", None)
-                    abs_e = wd.pop("_abs_end", None)
-                    if abs_s is not None:
-                        wd["start"] = max(0.0, round(abs_s - seg_s, 3))
-                        wd["end"] = min(seg_dur, max(0.0, round((abs_e if abs_e is not None else abs_s) - seg_s, 3)))
-
-        # 4. Filter out any zero duration segments & re-index 1-based
-        raw_segments = [s for s in raw_segments if s["time_to"] > s["time_from"]]
-        for idx, seg in enumerate(raw_segments, start=start_segment_idx):
-            seg["segment"] = idx
-
-        return raw_segments
+    recovery_events: List[RecoveryEvent] = field(default_factory=list)
+    recovery_summary: Optional[RecoverySummary] = None
+    exported_files: Dict[str, str] = field(default_factory=dict)
 
     def to_output_dict(self) -> Dict[str, Any]:
         """Returns the canonical output dictionary containing surahs, ayahs, and word timings."""
@@ -549,41 +319,40 @@ class PipelineResult:
         }
 
     def export_json(self, output_dir: str = ".") -> Dict[str, str]:
-        """Exports all canonical JSON artifacts into the specified directory."""
+        """Exports canonical JSON artifacts into the specified directory."""
+        import config
         os.makedirs(output_dir, exist_ok=True)
         dur = round(self.audio_duration_seconds, 3)
 
-        artifacts = {
+        artifacts: Dict[str, Any] = {
+            "output.json": self.to_output_dict(),
             "raw_transcription.json": {
                 "audio_duration_seconds": dur,
-                "total_tokens": len(self.raw_phonemes),
-                "raw_text": "".join(p.phoneme for p in self.raw_phonemes),
+                "total_tokens": len(self.phonemes),
+                "raw_text": "".join(p.phoneme for p in self.phonemes),
                 "pause_intervals": [p.to_dict() for p in self.pause_intervals],
                 "pause_timestamps": self.pause_timestamps,
-                "phoneme_tokens": [p.to_raw_dict(i + 1) for i, p in enumerate(self.raw_phonemes)],
+                "phoneme_tokens": [p.to_raw_dict(i + 1) for i, p in enumerate(self.phonemes)],
             },
-            "recovered_speech.json": {
+        }
+
+        # Only export recovered_speech.json when speech recovery is enabled in config
+        rec_enabled = getattr(config, "ENABLE_SPEECH_RECOVERY", False)
+        rec_mode = str(getattr(config, "SPEECH_RECOVERY_MODE", "legacy")).strip().lower()
+        if rec_enabled and rec_mode != "off":
+            artifacts["recovered_speech.json"] = {
                 "audio_duration_seconds": dur,
                 "recovery_summary": self.recovery_summary.to_dict() if self.recovery_summary is not None else {},
                 "recovery_events": [e.to_dict() for e in self.recovery_events] if self.recovery_events else [],
-            },
-            "ctc_aligned_phonemes.json": {
-                "audio_duration_seconds": dur,
-                "total_phonemes": len(self.ctc_aligned_phonemes),
-                "raw_text": "".join(p.phoneme for p in self.ctc_aligned_phonemes),
-                "aligned_phonemes": [p.to_aligned_dict(i + 1) for i, p in enumerate(self.ctc_aligned_phonemes)],
-            },
-            "output.json": self.to_output_dict(),
-            "qurancaption_segments.json": {
-                "segments": self.to_qurancaption_response(),
-            },
-        }
+            }
+
         paths = {}
         for fname, data in artifacts.items():
             fpath = os.path.join(output_dir, fname)
             with open(fpath, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
             paths[fname] = fpath
+        self.exported_files = paths
         return paths
 
 
@@ -594,10 +363,8 @@ class PipelineStage(str, Enum):
     vad = "vad"
     transcribing = "transcribing"
     recovering = "recovering"
-    aligning = "aligning"
     matching = "matching"
     exporting = "exporting"
-    mfa = "mfa"
     completed = "completed"
     error = "error"
 
