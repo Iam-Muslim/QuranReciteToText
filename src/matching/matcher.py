@@ -1,7 +1,7 @@
 """Phase 3 Matcher: 3D JumpDTW Dynamic Programming Quran Recitation Aligner.
 
 Orchestrates forward recitation matching, repetition tracking,
-and canonical Ayah segment construction from Medina Mushaf reference.
+and canonical Ayah segment construction from  Mushaf reference.
 """
 
 from __future__ import annotations
@@ -226,6 +226,51 @@ def _align_and_package_ayahs(
     start_ay = ref_data.words[min_w].ayah if min_w < word_count else 1
     end_ay = ref_data.words[max_w].ayah if max_w < word_count else ref_data.words[-1].ayah
 
+    intervals = pause_intervals or []
+    interval_starts = [p.start_sec for p in intervals] if intervals else []
+    pause_pts = sorted(pause_timestamps) if pause_timestamps else []
+    min_pause_s = getattr(config, "VAD_SAKT_MIN_PAUSE_S", 0.16)
+
+    def _find_pause_cut(w_prev: QuranWord, w_curr: QuranWord) -> Optional[Tuple[float, float]]:
+        w_prev_e = w_prev.end or 0.0
+        w_curr_s = w_curr.start or 0.0
+
+        if w_curr_s <= w_prev_e:
+            return None
+
+        mid_prev = ((w_prev.start or 0.0) + w_prev_e) / 2.0
+        mid_curr = (w_curr_s + (w_curr.end or 0.0)) / 2.0
+
+        if intervals:
+            idx = bisect.bisect_right(interval_starts, w_curr_s + 0.50)
+            for i in range(idx - 1, -1, -1):
+                p = intervals[i]
+                if p.start_sec < w_prev_e - 1.0:
+                    break
+                if p.duration_sec < min_pause_s:
+                    continue
+                # Reject shallow consonant closures (e.g. labial dips > -30 dB) that are not true breath pauses
+                if p.duration_sec < 0.35 and getattr(p, "min_energy_db", None) is not None and p.min_energy_db > -30.0:
+                    continue
+                cut = p.optimal_cut_point
+
+                # Acoustic cut sits naturally between previous word end and current word start
+                if (w_prev_e - PAUSE_CUT_MARGIN_S) <= cut <= (w_curr_s + PAUSE_CUT_MARGIN_S) and (mid_prev < cut < mid_curr):
+                    return (cut, p.end_sec)
+                if (p.start_sec >= w_prev_e - PAUSE_INTERVAL_OVERLAP_S) and (p.end_sec <= w_curr_s + PAUSE_INTERVAL_OVERLAP_S):
+                    if mid_prev < cut < mid_curr:
+                        return (cut, p.end_sec)
+        elif pause_pts:
+            idx = bisect.bisect_right(pause_pts, w_curr_s + 0.50)
+            for i in range(idx - 1, -1, -1):
+                pt = pause_pts[i]
+                if pt < w_prev_e - 1.0:
+                    break
+                if (w_prev_e - PAUSE_CUT_MARGIN_S) <= pt <= (w_curr_s + PAUSE_CUT_MARGIN_S) and (mid_prev < pt < mid_curr):
+                    return (pt, pt + 0.10)
+
+        return None
+
     segments: List[QuranSegment] = []
     seg_number = 1
 
@@ -306,11 +351,6 @@ def _align_and_package_ayahs(
 
         # Tier 2: Split passes on Phase 1 pauses with 'Never Cut Word' geometric validation
         sub_segs_list: List[AyahSubSegment] = []
-        pauses = pause_timestamps or []
-        intervals = pause_intervals or []
-        interval_starts = [p.start_sec for p in intervals] if intervals else []
-        pause_pts = sorted(pauses) if pauses else []
-        min_sub_pause = getattr(config, "SUBSEGMENT_MIN_PAUSE_S", 0.20)
 
         def _build_sub(pass_words: List[QuranWord], is_rep: bool) -> AyahSubSegment:
             sub_asr = "".join("".join(p.get("phoneme", "") for p in (w.phonemes or [])) for w in pass_words if w.phonemes)
@@ -324,64 +364,32 @@ def _align_and_package_ayahs(
                 words=pass_words,
             )
 
-        def _find_pause_cut(w_prev: QuranWord, w_curr: QuranWord) -> Optional[Tuple[float, float]]:
-            w_prev_e = w_prev.end or 0.0
-            w_curr_s = w_curr.start or 0.0
-
-            if w_curr_s <= w_prev_e:
-                return None
-
-            mid_prev = (w_prev.start or 0.0 + w_prev_e) / 2.0
-            mid_curr = (w_curr_s + (w_curr.end or 0.0)) / 2.0
-
-            if intervals:
-                idx = bisect.bisect_right(interval_starts, w_curr_s + 0.50)
-                for i in range(idx - 1, -1, -1):
-                    p = intervals[i]
-                    if p.start_sec < w_prev_e - 1.0:
-                        break
-                    if p.duration_sec < min_sub_pause:
-                        continue
-                    # Reject shallow consonant closures (e.g. labial dips > -30 dB) that are not true breath pauses
-                    if p.duration_sec < 0.35 and getattr(p, "min_energy_db", None) is not None and p.min_energy_db > -30.0:
-                        continue
-                    cut = p.optimal_cut_point
-
-                    # Acoustic cut sits naturally between previous word end and current word start
-                    if (w_prev_e - PAUSE_CUT_MARGIN_S) <= cut <= (w_curr_s + PAUSE_CUT_MARGIN_S) and (mid_prev < cut < mid_curr):
-                        return (cut, p.end_sec)
-                    if (p.start_sec >= w_prev_e - PAUSE_INTERVAL_OVERLAP_S) and (p.end_sec <= w_curr_s + PAUSE_INTERVAL_OVERLAP_S):
-                        if mid_prev < cut < mid_curr:
-                            return (cut, p.end_sec)
-            elif pauses:
-                idx = bisect.bisect_right(pause_pts, w_curr_s + 0.50)
-                for i in range(idx - 1, -1, -1):
-                    pt = pause_pts[i]
-                    if pt < w_prev_e - 1.0:
-                        break
-                    if (w_prev_e - PAUSE_CUT_MARGIN_S) <= pt <= (w_curr_s + PAUSE_CUT_MARGIN_S) and (mid_prev < pt < mid_curr):
-                        return (pt, pt + 0.10)
-
-            return None
-
         seen_locations: set[str] = set()
 
         def _append_chunk(chunk: List[QuranWord]) -> None:
             if not chunk:
                 return
 
-            # Pure acoustic non-overlap guard (never bridge positive acoustic silence)
+            # Phase 4:  Wasl Contiguous Boundary Handover
+            # In continuous reading within a chunk (no acoustic pause), words meet contiguously:
             for i in range(len(chunk) - 1):
                 cw1 = chunk[i]
                 cw2 = chunk[i + 1]
-                if cw1.end is not None and cw2.start is not None and cw2.start < cw1.end:
-                    mid = round((cw1.end + cw2.start) * 0.5, 3)
-                    cw1.end = mid
-                    cw2.start = mid
+                if cw1.end is not None and cw2.start is not None:
+                    split_t = cw2.start
+                    if cw1.start is not None and split_t <= cw1.start:
+                        split_t = cw1.start + 0.020
+                    if cw2.end is not None and split_t >= cw2.end:
+                        split_t = max(cw1.start + 0.020 if cw1.start is not None else 0.0, cw2.end - 0.020)
+                    split_t = round(split_t, 3)
+                    cw1.end = split_t
+                    cw1.raw_end = split_t
+                    cw2.start = split_t
+                    cw2.raw_start = split_t
                     if cw1.phonemes:
-                        cw1.phonemes[-1]["end"] = min(cw1.phonemes[-1]["end"], mid)
+                        cw1.phonemes[-1]["end"] = split_t
                     if cw2.phonemes:
-                        cw2.phonemes[0]["start"] = max(cw2.phonemes[0]["start"], mid)
+                        cw2.phonemes[0]["start"] = split_t
 
             # A subsegment is marked as a repetition if it contains ANY word that has already been recited earlier in this Ayah
             is_rep_chunk = (
@@ -415,7 +423,9 @@ def _align_and_package_ayahs(
             if current_chunk:
                 _append_chunk(current_chunk)
 
-        if len(sub_segs_list) > 1 or has_repeated:
+        ui_sub_pause = getattr(config, "SUBSEGMENT_MIN_PAUSE_S", 9999.0)
+        allow_ui_subsegments = (ui_sub_pause < 9000.0)
+        if (len(sub_segs_list) > 1 and allow_ui_subsegments) or has_repeated:
             sub_segments = sub_segs_list
             repeated_ranges = [s.words_range for s in sub_segments if s.is_repetition] or None
             repeated_text = [s.text for s in sub_segments if s.is_repetition] or None
@@ -445,6 +455,40 @@ def _align_and_package_ayahs(
             sub_segments=sub_segments,
         ))
         seg_number += 1
+
+    # Phase 4.1: Universal Cross-Ayah Wasl Contiguous Boundary Handover
+    # When consecutive Ayahs are recited in one single breath (no acoustic pause),
+    # the end of the last word in Ayah N meets the start of the first word in Ayah N+1 contiguously:
+    for i in range(len(segments) - 1):
+        seg_curr = segments[i]
+        seg_next = segments[i + 1]
+        if not seg_curr.words or not seg_next.words:
+            continue
+        w_last = seg_curr.words[-1]
+        w_first = seg_next.words[0]
+        if w_last.end is not None and w_first.start is not None:
+            p_bounds = _find_pause_cut(w_last, w_first)
+            if p_bounds is None:
+                split_t = w_first.start
+                if w_last.start is not None and split_t <= w_last.start:
+                    split_t = w_last.start + 0.020
+                if w_first.end is not None and split_t >= w_first.end:
+                    split_t = max(w_last.start + 0.020 if w_last.start is not None else 0.0, w_first.end - 0.020)
+                split_t = round(split_t, 3)
+                w_last.end = split_t
+                w_last.raw_end = split_t
+                w_first.start = split_t
+                w_first.raw_start = split_t
+                if w_last.phonemes:
+                    w_last.phonemes[-1]["end"] = split_t
+                if w_first.phonemes:
+                    w_first.phonemes[0]["start"] = split_t
+                seg_curr.end_time = split_t
+                seg_next.start_time = split_t
+                if seg_curr.sub_segments:
+                    seg_curr.sub_segments[-1].end_time = split_t
+                if seg_next.sub_segments:
+                    seg_next.sub_segments[0].start_time = split_t
 
     return segments
 

@@ -594,7 +594,7 @@ my-quran-dataset/
     "folder": "reciters/Mishary_Alafasy",
     "audio_format": "mp3",
     "available_surahs": [1, 2, 36, 67, 112, 113, 114],
-    "description": "Murattal recitation aligned with Medina Uthmani script."
+    "description": "Murattal recitation aligned with  Uthmani script."
   }
 ]</pre>
           </div>
@@ -607,7 +607,7 @@ my-quran-dataset/
                 <span>{{ copiedSurahJson ? 'Copied!' : 'Copy 001.json' }}</span>
               </button>
             </div>
-            <p>Word boundaries strictly indexed by canonical Mushaf position <code>w</code> with Medina Uthmani <code>text</code> and precomputed waveform <code>peaks</code>:</p>
+            <p>Word boundaries strictly indexed by canonical Mushaf position <code>w</code> with  Uthmani <code>text</code> and precomputed waveform <code>peaks</code>:</p>
             <pre style="background: var(--bg-input); padding: 10px 14px; border-radius: var(--radius-md); font-family: monospace; font-size: 11px; border: 1px solid var(--border-subtle); color: var(--text-main); margin-top: 6px; overflow-x: auto;">
 {
   "surah": 1,
@@ -829,7 +829,7 @@ function copyManifestTemplate() {
     "folder": "reciters/Mishary_Alafasy",
     "audio_format": "mp3",
     "available_surahs": [1, 2, 36, 67, 112, 113, 114],
-    "description": "Murattal recitation aligned with Medina Uthmani script."
+    "description": "Murattal recitation aligned with  Uthmani script."
   }
 ]`;
   if (typeof navigator !== 'undefined' && navigator.clipboard) {

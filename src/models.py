@@ -177,7 +177,7 @@ class SpeechRecoveryResult:
 
 @dataclass(slots=True)
 class QuranWord:
-    """Word-level timing entry aligned to the Medina Mushaf."""
+    """Word-level timing entry aligned to the  Mushaf."""
     word: str
     location: Optional[str] = None
     ref: Optional[str] = None

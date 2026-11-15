@@ -53,8 +53,8 @@ HEAD_CONF = 1 << 11
 ACTIVE_HEADS_MASK = (
     HEAD_LOG_PROBS
     | HEAD_TIMING
+    | HEAD_BOUNDARY
     | HEAD_CONF
-    | HEAD_ID
 )
 
 
@@ -223,6 +223,196 @@ class TajweedFormerEngine:
             except Exception:
                 pass
 
+    def _decode_heads_to_phonemes(
+        self,
+        heads: _ZfTajweedHeads,
+        top2_ptr: Any,
+        n_frames: int,
+        time_offset_s: float = 0.0,
+        frame_offset: int = 0,
+        is_recovered: bool = False,
+    ) -> List[PhonemeToken]:
+        """Clean 4-head neural decoding using TajweedFormer native layers:
+        - Layer 15 (log_probs): Authoritative phoneme classification
+        - 20ms H-time Chain (timing_log_probs): Continuous acoustic state chain (attack and held release)
+        - 20ms Boundary Head (boundary): Physical phonetic transition cuts
+        - 20ms Confidence Head (conf): Frame confidence
+        """
+        conf_logits = None
+        if heads.n20 > 0 and heads.conf:
+            conf_logits = np.ctypeslib.as_array(heads.conf, shape=(heads.n20,))
+
+        b_prob = None
+        if heads.n20 > 0 and heads.boundary:
+            b_arr = np.ctypeslib.as_array(heads.boundary, shape=(heads.n20,))
+            b_prob = 1.0 / (1.0 + np.exp(-b_arr))
+
+        tlp_arr = None
+        if heads.n20 > 0 and heads.timing_log_probs:
+            tlp_arr = np.ctypeslib.as_array(heads.timing_log_probs, shape=(heads.n20, heads.vocab))
+
+        # Pre-group continuous acoustic runs from 20ms timing_log_probs (state != 0)
+        timing_runs: List[Tuple[int, int, int]] = []
+        if tlp_arr is not None:
+            curr_r_tok = None
+            r_start = 0
+            for f in range(heads.n20):
+                tok_f = int(np.argmax(tlp_arr[f]))
+                if tok_f != curr_r_tok:
+                    if curr_r_tok is not None and curr_r_tok != 0 and curr_r_tok in self.id2token:
+                        timing_runs.append((curr_r_tok, r_start, f))
+                    curr_r_tok = tok_f
+                    r_start = f
+            if curr_r_tok is not None and curr_r_tok != 0 and curr_r_tok in self.id2token:
+                timing_runs.append((curr_r_tok, r_start, heads.n20))
+
+        seg_phonemes: List[PhonemeToken] = []
+        t = 0
+        prev_end_20 = 0
+        tr_cursor = 0
+
+        while t < n_frames:
+            curr_token_id = top2_ptr[t].token
+            if curr_token_id == BLANK_ID or curr_token_id not in self.id2token:
+                t += 1
+                continue
+            e = t
+            while e + 1 < n_frames and top2_ptr[e + 1].token == curr_token_id:
+                e += 1
+            pk = t
+            for k in range(t + 1, e + 1):
+                if top2_ptr[k].log_prob > top2_ptr[pk].log_prob:
+                    pk = k
+
+            pk_top2 = top2_ptr[pk]
+
+            # 40ms CTC frame span maps to base 20ms frames [2*t, 2*(e+1)]
+            base_sf = 2 * t
+            base_ef = 2 * (e + 1)
+
+            # Monotonic alignment to physical 20ms H-time acoustic run
+            fine_sf = base_sf
+            fine_ef = base_ef
+            if timing_runs:
+                for idx in range(tr_cursor, len(timing_runs)):
+                    tr_tok, tr_s, tr_e = timing_runs[idx]
+                    # The physical acoustic run must match phoneme identity and start before/at CTC emission
+                    if tr_tok == curr_token_id and tr_s <= base_ef:
+                        fine_sf = tr_s
+                        fine_ef = tr_e
+                        tr_cursor = idx + 1
+                        break
+
+            fine_sf = max(prev_end_20, fine_sf)
+            fine_ef = max(fine_sf + 1, fine_ef)
+            prev_end_20 = fine_ef
+
+            fine_pk = max(fine_sf, min(2 * pk, fine_ef))
+
+            # Neural confidence: mean sigmoid over 20ms span [fine_sf : fine_ef]
+            if conf_logits is not None and fine_ef <= len(conf_logits):
+                span = conf_logits[fine_sf:fine_ef]
+                conf = float(np.mean(1.0 / (1.0 + np.exp(-span))))
+            else:
+                conf = float(1.0 / (1.0 + math.exp(-pk_top2.margin)))
+
+            seg_phonemes.append(
+                PhonemeToken(
+                    phoneme=self.id2token[curr_token_id],
+                    start=round(time_offset_s + fine_sf * 0.020, 4),
+                    end=round(time_offset_s + fine_ef * 0.020, 4),
+                    confidence=round(conf, 4),
+                    is_recovered=is_recovered,
+                    start_frame=frame_offset + fine_sf,
+                    end_frame=frame_offset + fine_ef,
+                    peak_frame=frame_offset + fine_pk,
+                    peak_timestamp=round(time_offset_s + fine_pk * 0.020, 4),
+                    token_id=curr_token_id,
+                    log_prob=round(float(pk_top2.log_prob), 4),
+                    runner_up=int(pk_top2.runner_up),
+                    runner_up_log_prob=round(float(pk_top2.runner_up_log_prob), 4),
+                    margin=round(float(pk_top2.margin), 4),
+                )
+            )
+            t = e + 1
+
+        # Physical transition cut at boundary between adjacent continuous speech tokens:
+        # If there is no acoustic silence (state 0) in timing_log_probs between token i and i+1:
+        # Split them at the maximum transition probability of the boundary head in their contact zone.
+        if b_prob is not None and seg_phonemes:
+            # 1. Onset attack alignment for segment-initial phoneme (captures vocal onset from silence)
+            p0 = seg_phonemes[0]
+            p0_mid = (p0.start_frame + p0.end_frame) // 2 - frame_offset
+            att_s0 = max(0, (p0.start_frame - frame_offset) - 3)
+            att_e0 = max(att_s0 + 1, min(p0_mid + 1, heads.n20))
+            cut_p0 = att_s0 + int(np.argmax(b_prob[att_s0:att_e0]))
+            if cut_p0 < p0.end_frame - frame_offset:
+                p0.start_frame = frame_offset + cut_p0
+                p0.start = round(time_offset_s + cut_p0 * 0.020, 4)
+
+            # 2. Inter-phoneme boundary transitions
+            for i in range(len(seg_phonemes) - 1):
+                p1 = seg_phonemes[i]
+                p2 = seg_phonemes[i + 1]
+                sf1 = p1.end_frame - frame_offset
+                sf2 = p2.start_frame - frame_offset
+
+                # Check if there is silence between them in timing head
+                is_pause = False
+                if tlp_arr is not None and 0 <= sf1 <= sf2 <= heads.n20:
+                    for f in range(sf1, sf2):
+                        if int(np.argmax(tlp_arr[f])) == 0:
+                            is_pause = True
+                            break
+
+                if not is_pause:
+                    # Continuous Wasl: split at boundary peak in contact zone
+                    c_start = (p1.start_frame + p1.end_frame) // 2 - frame_offset
+                    c_end = (p2.start_frame + p2.end_frame) // 2 - frame_offset
+                    c_start = max(0, min(c_start, heads.n20 - 1))
+                    c_end = max(c_start + 1, min(c_end + 1, heads.n20))
+
+                    # Cut at maximum transition probability
+                    cut_rel = c_start + int(np.argmax(b_prob[c_start:c_end]))
+                    abs_cut_f = frame_offset + cut_rel
+                    cut_time = round(time_offset_s + cut_rel * 0.020, 4)
+
+                    p1.end_frame = abs_cut_f
+                    p1.end = cut_time
+                    p2.start_frame = abs_cut_f
+                    p2.start = cut_time
+                else:
+                    # When there is an acoustic pause between p1 and p2:
+                    # Refine p1 release into silence
+                    p1_mid = (p1.start_frame + p1.end_frame) // 2 - frame_offset
+                    rel_s = max(0, min(p1_mid, heads.n20 - 1))
+                    rel_e = min(heads.n20, max(rel_s + 1, sf1 + 3))
+                    cut_p1 = rel_s + int(np.argmax(b_prob[rel_s:rel_e]))
+                    if cut_p1 > p1.start_frame - frame_offset:
+                        p1.end_frame = frame_offset + cut_p1
+                        p1.end = round(time_offset_s + cut_p1 * 0.020, 4)
+
+                    # Refine p2 attack from silence
+                    p2_mid = (p2.start_frame + p2.end_frame) // 2 - frame_offset
+                    att_s = max(0, sf2 - 3)
+                    att_e = max(att_s + 1, min(p2_mid + 1, heads.n20))
+                    cut_p2 = att_s + int(np.argmax(b_prob[att_s:att_e]))
+                    if cut_p2 < p2.end_frame - frame_offset:
+                        p2.start_frame = frame_offset + cut_p2
+                        p2.start = round(time_offset_s + cut_p2 * 0.020, 4)
+
+            # 3. Terminal release alignment for segment-final phoneme at Waqf
+            pN = seg_phonemes[-1]
+            pN_mid = (pN.start_frame + pN.end_frame) // 2 - frame_offset
+            rel_sN = max(0, min(pN_mid, heads.n20 - 1))
+            rel_eN = min(heads.n20, max(rel_sN + 1, (pN.end_frame - frame_offset) + 3))
+            cut_pN = rel_sN + int(np.argmax(b_prob[rel_sN:rel_eN]))
+            if cut_pN > pN.start_frame - frame_offset:
+                pN.end_frame = frame_offset + cut_pN
+                pN.end = round(time_offset_s + cut_pN * 0.020, 4)
+
+        return seg_phonemes
+
     def _infer_stream(
         self,
         st: ctypes.c_void_p,
@@ -251,93 +441,21 @@ class TajweedFormerEngine:
         heads = _ZfTajweedHeads()
         self.dll.zf_tajweed_stream_heads(st, ctypes.byref(heads))
 
-        # Neural Confidence Head (20ms logit: frame's label is truthful)
-        conf_logits = None
-        if heads.n20 > 0 and heads.conf:
-            conf_logits = np.ctypeslib.as_array(heads.conf, shape=(heads.n20,))
-
-        # Top-2 Decoded Frames (40ms CTC frames)
-        # Extract timing_log_probs (20ms H-time chain, [n20, 38]).
-        # Source: zf_tajweed.h: 'timing_log_probs: [n20, 38] H-time chain, log-softmax; 0 = pause state'
-        # Source: migrating-to-3.md: 'Madd counts come from timing_log_probs (20ms frames):
-        #   the held span of a long vowel'
-        # Source: AGENTS.md: 'A held sound (a long madd) is speech: the timing head keeps
-        #   hearing it while the token head shows blank.'
-        tlp_arr = None
-        if heads.n20 > 0 and heads.timing_log_probs:
-            tlp_arr = np.ctypeslib.as_array(heads.timing_log_probs, shape=(heads.n20, heads.vocab))
-
         top2_ptr = ctypes.POINTER(_ZfTajweedTop2)()
         n_frames = self.dll.zf_tajweed_stream_top2(st, ctypes.byref(top2_ptr))
 
-        # Direct author greedy decoding (tf_decode.c lines 57-91).
-        # zf_tajweed_stream_top2 operates on log_probs at 40ms (zf_tajweed.h):
-        # 'Per 40 ms CTC frame of log_probs, the best token and the runner-up'
-        seg_phonemes: List[PhonemeToken] = []
-        t = 0
-        while t < n_frames:
-            a = top2_ptr[t].token
-            if a == BLANK_ID or a not in self.id2token:
-                t += 1
-                continue
-            e = t
-            while e + 1 < n_frames and top2_ptr[e + 1].token == a:
-                e += 1
-            pk = t
-            for k in range(t + 1, e + 1):
-                if top2_ptr[k].log_prob > top2_ptr[pk].log_prob:
-                    pk = k
-
-            pk_top2 = top2_ptr[pk]
-            # 40ms frame t -> 20ms frame 2*t (zf_tajweed.h: '20ms frame 2k and 2k+1 lie in 40ms frame k')
-            fine_sf = 2 * t
-            fine_ef = 2 * (e + 1)  # CTC-based end frame in 20ms units
-            fine_pk = 2 * pk
-
-            # H-TIME CHAIN EXTENSION (migrating-to-3.md, zf_tajweed.h):
-            # Extend fine_ef forward while timing_log_probs argmax == token id `a`
-            # and state != 0 (pause). This correctly extends held vowels (Madd)
-            # and held nasals (Ghunna) which the CTC head stops emitting after one spike.
-            if tlp_arr is not None and fine_ef < heads.n20:
-                f = fine_ef
-                while f < heads.n20:
-                    timing_argmax = int(np.argmax(tlp_arr[f]))
-                    # State 0 = pause (zf_tajweed.h: '0 = pause state'). Stop there.
-                    if timing_argmax == 0 or timing_argmax != a:
-                        break
-                    f += 1
-                fine_ef = f  # extended end frame in 20ms units
-
-            # Neural confidence: mean sigmoid over 20ms span [2*t : fine_ef] (tf_decode.c line 85)
-            if conf_logits is not None and fine_ef <= len(conf_logits):
-                span = conf_logits[fine_sf:fine_ef]
-                conf = float(np.mean(1.0 / (1.0 + np.exp(-span))))
-            else:
-                conf = float(1.0 / (1.0 + math.exp(-pk_top2.margin)))
-
-            seg_phonemes.append(
-                PhonemeToken(
-                    phoneme=self.id2token[a],
-                    start=round(time_offset_s + fine_sf * 0.020, 4),
-                    end=round(time_offset_s + fine_ef * 0.020, 4),
-                    confidence=round(conf, 4),
-                    is_recovered=is_recovered,
-                    start_frame=frame_offset + fine_sf,
-                    end_frame=frame_offset + fine_ef,
-                    peak_frame=frame_offset + fine_pk,
-                    peak_timestamp=round(time_offset_s + fine_pk * 0.020, 4),
-                    token_id=a,
-                    log_prob=round(float(pk_top2.log_prob), 4),
-                    runner_up=int(pk_top2.runner_up),
-                    runner_up_log_prob=round(float(pk_top2.runner_up_log_prob), 4),
-                    margin=round(float(pk_top2.margin), 4),
-                )
-            )
-            t = e + 1
+        seg_phonemes = self._decode_heads_to_phonemes(
+            heads=heads,
+            top2_ptr=top2_ptr,
+            n_frames=n_frames,
+            time_offset_s=time_offset_s,
+            frame_offset=frame_offset,
+            is_recovered=is_recovered,
+        )
 
         if return_heads:
             lp = np.ctypeslib.as_array(heads.log_probs, shape=(heads.n40, heads.vocab)).copy() if heads.n40 > 0 and heads.log_probs else None
-            tlp = tlp_arr.copy() if tlp_arr is not None else None
+            tlp = np.ctypeslib.as_array(heads.timing_log_probs, shape=(heads.n20, heads.vocab)).copy() if heads.n20 > 0 and heads.timing_log_probs else None
             return seg_phonemes, lp, tlp
 
         return seg_phonemes
@@ -400,59 +518,17 @@ class TajweedFormerEngine:
             heads = _ZfTajweedHeads()
             self.dll.zf_tajweed_stream_heads(st, ctypes.byref(heads))
 
-            conf_logits = None
-            if heads.n20 > 0 and heads.conf:
-                conf_logits = np.ctypeslib.as_array(heads.conf, shape=(heads.n20,)).copy()
-
             top2_ptr = ctypes.POINTER(_ZfTajweedTop2)()
             n40 = self.dll.zf_tajweed_stream_top2(st, ctypes.byref(top2_ptr))
 
-            phonemes: List[PhonemeToken] = []
-            BLANK = BLANK_ID
-            T = n40
-            t = 0
-            while t < T:
-                a = top2_ptr[t].token
-                if a == BLANK or a not in self.id2token:
-                    t += 1
-                    continue
-                e = t
-                while e + 1 < T and top2_ptr[e + 1].token == a:
-                    e += 1
-                pk = t
-                for k in range(t + 1, e + 1):
-                    if top2_ptr[k].log_prob > top2_ptr[pk].log_prob:
-                        pk = k
-
-                pk_top2 = top2_ptr[pk]
-                fine_sf = 2 * t
-                fine_ef = 2 * (e + 1)
-                fine_pk = 2 * pk
-
-                if conf_logits is not None and heads.n20 >= fine_ef:
-                    span = conf_logits[fine_sf:fine_ef]
-                    conf = float(np.mean(1.0 / (1.0 + np.exp(-span))))
-                else:
-                    conf = max(0.0, min(1.0, 1.0 / (1.0 + math.exp(-pk_top2.margin))))
-
-                phonemes.append(
-                    PhonemeToken(
-                        phoneme=self.id2token[a],
-                        start=round(fine_sf * 0.020, 4),
-                        end=round(fine_ef * 0.020, 4),
-                        confidence=round(conf, 4),
-                        start_frame=fine_sf,
-                        end_frame=fine_ef,
-                        peak_frame=fine_pk,
-                        peak_timestamp=round(fine_pk * 0.020, 4),
-                        token_id=a,
-                        log_prob=round(float(pk_top2.log_prob), 4),
-                        runner_up=int(pk_top2.runner_up),
-                        runner_up_log_prob=round(float(pk_top2.runner_up_log_prob), 4),
-                        margin=round(float(pk_top2.margin), 4),
-                    )
-                )
-                t = e + 1
+            phonemes = self._decode_heads_to_phonemes(
+                heads=heads,
+                top2_ptr=top2_ptr,
+                n_frames=n40,
+                time_offset_s=0.0,
+                frame_offset=0,
+                is_recovered=False,
+            )
 
             lp_mat = None
             tlp_mat = None
@@ -564,10 +640,22 @@ class TajweedFormerEngine:
                 )
                 lp, tlp = None, None
 
-            # Author rule: "With the flush the last phone runs about 0.2 s into the silence, so cap its end at your VAD end."
-            if ph and ph[-1].end > seg.raw_end_sec:
-                ph[-1].end = round(seg.raw_end_sec, 4)
-                ph[-1].end_frame = min(ph[-1].end_frame, int(round(seg.raw_end_sec / FRAME_STEP)))
+            if ph and getattr(config, "SNAP_TO_VAD_SEGMENT_BOUNDARIES", False):
+                # Phase 1: Physical Segment Anchoring (Optional via config.SNAP_TO_VAD_SEGMENT_BOUNDARIES)
+                # Lock first phoneme attack to the physical acoustic onset after breath pause
+                ph[0].start = round(seg.raw_start_sec, 4)
+                ph[0].start_frame = int(round(seg.raw_start_sec / FRAME_STEP))
+                if ph[0].end <= ph[0].start:
+                    ph[0].end = round(ph[0].start + FRAME_STEP, 4)
+                    ph[0].end_frame = ph[0].start_frame + 1
+
+                # Cap the last phoneme release to the physical acoustic offset (eliminates engine flush overrun)
+                if ph[-1].end > seg.raw_end_sec:
+                    ph[-1].end = round(seg.raw_end_sec, 4)
+                    ph[-1].end_frame = min(ph[-1].end_frame, int(round(seg.raw_end_sec / FRAME_STEP)))
+                if ph[-1].start >= ph[-1].end:
+                    ph[-1].start = max(0.0, round(ph[-1].end - FRAME_STEP, 4))
+                    ph[-1].start_frame = max(0, ph[-1].end_frame - 1)
 
             return s_idx, ph, lp, tlp
 

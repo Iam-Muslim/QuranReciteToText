@@ -1,4 +1,4 @@
-"""Fixed Quran Reference Data Structures & Medina Mushaf Indexer.
+"""Fixed Quran Reference Data Structures &  Mushaf Indexer.
 
 Defines the indexed representation of Surahs, verses, words,
 and phoneme sequences for recitation alignment.
@@ -54,7 +54,7 @@ class ZfxReader:
         for count in self.surahs:
             self.surah_start_ayah_idx.append(self.surah_start_ayah_idx[-1] + count)
 
-        # Load Medina Mushaf Uthmani text mapping from QPC Hafs reference
+        # Load  Mushaf Uthmani text mapping from QPC Hafs reference
         self.qpc_words: Dict[Tuple[int, int], List[str]] = defaultdict(list)
         target_qpc = qpc_path or getattr(config, "DEFAULT_QPC_HAFS_PATH", None)
         if target_qpc and os.path.isfile(target_qpc):
@@ -111,7 +111,7 @@ class ZfxReader:
         return self._global_search_index
 
     def get_surah_data(self, surah: int) -> Tuple[Dict[int, List[str]], Dict[int, List[str]]]:
-        """Extracts aligned phonetic words and Medina Mushaf Uthmani words for all Ayahs in the Surah.
+        """Extracts aligned phonetic words and  Mushaf Uthmani words for all Ayahs in the Surah.
 
         Returns:
             (ayah_phoneme_words, ayah_uthmani_words)
@@ -150,7 +150,7 @@ class ZfxReader:
             if curr_word:
                 words.append("".join(curr_word))
 
-            # Merge Muqatta'at letters if present so phonetic word count matches QPC Medina Mushaf 1:1
+            # Merge Muqatta'at letters if present so phonetic word count matches QPC  Mushaf 1:1
             qpc_list = self.qpc_words.get((surah, a))
             if qpc_list:
                 diff = len(words) - len(qpc_list)
@@ -172,7 +172,7 @@ class ZfxReader:
 
 @dataclass(slots=True)
 class RefWord:
-    """Individual word entry in the Medina Mushaf reference text."""
+    """Individual word entry in the  Mushaf reference text."""
     global_index: int
     surah: int
     ayah: int

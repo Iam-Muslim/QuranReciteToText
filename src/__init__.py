@@ -425,7 +425,7 @@ class AudioPipeline:
                     stage=PipelineStage.matching,
                     percent=0.0,
                     elapsed_seconds=time.time() - overall_start,
-                    message="Matching verses to Medina reference...",
+                    message="Matching verses to  reference...",
                 )
             )
         segments = self.matcher.match_segments(

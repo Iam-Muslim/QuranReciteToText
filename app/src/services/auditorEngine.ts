@@ -6,7 +6,7 @@
  *    - Respects normal Quranic Waqf & Ibtida (breath group resumptions).
  *    - Catches internal within-segment trellis match inversions.
  *    - Catches the Surah Al-Buruj twin phrase leap & regression dip across segments.
- * 2. Normalized Phoneme Coverage Analysis vs Medina Reference (collapses Tajweed elongation tokens).
+ * 2. Normalized Phoneme Coverage Analysis vs  Reference (collapses Tajweed elongation tokens).
  * 3. Madd-Aware Physical Duration Limits (prevents false positives on Tahqiq elongations).
  * 4. Ayah-Wide Missing Word Coverage Gap Detection.
  * 5. VAD Pause Boundary Stripping at silence edges.
@@ -37,7 +37,7 @@ export function normalizeForPhonemeComparison(str: string): string {
 }
 
 /**
- * Calculates the base phonetic coverage ratio between acoustic tokens and canonical Medina reference.
+ * Calculates the base phonetic coverage ratio between acoustic tokens and canonical  reference.
  * Returns a value between 0.0 and 1.0.
  */
 export function computeWordPhonemeCoverage(w: AlignedWord): number {

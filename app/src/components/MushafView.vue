@@ -11,7 +11,7 @@
       </div>
     </div>
 
-    <!-- VIEW 1: Sacred Medina Mushaf -->
+    <!-- VIEW 1: Sacred  Mushaf -->
     <div 
       v-else-if="projectStore.viewMode.value === 'mushaf_page'" 
       class="mushaf-page-wrapper"
@@ -64,7 +64,7 @@
                 {{ word.word }}
               </span>
 
-              <!-- Medina Ayah End Marker -->
+              <!--  Ayah End Marker -->
               <span class="ayah-symbol" @click="handleAyahClick(ayah)" :title="`Ayah ${ayah.ayah}`">
                 <span class="ayah-num">{{ ayah.ayah }}</span>
               </span>
@@ -396,7 +396,7 @@ watch(() => projectStore.activeAyahNumber.value, (ayahNum) => {
   line-height: 1.4;
 }
 
-/* VIEW 1: Medina Mushaf */
+/* VIEW 1:  Mushaf */
 .mushaf-page-wrapper {
   display: flex;
   justify-content: center;
@@ -444,7 +444,7 @@ watch(() => projectStore.activeAyahNumber.value, (ayahNum) => {
   display: inline;
 }
 
-/* Authentic Medina Ayah End Marker */
+/* Authentic  Ayah End Marker */
 .ayah-symbol {
   display: inline-flex;
   align-items: center;

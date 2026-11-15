@@ -357,7 +357,7 @@ The entire pipeline executes in 4 sequential phases:
 
 1. **Phase 1: Silence & VAD Detection**: Chunks audio at natural breath pauses (*Waqf*) while protecting held vowels (*Madd*) and consonant stop closures (*Qalqalah*).
 2. **Phase 2: Acoustic Phoneme Transcribing**: The native C TajweedFormer V4 engine transcribes each chunk into 38-token Tajweed phonemes with direct 20ms-level timing and neural confidence.
-3. **Phase 3: Medina Text Alignment**: Matches recognized phonemes against the reference Medina Mushaf using Myers bit-parallel discovery and dynamic sequence alignment to resolve Surah/Ayah and accurate word boundaries.
+3. **Phase 3:  Text Alignment**: Matches recognized phonemes against the reference  Mushaf using Myers bit-parallel discovery and dynamic sequence alignment to resolve Surah/Ayah and accurate word boundaries.
 4. **Phase 4: JSON Artifact Export**: Generates canonical `output.json` and `raw_transcription.json`.
 
 ---

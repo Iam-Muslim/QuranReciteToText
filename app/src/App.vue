@@ -34,7 +34,7 @@
           <WaveformEditor @word-context-menu="handleWordContextMenu" />
         </div>
 
-        <!-- Synchronized Medina Mushaf View with Precision Word Tracking -->
+        <!-- Synchronized  Mushaf View with Precision Word Tracking -->
         <div class="mushaf-pane-wrapper">
           <MushafView @word-context-menu="handleWordContextMenu" />
         </div>

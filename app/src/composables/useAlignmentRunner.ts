@@ -97,7 +97,7 @@ export function useAlignmentRunner(
       case 'vad': return 'Voice Detection';
       case 'transcribing': return `ASR Transcription ${speedX.value > 0 ? '(' + speedX.value.toFixed(1) + 'x)' : ''}`;
       case 'aligning': return 'Neural Alignment';
-      case 'matching': return 'Medina Matching';
+      case 'matching': return ' Matching';
       case 'completed': return 'Completed';
       default: return 'Processing';
     }
@@ -470,7 +470,7 @@ export function useAlignmentRunner(
       } else if (p.stage === 'matching') {
         currentStage.value = 'matching';
         progressPercent.value = Math.max(progressPercent.value, 93);
-        if (!p.message) statusMessage.value = 'Medina Quran Matching…';
+        if (!p.message) statusMessage.value = ' Quran Matching…';
       } else if (p.stage === 'batch_file_start') {
         statusMessage.value = `[${p.index}/${p.total}] Aligning ${p.file}…`;
         addLog(`Batch File [${p.index}/${p.total}]: ${p.file}`, 'info');

@@ -316,7 +316,7 @@
               class="toggle-btn" 
               :class="{ 'active': projectStore.viewMode.value === 'mushaf_page' }"
               @click="projectStore.viewMode.value = 'mushaf_page'"
-              title="Medina Mushaf Sacred Page"
+              title=" Mushaf Sacred Page"
             >
               <BookOpen :size="12" />
               <span class="view-label">Mushaf</span>

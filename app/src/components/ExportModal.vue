@@ -10,7 +10,7 @@
           </div>
           <div class="header-titles">
             <h3 class="modal-title">Export & Hugging Face Publishing</h3>
-            <span class="modal-subtitle">Generate Medina timing JSON or publish directly to Hugging Face</span>
+            <span class="modal-subtitle">Generate  timing JSON or publish directly to Hugging Face</span>
           </div>
         </div>
         <button class="btn-icon" @click="close" title="Close">
