@@ -55,7 +55,7 @@ VAD_PREROLL_S: float = 0.20                 # 200ms pre-roll margin
 SUBSEGMENT_MIN_PAUSE_S: float = 9999.0      # Disabled (9999): Keep 1 unified segment per Ayah for clean UI timeline 
 PAUSE_CUT_MARGIN_S: float = 0.08            # Tolerance window (seconds) to anchor acoustic pause cut between words
 PAUSE_INTERVAL_OVERLAP_S: float = 0.12      # Maximum pause interval boundary overlap (seconds) with adjacent words
-SNAP_TO_VAD_SEGMENT_BOUNDARIES: bool = False # Optional: snap first/last phoneme of segment to VAD raw cuts
+SNAP_TO_VAD_SEGMENT_BOUNDARIES: bool = True  # Snap first/last phoneme of segment to VAD raw cuts
 
 
 # ==============================================================================

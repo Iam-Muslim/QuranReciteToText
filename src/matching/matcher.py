@@ -179,6 +179,22 @@ def _align_and_package_ayahs(
         word_passes.append((curr_w, span_s, m))
 
     min_cov = getattr(cfg, "min_word_coverage", getattr(config, "MIN_WORD_COVERAGE", 0.35))
+    intervals = pause_intervals or []
+    interval_starts = [p.start_sec for p in intervals] if intervals else []
+    pause_pts = sorted(pause_timestamps) if pause_timestamps else []
+    min_pause_s = getattr(config, "VAD_SAKT_MIN_PAUSE_S", 0.16)
+
+    def _is_pause_between(t1: PhonemeToken, t2: PhonemeToken) -> bool:
+        if (t2.start - t1.end) >= min_pause_s:
+            return True
+        if intervals:
+            idx = bisect.bisect_right(interval_starts, t1.end - 0.020)
+            if idx < len(intervals):
+                p = intervals[idx]
+                if p.start_sec < t2.start + 0.020 and p.end_sec > t1.end - 0.020:
+                    if p.duration_sec >= min_pause_s:
+                        return True
+        return False
 
     for w, s_char, e_char in word_passes:
         if e_char > s_char:
@@ -192,14 +208,34 @@ def _align_and_package_ayahs(
                 w_j_start = ref_data.word_boundaries[w] - p_start
                 w_j_end = ref_data.word_boundaries[w + 1] - p_start
 
-                # Count unique reference phoneme positions covered in this pass
-                covered_j = set()
-                for i in range(s_char, e_char):
-                    j = int(char_j_map[i])
-                    if w_j_start <= j < w_j_end:
-                        covered_j.add(j)
+                # Acoustic Pause Barrier: Words do not straddle breath pauses (>= min_pause_s).
+                # If a physical pause occurs inside tokens[t_s:t_e], partition into continuous sub-slices.
+                sub_slices: List[Tuple[int, int]] = []
+                c_s = t_s
+                for k in range(t_s, t_e - 1):
+                    if _is_pause_between(tokens[k], tokens[k + 1]):
+                        sub_slices.append((c_s, k + 1))
+                        c_s = k + 1
+                sub_slices.append((c_s, t_e))
 
-                ref_covered = len(covered_j)
+                # Determine which continuous sub-slice has maximum reference coverage for word w
+                best_slice = sub_slices[0]
+                best_cov = -1
+                best_idx = 0
+                for s_idx, (sl_s, sl_e) in enumerate(sub_slices):
+                    sl_covered = set()
+                    for i in range(s_char, e_char):
+                        tok_idx = char_to_tok[i]
+                        if sl_s <= tok_idx < sl_e:
+                            j = int(char_j_map[i])
+                            if w_j_start <= j < w_j_end:
+                                sl_covered.add(j)
+                    if len(sl_covered) > best_cov:
+                        best_cov = len(sl_covered)
+                        best_slice = (sl_s, sl_e)
+                        best_idx = s_idx
+
+                ref_covered = max(0, best_cov)
                 coverage = ref_covered / max(1, ref_len)
 
                 # Pure coverage guard (no confidence check, robust to noisy/fast ASR):
@@ -212,7 +248,15 @@ def _align_and_package_ayahs(
                     if ref_covered < 2 or coverage < min_cov:
                         continue
 
-                w_toks = tokens[t_s:t_e]
+                # Handle orphaned sub-slices separated by pauses
+                # If an orphaned sub-slice precedes best_slice across a pause, attach it to w - 1
+                if best_idx > 0:
+                    for sl_s, sl_e in sub_slices[:best_idx]:
+                        orphaned_toks = tokens[sl_s:sl_e]
+                        if orphaned_toks and (w - 1) in matched_word_tokens:
+                            matched_word_tokens[w - 1][-1].extend(orphaned_toks)
+
+                w_toks = tokens[best_slice[0]:best_slice[1]]
                 matched_word_tokens[w].append(w_toks)
                 w_conf = sum(t.confidence for t in w_toks) / len(w_toks)
                 matched_word_scores[w] = round(min(1.0, w_conf), 2)
@@ -225,11 +269,6 @@ def _align_and_package_ayahs(
     max_w = max(matched_word_tokens.keys())
     start_ay = ref_data.words[min_w].ayah if min_w < word_count else 1
     end_ay = ref_data.words[max_w].ayah if max_w < word_count else ref_data.words[-1].ayah
-
-    intervals = pause_intervals or []
-    interval_starts = [p.start_sec for p in intervals] if intervals else []
-    pause_pts = sorted(pause_timestamps) if pause_timestamps else []
-    min_pause_s = getattr(config, "VAD_SAKT_MIN_PAUSE_S", 0.16)
 
     def _find_pause_cut(w_prev: QuranWord, w_curr: QuranWord) -> Optional[Tuple[float, float]]:
         w_prev_e = w_prev.end or 0.0
@@ -370,27 +409,6 @@ def _align_and_package_ayahs(
             if not chunk:
                 return
 
-            # Phase 4:  Wasl Contiguous Boundary Handover
-            # In continuous reading within a chunk (no acoustic pause), words meet contiguously:
-            for i in range(len(chunk) - 1):
-                cw1 = chunk[i]
-                cw2 = chunk[i + 1]
-                if cw1.end is not None and cw2.start is not None:
-                    split_t = cw2.start
-                    if cw1.start is not None and split_t <= cw1.start:
-                        split_t = cw1.start + 0.020
-                    if cw2.end is not None and split_t >= cw2.end:
-                        split_t = max(cw1.start + 0.020 if cw1.start is not None else 0.0, cw2.end - 0.020)
-                    split_t = round(split_t, 3)
-                    cw1.end = split_t
-                    cw1.raw_end = split_t
-                    cw2.start = split_t
-                    cw2.raw_start = split_t
-                    if cw1.phonemes:
-                        cw1.phonemes[-1]["end"] = split_t
-                    if cw2.phonemes:
-                        cw2.phonemes[0]["start"] = split_t
-
             # A subsegment is marked as a repetition if it contains ANY word that has already been recited earlier in this Ayah
             is_rep_chunk = (
                 has_repeated
@@ -455,40 +473,6 @@ def _align_and_package_ayahs(
             sub_segments=sub_segments,
         ))
         seg_number += 1
-
-    # Phase 4.1: Universal Cross-Ayah Wasl Contiguous Boundary Handover
-    # When consecutive Ayahs are recited in one single breath (no acoustic pause),
-    # the end of the last word in Ayah N meets the start of the first word in Ayah N+1 contiguously:
-    for i in range(len(segments) - 1):
-        seg_curr = segments[i]
-        seg_next = segments[i + 1]
-        if not seg_curr.words or not seg_next.words:
-            continue
-        w_last = seg_curr.words[-1]
-        w_first = seg_next.words[0]
-        if w_last.end is not None and w_first.start is not None:
-            p_bounds = _find_pause_cut(w_last, w_first)
-            if p_bounds is None:
-                split_t = w_first.start
-                if w_last.start is not None and split_t <= w_last.start:
-                    split_t = w_last.start + 0.020
-                if w_first.end is not None and split_t >= w_first.end:
-                    split_t = max(w_last.start + 0.020 if w_last.start is not None else 0.0, w_first.end - 0.020)
-                split_t = round(split_t, 3)
-                w_last.end = split_t
-                w_last.raw_end = split_t
-                w_first.start = split_t
-                w_first.raw_start = split_t
-                if w_last.phonemes:
-                    w_last.phonemes[-1]["end"] = split_t
-                if w_first.phonemes:
-                    w_first.phonemes[0]["start"] = split_t
-                seg_curr.end_time = split_t
-                seg_next.start_time = split_t
-                if seg_curr.sub_segments:
-                    seg_curr.sub_segments[-1].end_time = split_t
-                if seg_next.sub_segments:
-                    seg_next.sub_segments[0].start_time = split_t
 
     return segments
 

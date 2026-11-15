@@ -291,17 +291,35 @@ class TajweedFormerEngine:
             base_ef = 2 * (e + 1)
 
             # Monotonic alignment to physical 20ms H-time acoustic run
+            # Find the physical run of curr_token_id that has maximum temporal overlap with CTC emission
             fine_sf = base_sf
             fine_ef = base_ef
             if timing_runs:
+                best_idx = None
+                best_overlap = -1
                 for idx in range(tr_cursor, len(timing_runs)):
                     tr_tok, tr_s, tr_e = timing_runs[idx]
-                    # The physical acoustic run must match phoneme identity and start before/at CTC emission
-                    if tr_tok == curr_token_id and tr_s <= base_ef:
-                        fine_sf = tr_s
-                        fine_ef = tr_e
-                        tr_cursor = idx + 1
+                    if tr_s > base_ef + 10:
                         break
+                    if tr_tok == curr_token_id:
+                        overlap = max(0, min(tr_e, base_ef) - max(tr_s, base_sf))
+                        if overlap > best_overlap:
+                            best_overlap = overlap
+                            best_idx = idx
+
+                if best_idx is not None and best_overlap > 0:
+                    fine_sf = timing_runs[best_idx][1]
+                    fine_ef = timing_runs[best_idx][2]
+                    tr_cursor = best_idx + 1
+                else:
+                    # Fallback: closest matching run starting before or at base_ef
+                    for idx in range(tr_cursor, len(timing_runs)):
+                        tr_tok, tr_s, tr_e = timing_runs[idx]
+                        if tr_tok == curr_token_id and tr_s <= base_ef:
+                            fine_sf = tr_s
+                            fine_ef = tr_e
+                            tr_cursor = idx + 1
+                            break
 
             fine_sf = max(prev_end_20, fine_sf)
             fine_ef = max(fine_sf + 1, fine_ef)
@@ -335,81 +353,6 @@ class TajweedFormerEngine:
                 )
             )
             t = e + 1
-
-        # Physical transition cut at boundary between adjacent continuous speech tokens:
-        # If there is no acoustic silence (state 0) in timing_log_probs between token i and i+1:
-        # Split them at the maximum transition probability of the boundary head in their contact zone.
-        if b_prob is not None and seg_phonemes:
-            # 1. Onset attack alignment for segment-initial phoneme (captures vocal onset from silence)
-            p0 = seg_phonemes[0]
-            p0_mid = (p0.start_frame + p0.end_frame) // 2 - frame_offset
-            att_s0 = max(0, (p0.start_frame - frame_offset) - 3)
-            att_e0 = max(att_s0 + 1, min(p0_mid + 1, heads.n20))
-            cut_p0 = att_s0 + int(np.argmax(b_prob[att_s0:att_e0]))
-            if cut_p0 < p0.end_frame - frame_offset:
-                p0.start_frame = frame_offset + cut_p0
-                p0.start = round(time_offset_s + cut_p0 * 0.020, 4)
-
-            # 2. Inter-phoneme boundary transitions
-            for i in range(len(seg_phonemes) - 1):
-                p1 = seg_phonemes[i]
-                p2 = seg_phonemes[i + 1]
-                sf1 = p1.end_frame - frame_offset
-                sf2 = p2.start_frame - frame_offset
-
-                # Check if there is silence between them in timing head
-                is_pause = False
-                if tlp_arr is not None and 0 <= sf1 <= sf2 <= heads.n20:
-                    for f in range(sf1, sf2):
-                        if int(np.argmax(tlp_arr[f])) == 0:
-                            is_pause = True
-                            break
-
-                if not is_pause:
-                    # Continuous Wasl: split at boundary peak in contact zone
-                    c_start = (p1.start_frame + p1.end_frame) // 2 - frame_offset
-                    c_end = (p2.start_frame + p2.end_frame) // 2 - frame_offset
-                    c_start = max(0, min(c_start, heads.n20 - 1))
-                    c_end = max(c_start + 1, min(c_end + 1, heads.n20))
-
-                    # Cut at maximum transition probability
-                    cut_rel = c_start + int(np.argmax(b_prob[c_start:c_end]))
-                    abs_cut_f = frame_offset + cut_rel
-                    cut_time = round(time_offset_s + cut_rel * 0.020, 4)
-
-                    p1.end_frame = abs_cut_f
-                    p1.end = cut_time
-                    p2.start_frame = abs_cut_f
-                    p2.start = cut_time
-                else:
-                    # When there is an acoustic pause between p1 and p2:
-                    # Refine p1 release into silence
-                    p1_mid = (p1.start_frame + p1.end_frame) // 2 - frame_offset
-                    rel_s = max(0, min(p1_mid, heads.n20 - 1))
-                    rel_e = min(heads.n20, max(rel_s + 1, sf1 + 3))
-                    cut_p1 = rel_s + int(np.argmax(b_prob[rel_s:rel_e]))
-                    if cut_p1 > p1.start_frame - frame_offset:
-                        p1.end_frame = frame_offset + cut_p1
-                        p1.end = round(time_offset_s + cut_p1 * 0.020, 4)
-
-                    # Refine p2 attack from silence
-                    p2_mid = (p2.start_frame + p2.end_frame) // 2 - frame_offset
-                    att_s = max(0, sf2 - 3)
-                    att_e = max(att_s + 1, min(p2_mid + 1, heads.n20))
-                    cut_p2 = att_s + int(np.argmax(b_prob[att_s:att_e]))
-                    if cut_p2 < p2.end_frame - frame_offset:
-                        p2.start_frame = frame_offset + cut_p2
-                        p2.start = round(time_offset_s + cut_p2 * 0.020, 4)
-
-            # 3. Terminal release alignment for segment-final phoneme at Waqf
-            pN = seg_phonemes[-1]
-            pN_mid = (pN.start_frame + pN.end_frame) // 2 - frame_offset
-            rel_sN = max(0, min(pN_mid, heads.n20 - 1))
-            rel_eN = min(heads.n20, max(rel_sN + 1, (pN.end_frame - frame_offset) + 3))
-            cut_pN = rel_sN + int(np.argmax(b_prob[rel_sN:rel_eN]))
-            if cut_pN > pN.start_frame - frame_offset:
-                pN.end_frame = frame_offset + cut_pN
-                pN.end = round(time_offset_s + cut_pN * 0.020, 4)
 
         return seg_phonemes
 
@@ -640,19 +583,17 @@ class TajweedFormerEngine:
                 )
                 lp, tlp = None, None
 
-            if ph and getattr(config, "SNAP_TO_VAD_SEGMENT_BOUNDARIES", False):
-                # Phase 1: Physical Segment Anchoring (Optional via config.SNAP_TO_VAD_SEGMENT_BOUNDARIES)
-                # Lock first phoneme attack to the physical acoustic onset after breath pause
+            if ph and getattr(config, "SNAP_TO_VAD_SEGMENT_BOUNDARIES", True):
+                # Lock first phoneme attack to the physical acoustic onset after breath pause (VAD cut)
                 ph[0].start = round(seg.raw_start_sec, 4)
                 ph[0].start_frame = int(round(seg.raw_start_sec / FRAME_STEP))
                 if ph[0].end <= ph[0].start:
                     ph[0].end = round(ph[0].start + FRAME_STEP, 4)
                     ph[0].end_frame = ph[0].start_frame + 1
 
-                # Cap the last phoneme release to the physical acoustic offset (eliminates engine flush overrun)
-                if ph[-1].end > seg.raw_end_sec:
-                    ph[-1].end = round(seg.raw_end_sec, 4)
-                    ph[-1].end_frame = min(ph[-1].end_frame, int(round(seg.raw_end_sec / FRAME_STEP)))
+                # Lock the last phoneme release to the physical acoustic offset (VAD cut)
+                ph[-1].end = round(seg.raw_end_sec, 4)
+                ph[-1].end_frame = int(round(seg.raw_end_sec / FRAME_STEP))
                 if ph[-1].start >= ph[-1].end:
                     ph[-1].start = max(0.0, round(ph[-1].end - FRAME_STEP, 4))
                     ph[-1].start_frame = max(0, ph[-1].end_frame - 1)
