@@ -64,6 +64,21 @@ class MatcherConfig:
 # 2. WORD & SEGMENT BUILDERS
 # ═══════════════════════════════════════════════════════════════════════════════
 
+_WAQF_MARKS = {'ۚ', 'ۖ', 'ۗ', 'ۘ', 'ۙ', 'ۜ', '؞'}
+_TANWEEN_CHARS = {'\u064b', '\u064c', '\u064d', '\u08f0', '\u08f1', '\u08f2'}
+
+def _is_uninterrupted_ghunnah_wasl(w1: QuranWord, w2: QuranWord) -> bool:
+    t1 = w1.word or getattr(w1, 'text_uthmani', None) or ""
+    if not t1 or any(m in t1 for m in _WAQF_MARKS):
+        return False
+    clean = t1.rstrip(' \t\r\n')
+    has_tanween = any(c in _TANWEEN_CHARS for c in clean[-3:])
+    ends_nun = clean.endswith('ن') or clean.endswith('نْ') or clean.endswith('نَّ')
+    ends_meem = clean.endswith('كُم') or clean.endswith('هُم') or clean.endswith('كُمْ') or clean.endswith('هُمْ') or clean.endswith('هُمُ')
+    ends_ain = clean.endswith('تَسْتَطِع')
+    return has_tanween or ends_nun or ends_meem or ends_ain
+
+
 def _build_qword(rw: RefWord, tokens: List[PhonemeToken], score: float) -> QuranWord:
     """Creates a unified QuranWord instance with phoneme breakdown and acoustic bounds."""
     w_start = round(tokens[0].start, 3)
@@ -236,7 +251,6 @@ def _align_and_package_ayahs(
     # Pause markers used for optional Ayah subsegment cuts
     intervals = pause_intervals or []
     interval_starts = [p.start_sec for p in intervals] if intervals else []
-    pause_pts = sorted(pause_timestamps) if pause_timestamps else []
     min_pause_s = getattr(config, "VAD_SAKT_MIN_PAUSE_S", 0.16)
 
     def _find_pause_cut(w_prev: QuranWord, w_curr: QuranWord) -> Optional[Tuple[float, float]]:
@@ -268,14 +282,6 @@ def _align_and_package_ayahs(
                 if (p.start_sec >= w_prev_e - PAUSE_INTERVAL_OVERLAP_S) and (p.end_sec <= w_curr_s + PAUSE_INTERVAL_OVERLAP_S):
                     if mid_prev < cut < mid_curr:
                         return (cut, p.end_sec)
-        elif pause_pts:
-            idx = bisect.bisect_right(pause_pts, w_curr_s + 0.50)
-            for i in range(idx - 1, -1, -1):
-                pt = pause_pts[i]
-                if pt < w_prev_e - 1.0:
-                    break
-                if (w_prev_e - PAUSE_CUT_MARGIN_S) <= pt <= (w_curr_s + PAUSE_CUT_MARGIN_S) and (mid_prev < pt < mid_curr):
-                    return (pt, pt + 0.10)
 
         return None
 
@@ -322,6 +328,19 @@ def _align_and_package_ayahs(
                 _build_qword(rw, p, matched_word_scores.get(rw.global_index, 1.0))
                 for rw, p in chosen_tokens
             ]
+
+        # Natural acoustic closure bridge: within uninterrupted speech (no breath pause),
+        # bridge CTC single-frame blank closure gaps (<= 50ms) to ensure continuous word boundaries.
+        # For Tajweed Wasl/Idgham bi-Ghunnah merges without Waqf stop, connect held nasal murmur to word 1.
+        for i in range(len(qwords) - 1):
+            qw1 = qwords[i]
+            qw2 = qwords[i + 1]
+            if _find_pause_cut(qw1, qw2) is None:
+                gap = (qw2.start or 0.0) - (qw1.end or 0.0)
+                if 0.0 < gap <= 0.05:
+                    qw2.start = qw1.end
+                elif 0.05 < gap <= 1.30 and _is_uninterrupted_ghunnah_wasl(qw1, qw2):
+                    qw1.end = qw2.start
 
         sub_segments: Optional[List[AyahSubSegment]] = None
         repeated_ranges: Optional[List[str]] = None
@@ -396,6 +415,16 @@ def _align_and_package_ayahs(
             sub_segs_list.append(_build_sub(chunk, is_rep_chunk))
 
         for p_idx, (pass_words, _) in enumerate(passes):
+            for i in range(len(pass_words) - 1):
+                pw1 = pass_words[i]
+                pw2 = pass_words[i + 1]
+                if _find_pause_cut(pw1, pw2) is None:
+                    gap = (pw2.start or 0.0) - (pw1.end or 0.0)
+                    if 0.0 < gap <= 0.05:
+                        pw2.start = pw1.end
+                    elif 0.05 < gap <= 1.30 and _is_uninterrupted_ghunnah_wasl(pw1, pw2):
+                        pw1.end = pw2.start
+
             current_chunk: List[QuranWord] = []
             for w in pass_words:
                 if current_chunk:

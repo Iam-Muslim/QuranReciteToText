@@ -54,6 +54,7 @@ ACTIVE_HEADS_MASK = (
     HEAD_LOG_PROBS
     | HEAD_TIMING
     | HEAD_CONF
+    | HEAD_GHUNNA
 )
 
 
@@ -626,8 +627,8 @@ class TajweedFormerEngine:
                 lp, tlp = None, None
 
             if ph and getattr(config, "SNAP_TO_VAD_SEGMENT_BOUNDARIES", True):
-                # Lock first phoneme attack to physical acoustic onset if within acoustic tolerance (<=120ms)
-                if abs(seg.raw_start_sec - ph[0].start) <= 0.12:
+                # Lock first phoneme attack to physical acoustic onset if within neural lag tolerance (<=200ms)
+                if abs(seg.raw_start_sec - ph[0].start) <= 0.20:
                     ph[0].start = round(seg.raw_start_sec, 4)
                     ph[0].start_frame = int(round(seg.raw_start_sec / FRAME_STEP))
                     if ph[0].end <= ph[0].start:
