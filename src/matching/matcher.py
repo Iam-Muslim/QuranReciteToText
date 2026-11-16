@@ -184,18 +184,6 @@ def _align_and_package_ayahs(
     pause_pts = sorted(pause_timestamps) if pause_timestamps else []
     min_pause_s = getattr(config, "VAD_SAKT_MIN_PAUSE_S", 0.16)
 
-    def _is_pause_between(t1: PhonemeToken, t2: PhonemeToken) -> bool:
-        if (t2.start - t1.end) >= min_pause_s:
-            return True
-        if intervals:
-            idx = bisect.bisect_right(interval_starts, t1.end - 0.020)
-            if idx < len(intervals):
-                p = intervals[idx]
-                if p.start_sec < t2.start + 0.020 and p.end_sec > t1.end - 0.020:
-                    if p.duration_sec >= min_pause_s:
-                        return True
-        return False
-
     for w, s_char, e_char in word_passes:
         if e_char > s_char:
             t_s = char_to_tok[s_char]
@@ -208,34 +196,14 @@ def _align_and_package_ayahs(
                 w_j_start = ref_data.word_boundaries[w] - p_start
                 w_j_end = ref_data.word_boundaries[w + 1] - p_start
 
-                # Acoustic Pause Barrier: Words do not straddle breath pauses (>= min_pause_s).
-                # If a physical pause occurs inside tokens[t_s:t_e], partition into continuous sub-slices.
-                sub_slices: List[Tuple[int, int]] = []
-                c_s = t_s
-                for k in range(t_s, t_e - 1):
-                    if _is_pause_between(tokens[k], tokens[k + 1]):
-                        sub_slices.append((c_s, k + 1))
-                        c_s = k + 1
-                sub_slices.append((c_s, t_e))
+                # Count unique reference phoneme positions covered in this pass
+                covered_j = set()
+                for i in range(s_char, e_char):
+                    j = int(char_j_map[i])
+                    if w_j_start <= j < w_j_end:
+                        covered_j.add(j)
 
-                # Determine which continuous sub-slice has maximum reference coverage for word w
-                best_slice = sub_slices[0]
-                best_cov = -1
-                best_idx = 0
-                for s_idx, (sl_s, sl_e) in enumerate(sub_slices):
-                    sl_covered = set()
-                    for i in range(s_char, e_char):
-                        tok_idx = char_to_tok[i]
-                        if sl_s <= tok_idx < sl_e:
-                            j = int(char_j_map[i])
-                            if w_j_start <= j < w_j_end:
-                                sl_covered.add(j)
-                    if len(sl_covered) > best_cov:
-                        best_cov = len(sl_covered)
-                        best_slice = (sl_s, sl_e)
-                        best_idx = s_idx
-
-                ref_covered = max(0, best_cov)
+                ref_covered = len(covered_j)
                 coverage = ref_covered / max(1, ref_len)
 
                 # Pure coverage guard (no confidence check, robust to noisy/fast ASR):
@@ -248,15 +216,7 @@ def _align_and_package_ayahs(
                     if ref_covered < 2 or coverage < min_cov:
                         continue
 
-                # Handle orphaned sub-slices separated by pauses
-                # If an orphaned sub-slice precedes best_slice across a pause, attach it to w - 1
-                if best_idx > 0:
-                    for sl_s, sl_e in sub_slices[:best_idx]:
-                        orphaned_toks = tokens[sl_s:sl_e]
-                        if orphaned_toks and (w - 1) in matched_word_tokens:
-                            matched_word_tokens[w - 1][-1].extend(orphaned_toks)
-
-                w_toks = tokens[best_slice[0]:best_slice[1]]
+                w_toks = tokens[t_s:t_e]
                 matched_word_tokens[w].append(w_toks)
                 w_conf = sum(t.confidence for t in w_toks) / len(w_toks)
                 matched_word_scores[w] = round(min(1.0, w_conf), 2)

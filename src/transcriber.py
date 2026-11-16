@@ -53,7 +53,6 @@ HEAD_CONF = 1 << 11
 ACTIVE_HEADS_MASK = (
     HEAD_LOG_PROBS
     | HEAD_TIMING
-    | HEAD_BOUNDARY
     | HEAD_CONF
 )
 
@@ -232,20 +231,14 @@ class TajweedFormerEngine:
         frame_offset: int = 0,
         is_recovered: bool = False,
     ) -> List[PhonemeToken]:
-        """Clean 4-head neural decoding using TajweedFormer native layers:
+        """Clean 3-head neural decoding using TajweedFormer native layers:
         - Layer 15 (log_probs): Authoritative phoneme classification
         - 20ms H-time Chain (timing_log_probs): Continuous acoustic state chain (attack and held release)
-        - 20ms Boundary Head (boundary): Physical phonetic transition cuts
         - 20ms Confidence Head (conf): Frame confidence
         """
         conf_logits = None
         if heads.n20 > 0 and heads.conf:
             conf_logits = np.ctypeslib.as_array(heads.conf, shape=(heads.n20,))
-
-        b_prob = None
-        if heads.n20 > 0 and heads.boundary:
-            b_arr = np.ctypeslib.as_array(heads.boundary, shape=(heads.n20,))
-            b_prob = 1.0 / (1.0 + np.exp(-b_arr))
 
         tlp_arr = None
         if heads.n20 > 0 and heads.timing_log_probs:
