@@ -99,10 +99,16 @@ def _align_and_package_ayahs(
     total_tokens = len(tokens)
     asr_str = "".join(t.phoneme for t in tokens)
 
-    # Fast char-to-token index lookup
+    # Fast char-to-token index lookup and token character boundaries
     char_to_tok: List[int] = []
+    tok_char_starts: List[int] = []
+    curr_c = 0
     for tok_idx, t in enumerate(tokens):
-        char_to_tok.extend([tok_idx] * len(t.phoneme))
+        tok_char_starts.append(curr_c)
+        l = len(t.phoneme)
+        char_to_tok.extend([tok_idx] * l)
+        curr_c += l
+    tok_char_starts.append(curr_c)
     char_to_tok.append(total_tokens)
 
     word_count = ref_data.num_words
@@ -164,58 +170,59 @@ def _align_and_package_ayahs(
     word_passes: List[Tuple[int, int, int]] = []
     curr_w = -1
     span_s = -1
-    m = len(asr_str)
 
-    for i in range(m):
-        w = int(char_word_map[i])
-        is_jump = (i > 0 and char_j_map[i] >= 0 and char_j_map[i - 1] >= 0 and char_j_map[i] < char_j_map[i - 1])
+    for k in range(total_tokens):
+        c_k = tok_char_starts[k]
+        w = int(char_word_map[c_k])
+        c_prev = tok_char_starts[k - 1] if k > 0 else 0
+        is_jump = (k > 0 and char_j_map[c_k] >= 0 and char_j_map[c_prev] >= 0 and char_j_map[c_k] < char_j_map[c_prev])
         if w != curr_w or is_jump:
             if curr_w >= 0 and span_s >= 0:
-                word_passes.append((curr_w, span_s, i))
+                word_passes.append((curr_w, span_s, k))
             curr_w = w
-            span_s = i if w >= 0 else -1
+            span_s = k if w >= 0 else -1
 
     if curr_w >= 0 and span_s >= 0:
-        word_passes.append((curr_w, span_s, m))
+        word_passes.append((curr_w, span_s, total_tokens))
 
     min_cov = getattr(cfg, "min_word_coverage", getattr(config, "MIN_WORD_COVERAGE", 0.35))
 
-    for w, s_char, e_char in word_passes:
-        if e_char > s_char:
-            t_s = char_to_tok[s_char]
-            t_e = char_to_tok[e_char]
-            if t_e > t_s and 0 <= w < word_count:
-                rw = ref_data.words[w]
-                ref_len = len(rw.phoneme)
+    for w, t_s, t_e in word_passes:
+        if t_e > t_s and 0 <= w < word_count:
+            rw = ref_data.words[w]
+            ref_len = len(rw.phoneme)
 
-                # Reference boundary for word w within the current sub_r_str window
-                w_j_start = ref_data.word_boundaries[w] - p_start
-                w_j_end = ref_data.word_boundaries[w + 1] - p_start
+            s_char = tok_char_starts[t_s]
+            e_char = tok_char_starts[t_e]
 
-                # Count unique reference phoneme positions covered in this pass
-                covered_j = set()
-                for i in range(s_char, e_char):
-                    j = int(char_j_map[i])
-                    if w_j_start <= j < w_j_end:
-                        covered_j.add(j)
+            # Reference boundary for word w within the current sub_r_str window
+            w_j_start = ref_data.word_boundaries[w] - p_start
+            w_j_end = ref_data.word_boundaries[w + 1] - p_start
 
-                ref_covered = len(covered_j)
-                coverage = ref_covered / max(1, ref_len)
+            # Count unique reference phoneme positions covered in this pass
+            covered_j = set()
+            for i in range(s_char, e_char):
+                j = int(char_j_map[i])
+                if w_j_start <= j < w_j_end:
+                    covered_j.add(j)
 
-                # Pure coverage guard (no confidence check, robust to noisy/fast ASR):
-                # 1. Short words (<= 2 chars like "وَ", "فَ") require at least 1 covered char.
-                # 2. Longer words (>= 3 chars) require at least 2 covered chars AND coverage >= min_cov.
-                if ref_len <= 2:
-                    if ref_covered < 1:
-                        continue
-                else:
-                    if ref_covered < 2 or coverage < min_cov:
-                        continue
+            ref_covered = len(covered_j)
+            coverage = ref_covered / max(1, ref_len)
 
-                w_toks = tokens[t_s:t_e]
-                matched_word_tokens[w].append(w_toks)
-                w_conf = sum(t.confidence for t in w_toks) / len(w_toks)
-                matched_word_scores[w] = round(min(1.0, w_conf), 2)
+            # Pure coverage guard (no confidence check, robust to noisy/fast ASR):
+            # 1. Short words (<= 2 chars like "وَ", "فَ") require at least 1 covered char.
+            # 2. Longer words (>= 3 chars) require at least 2 covered chars AND coverage >= min_cov.
+            if ref_len <= 2:
+                if ref_covered < 1:
+                    continue
+            else:
+                if ref_covered < 2 or coverage < min_cov:
+                    continue
+
+            w_toks = tokens[t_s:t_e]
+            matched_word_tokens[w].append(w_toks)
+            w_conf = sum(t.confidence for t in w_toks) / len(w_toks)
+            matched_word_scores[w] = round(min(1.0, w_conf), 2)
 
     if not matched_word_tokens:
         return []

@@ -264,6 +264,39 @@ class TajweedFormerEngine:
         prev_end_20 = 0
         tr_cursor = 0
 
+        def _emit_timing_run(tr_tok: int, tr_s: int, tr_e: int) -> None:
+            nonlocal prev_end_20
+            r_sf = max(prev_end_20, tr_s)
+            r_ef = max(r_sf + 1, tr_e)
+            if r_ef <= r_sf:
+                return
+            prev_end_20 = r_ef
+            r_pk = (r_sf + r_ef) // 2
+            if conf_logits is not None and r_ef <= len(conf_logits):
+                span = conf_logits[r_sf:r_ef]
+                r_conf = float(np.mean(1.0 / (1.0 + np.exp(-span))))
+            else:
+                r_conf = 0.95
+            lp_val = float(np.mean(tlp_arr[r_sf:r_ef, tr_tok])) if tlp_arr is not None else -0.5
+            seg_phonemes.append(
+                PhonemeToken(
+                    phoneme=self.id2token[tr_tok],
+                    start=round(time_offset_s + r_sf * 0.020, 4),
+                    end=round(time_offset_s + r_ef * 0.020, 4),
+                    confidence=round(r_conf, 4),
+                    is_recovered=is_recovered,
+                    start_frame=frame_offset + r_sf,
+                    end_frame=frame_offset + r_ef,
+                    peak_frame=frame_offset + r_pk,
+                    peak_timestamp=round(time_offset_s + r_pk * 0.020, 4),
+                    token_id=tr_tok,
+                    log_prob=round(lp_val, 4),
+                    runner_up=0,
+                    runner_up_log_prob=-5.0,
+                    margin=round(lp_val - (-5.0), 4),
+                )
+            )
+
         while t < n_frames:
             curr_token_id = top2_ptr[t].token
             if curr_token_id == BLANK_ID or curr_token_id not in self.id2token:
@@ -283,10 +316,18 @@ class TajweedFormerEngine:
             base_sf = 2 * t
             base_ef = 2 * (e + 1)
 
+            # Harvest any sustained acoustic runs from timing_runs during CTC blank gap
+            if timing_runs:
+                while tr_cursor < len(timing_runs) and timing_runs[tr_cursor][2] <= base_sf:
+                    tr_tok, tr_s, tr_e = timing_runs[tr_cursor]
+                    if tr_e - tr_s >= 2 and tr_tok > 1 and tr_tok in self.id2token:
+                        _emit_timing_run(tr_tok, tr_s, tr_e)
+                    tr_cursor += 1
+
             # Monotonic alignment to physical 20ms H-time acoustic run
             # Find the physical run of curr_token_id that has maximum temporal overlap with CTC emission
-            fine_sf = base_sf
-            fine_ef = base_ef
+            fine_sf = max(base_sf, prev_end_20)
+            fine_ef = max(base_ef, fine_sf + 1)
             if timing_runs:
                 best_idx = None
                 best_overlap = -1
@@ -301,7 +342,7 @@ class TajweedFormerEngine:
                             best_idx = idx
 
                 if best_idx is not None and best_overlap > 0:
-                    fine_sf = timing_runs[best_idx][1]
+                    fine_sf = max(prev_end_20, timing_runs[best_idx][1])
                     fine_ef = timing_runs[best_idx][2]
                     tr_cursor = best_idx + 1
                 else:
@@ -309,7 +350,7 @@ class TajweedFormerEngine:
                     for idx in range(tr_cursor, len(timing_runs)):
                         tr_tok, tr_s, tr_e = timing_runs[idx]
                         if tr_tok == curr_token_id and tr_s <= base_ef:
-                            fine_sf = tr_s
+                            fine_sf = max(prev_end_20, tr_s)
                             fine_ef = tr_e
                             tr_cursor = idx + 1
                             break
@@ -346,6 +387,14 @@ class TajweedFormerEngine:
                 )
             )
             t = e + 1
+
+        # Harvest any trailing acoustic runs from timing_runs after last CTC token
+        if timing_runs:
+            while tr_cursor < len(timing_runs):
+                tr_tok, tr_s, tr_e = timing_runs[tr_cursor]
+                if tr_e - tr_s >= 2 and tr_tok > 1 and tr_tok in self.id2token:
+                    _emit_timing_run(tr_tok, tr_s, tr_e)
+                tr_cursor += 1
 
         return seg_phonemes
 
@@ -577,19 +626,22 @@ class TajweedFormerEngine:
                 lp, tlp = None, None
 
             if ph and getattr(config, "SNAP_TO_VAD_SEGMENT_BOUNDARIES", True):
-                # Lock first phoneme attack to the physical acoustic onset after breath pause (VAD cut)
-                ph[0].start = round(seg.raw_start_sec, 4)
-                ph[0].start_frame = int(round(seg.raw_start_sec / FRAME_STEP))
-                if ph[0].end <= ph[0].start:
-                    ph[0].end = round(ph[0].start + FRAME_STEP, 4)
-                    ph[0].end_frame = ph[0].start_frame + 1
+                # Lock first phoneme attack to physical acoustic onset if within acoustic tolerance (<=120ms)
+                if abs(seg.raw_start_sec - ph[0].start) <= 0.12:
+                    ph[0].start = round(seg.raw_start_sec, 4)
+                    ph[0].start_frame = int(round(seg.raw_start_sec / FRAME_STEP))
+                    if ph[0].end <= ph[0].start:
+                        ph[0].end = round(ph[0].start + FRAME_STEP, 4)
+                        ph[0].end_frame = ph[0].start_frame + 1
 
-                # Lock the last phoneme release to the physical acoustic offset (VAD cut)
-                ph[-1].end = round(seg.raw_end_sec, 4)
-                ph[-1].end_frame = int(round(seg.raw_end_sec / FRAME_STEP))
-                if ph[-1].start >= ph[-1].end:
-                    ph[-1].start = max(0.0, round(ph[-1].end - FRAME_STEP, 4))
-                    ph[-1].start_frame = max(0, ph[-1].end_frame - 1)
+                # Lock last phoneme release to physical acoustic offset only if within tolerance (<=100ms)
+                # (prevents stretching phonemes into trailing inhalation breath gasps or VAD hangover)
+                if abs(seg.raw_end_sec - ph[-1].end) <= 0.10:
+                    ph[-1].end = round(seg.raw_end_sec, 4)
+                    ph[-1].end_frame = int(round(seg.raw_end_sec / FRAME_STEP))
+                    if ph[-1].start >= ph[-1].end:
+                        ph[-1].start = max(0.0, round(ph[-1].end - FRAME_STEP, 4))
+                        ph[-1].start_frame = max(0, ph[-1].end_frame - 1)
 
             return s_idx, ph, lp, tlp
 
