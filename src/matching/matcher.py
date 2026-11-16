@@ -179,10 +179,6 @@ def _align_and_package_ayahs(
         word_passes.append((curr_w, span_s, m))
 
     min_cov = getattr(cfg, "min_word_coverage", getattr(config, "MIN_WORD_COVERAGE", 0.35))
-    intervals = pause_intervals or []
-    interval_starts = [p.start_sec for p in intervals] if intervals else []
-    pause_pts = sorted(pause_timestamps) if pause_timestamps else []
-    min_pause_s = getattr(config, "VAD_SAKT_MIN_PAUSE_S", 0.16)
 
     for w, s_char, e_char in word_passes:
         if e_char > s_char:
@@ -229,6 +225,12 @@ def _align_and_package_ayahs(
     max_w = max(matched_word_tokens.keys())
     start_ay = ref_data.words[min_w].ayah if min_w < word_count else 1
     end_ay = ref_data.words[max_w].ayah if max_w < word_count else ref_data.words[-1].ayah
+
+    # Pause markers used for optional Ayah subsegment cuts
+    intervals = pause_intervals or []
+    interval_starts = [p.start_sec for p in intervals] if intervals else []
+    pause_pts = sorted(pause_timestamps) if pause_timestamps else []
+    min_pause_s = getattr(config, "VAD_SAKT_MIN_PAUSE_S", 0.16)
 
     def _find_pause_cut(w_prev: QuranWord, w_curr: QuranWord) -> Optional[Tuple[float, float]]:
         w_prev_e = w_prev.end or 0.0
